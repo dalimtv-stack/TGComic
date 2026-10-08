@@ -173,12 +173,18 @@ async function openPages(m, size, status) {
     status(`Descargando CBR… ${Math.round((++done / total) * 100)}%`);
   });
   status('Extrayendo páginas…');
-  const ex = await createExtractorFromData({ wasmBinary: await (await fetch(rarWasm)).arrayBuffer(), data });
+  // node-unrar-js exige ArrayBuffer; extraction es Uint8Array (no .data)
+  const ab = data.buffer.byteLength === data.byteLength ? data.buffer : data.slice().buffer;
+  const ex = await createExtractorFromData({
+    wasmBinary: await (await fetch(rarWasm)).arrayBuffer(),
+    data: ab,
+  });
   const out = [];
+  // Recorrer el generador hasta el final (lazy + solid RAR + evitar fugas de memoria)
   for (const x of ex.extract().files) {
     const n = x.fileHeader.name;
     if (x.fileHeader.flags.directory || !x.extraction || !/\.(jpe?g|png|webp|gif|avif)$/i.test(n)) continue;
-    out.push({ filename: n, blob: new Blob([x.extraction.data], { type: zip.getMimeType(n) }) });
+    out.push({ filename: n, blob: new Blob([x.extraction], { type: zip.getMimeType(n) }) });
     await new Promise((res) => setTimeout(res));
   }
   out.sort((x, y) => natural(x.filename, y.filename));
@@ -275,9 +281,17 @@ function grid(items, withSearch) {
   const draw = (q = '') => g.replaceChildren(...items.filter((i) => i.label.toLowerCase().includes(q)).map((i) => {
     const c = el('div', 'card'), hit = el('button', 'hit'), name = el('div', 'name'), t = el('b', '', i.label);
     hit.append(i.cover());
-    hit.onclick = t.onclick = i.go;
+    // Portada: abrir cómic / serie. Título: menú de opciones si existe, si no también abre.
+    hit.onclick = i.go;
+    if (i.menu) {
+      t.onclick = (ev) => { ev.stopPropagation(); i.menu(); };
+      t.title = 'Opciones';
+      t.setAttribute('role', 'button');
+      t.setAttribute('aria-label', 'Opciones de ' + i.label);
+    } else {
+      t.onclick = i.go;
+    }
     name.append(t);
-    if (i.menu) { const gear = el('button', 'gear', '⚙'); gear.setAttribute('aria-label', 'Opciones'); gear.onclick = (ev) => { ev.stopPropagation(); i.menu(); }; name.append(gear); }
     c.append(hit, name);
     if (i.sub) c.append(el('small', '', i.sub));
     return c;
