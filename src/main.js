@@ -654,35 +654,102 @@ function reader(f, pages, zr, ctx) {
   };
 
   const mount = () => {
-    // Releer página guardada al cambiar de modo (evita saltos)
     n = Math.min(+localStorage.getItem(key) || n || 0, pages.length - 1);
     const vert = pref('mode', 'page') === 'vertical';
     let token = 0, observers = [];
     const rd = el('div'); rd.id = 'rd';
-    const top = el('div', 'bar'), back = el('button', 'btn', '‹'), cnt = el('span', 'cnt');
+    // Barra superior: solo título
+    const top = el('div', 'bar topbar');
+    top.append(el('span', 'ttl', stripExt(f.name)));
+    // Barra inferior: controles
+    const bot = el('div', 'bar botbar');
+    const back = el('button', 'btn', '‹');
+    back.setAttribute('aria-label', 'Atrás');
     back.onclick = () => history.back();
     const mb = modeBtn(() => {
       try { localStorage.setItem(key, String(n)); } catch (_) {}
       unmount();
       unmount = mount();
     });
-    top.append(back, el('span', 'ttl', stripExt(f.name)), mb, cnt);
+    const gridBtn = el('button', 'btn grid-btn', '▦');
+    gridBtn.setAttribute('aria-label', 'Mosaico de páginas');
+    gridBtn.title = 'Páginas';
+    const cnt = el('span', 'cnt');
+    const setCount = () => (cnt.textContent = `${n + 1} / ${pages.length}`);
+    const botL = el('div', 'bot-side');
+    const botC = el('div', 'bot-mid');
+    const botR = el('div', 'bot-side');
+    botL.append(back, mb);
+    bot.append(botL, botC, botR);
     document.body.append(rd);
     document.body.style.overflow = 'hidden';
-    const setCount = () => (cnt.textContent = `${n + 1} / ${pages.length}`);
-    const uiTimer = setTimeout(() => rd.classList.add('ui-off'), 2500);
+    let uiTimer = setTimeout(() => rd.classList.add('ui-off'), 2500);
+    const pokeUI = () => {
+      rd.classList.remove('ui-off');
+      clearTimeout(uiTimer);
+      uiTimer = setTimeout(() => rd.classList.add('ui-off'), 2500);
+    };
+
+    const showMosaic = () => {
+      pokeUI();
+      const overlay = el('div', 'mosaic');
+      const head = el('div', 'mosaic-head');
+      head.append(el('span', '', 'Páginas'), el('button', 'btn', 'Cerrar'));
+      head.querySelector('button').onclick = () => overlay.remove();
+      const g = el('div', 'mosaic-grid');
+      const thumbs = [];
+      for (let i = 0; i < pages.length; i++) {
+        const cell = el('button', 'mosaic-cell' + (i === n ? ' on' : ''));
+        cell.type = 'button';
+        cell.append(el('span', 'mosaic-num', String(i + 1)));
+        const ph = el('div', 'mosaic-ph');
+        cell.append(ph);
+        cell.onclick = () => {
+          overlay.remove();
+          goToPage(i);
+        };
+        g.append(cell);
+        thumbs.push({ i, ph, cell });
+      }
+      overlay.append(head, g);
+      overlay.addEventListener('click', (ev) => { if (ev.target === overlay) overlay.remove(); });
+      document.body.append(overlay);
+      // Cargar miniaturas en segundo plano (limitado)
+      (async () => {
+        for (const { i, ph } of thumbs) {
+          if (!overlay.isConnected) return;
+          try {
+            const u = await load(i);
+            const im = el('img');
+            im.src = u;
+            im.loading = 'lazy';
+            ph.replaceChildren(im);
+          } catch (_) {}
+          if (i % 4 === 3) await new Promise((r) => setTimeout(r, 0));
+        }
+      })();
+    };
+    gridBtn.onclick = showMosaic;
+
+    let goToPage = (i) => {}; // se asigna en cada modo
 
     if (!vert) {
       rd.className = 'page fit-' + pref('fit', 'screen');
       const fit = el('button', 'btn');
       let img = el('img');
       const fitLabel = () => (fit.textContent = pref('fit', 'screen') === 'screen' ? '↔ Ancho' : '⤢ Pantalla');
-      fit.onclick = () => { setPref('fit', pref('fit', 'screen') === 'screen' ? 'width' : 'screen'); rd.className = rd.className.replace(/fit-\w+/, 'fit-' + pref('fit', 'screen')); fitLabel(); };
+      fit.onclick = () => {
+        setPref('fit', pref('fit', 'screen') === 'screen' ? 'width' : 'screen');
+        rd.className = rd.className.replace(/fit-\w+/, 'fit-' + pref('fit', 'screen'));
+        fitLabel();
+        pokeUI();
+      };
       fitLabel();
-      top.insertBefore(fit, mb);
+      botC.append(gridBtn);
+      botR.append(fit, cnt);
       img.draggable = false;
       const eL = el('div', 'edge l'), eR = el('div', 'edge r');
-      rd.append(img, eL, eR, top);
+      rd.append(img, eL, eR, top, bot);
       const turn = async (i) => {
         if (i > pages.length - 1) { if (hasNext) openNext(); return; }
         if (i < 0) return;
@@ -698,13 +765,15 @@ function reader(f, pages, zr, ctx) {
           if (mine !== token) return;
           img.replaceWith(im); img = im; rd.scrollTo(0, 0);
           for (const i2 of [...urls.keys()]) if (i2 < n - 2 || i2 > n + 4) drop(i2);
-          for (const k of [1, 2, 3]) { if (token !== mine) return; await Promise.resolve(load(n + k)).catch(() => {}); } // precarga
+          for (const k of [1, 2, 3]) { if (token !== mine) return; await Promise.resolve(load(n + k)).catch(() => {}); }
         } catch (err) { cnt.textContent = 'Error'; console.error(err); }
       };
+      goToPage = (i) => turn(i);
       eL.onclick = () => turn(n - 1);
       eR.onclick = () => turn(n + 1);
       let last = 0, tapT;
       rd.onclick = (ev) => {
+        if (ev.target.closest?.('.bar, .edge, .mosaic')) return;
         if (ev.target.tagName !== 'IMG') return;
         const t = Date.now();
         if (t - last < 300) { clearTimeout(tapT); last = 0; rd.classList.toggle('zoom'); }
@@ -714,7 +783,6 @@ function reader(f, pages, zr, ctx) {
       rd.addEventListener('touchstart', (e) => {
         if (e.touches.length !== 1) { sx = null; return; }
         const x = e.touches[0].clientX, y = e.touches[0].clientY;
-        // Zona de gesto "atrás" de iOS (~borde izquierdo): no contar como pasar página
         if (x < 48 || x > window.innerWidth - 24) { sx = null; return; }
         sx = x; sy = y;
       }, { passive: true });
@@ -728,13 +796,21 @@ function reader(f, pages, zr, ctx) {
       turn(n);
     } else {
       rd.className = 'vert';
-      let syncLock = true; // no actualizar n hasta centrar la página guardada
+      botC.append(gridBtn);
+      botR.append(cnt);
+      // Altura estimada uniforme (sin huecos extra) → scroll predecible al cambiar de modo
+      const estH = Math.round(Math.min(window.innerWidth, 900) * 1.45);
       const slots = pages.map((_, i) => {
         const d = el('div', 'slot');
         d.dataset.i = i;
         d.style.overflowAnchor = 'none';
+        d.style.minHeight = estH + 'px';
+        d.style.height = estH + 'px';
         return d;
       });
+      // Espaciador superior para centrar la 1ª página en viewport
+      const topPad = el('div', 'vert-pad-top');
+      topPad.style.height = Math.round(window.innerHeight * 0.22) + 'px';
       const foot = el('div', 'next-comic');
       if (hasNext) {
         const nb = el('button', 'btn next-btn', 'Siguiente número →');
@@ -743,72 +819,97 @@ function reader(f, pages, zr, ctx) {
       } else {
         foot.append(el('div', 'next-end', 'Fin'));
       }
-      rd.append(...slots, foot, top);
+      rd.append(topPad, ...slots, foot, top, bot);
       const loaded = new Map();
       const fixedH = new Map();
+      let syncLock = true;
+
       const place = (slot, im, i) => {
-        slot.replaceChildren(im);
-        const w = slot.clientWidth || rd.clientWidth || window.innerWidth;
+        const prev = fixedH.get(i) ?? estH;
+        const w = Math.min(slot.clientWidth || rd.clientWidth || window.innerWidth, 900);
+        let h = prev;
         if (im.naturalWidth && im.naturalHeight) {
-          const h = Math.round(w * (im.naturalHeight / im.naturalWidth));
-          fixedH.set(i, h);
-          slot.style.minHeight = h + 'px';
-          slot.style.height = h + 'px';
+          h = Math.round(w * (im.naturalHeight / im.naturalWidth));
+        }
+        const delta = h - prev;
+        fixedH.set(i, h);
+        slot.style.minHeight = h + 'px';
+        slot.style.height = h + 'px';
+        slot.replaceChildren(im);
+        // Si la página está por encima del scroll actual, compensar para no desplazar la vista
+        if (!syncLock && delta && slot.offsetTop < rd.scrollTop) {
+          rd.scrollTop += delta;
         }
       };
-      const loadIO = new IntersectionObserver((es) => es.forEach(async (x) => {
-        const i = +x.target.dataset.i;
-        if (!x.isIntersecting || loaded.has(i)) return;
+
+      const ensure = async (i) => {
+        if (i < 0 || i >= pages.length || loaded.has(i)) return;
         loaded.set(i, true);
         try {
           const im = el('img');
           im.decoding = 'async';
           im.src = await load(i);
           await im.decode().catch(() => {});
-          if (!x.target.isConnected) return;
-          place(x.target, im, i);
-        } catch (err) { loaded.delete(i); }
-      }), { root: rd, rootMargin: '180% 0px' });
+          if (!slots[i].isConnected) return;
+          place(slots[i], im, i);
+        } catch { loaded.delete(i); }
+      };
+
+      const scrollToIndex = (i, smooth) => {
+        const s = slots[i];
+        if (!s) return;
+        // Alinear el borde superior de la página bajo el pad (página bien visible)
+        const y = s.offsetTop - (i === 0 ? 0 : 4);
+        if (smooth) rd.scrollTo({ top: y, behavior: 'smooth' });
+        else rd.scrollTop = y;
+      };
+
+      goToPage = async (i) => {
+        i = Math.max(0, Math.min(pages.length - 1, i));
+        n = i;
+        localStorage.setItem(key, n);
+        setCount();
+        syncLock = true;
+        // Medir todas las páginas hasta i para offsetTop exacto
+        for (let k = 0; k <= i; k++) await ensure(k);
+        scrollToIndex(i, false);
+        requestAnimationFrame(() => {
+          scrollToIndex(i, false);
+          setTimeout(() => { syncLock = false; }, 80);
+        });
+        // precarga vecinas
+        ensure(i + 1); ensure(i + 2); ensure(i - 1);
+      };
+
+      const loadIO = new IntersectionObserver((es) => es.forEach((x) => {
+        if (!x.isIntersecting) return;
+        ensure(+x.target.dataset.i);
+      }), { root: rd, rootMargin: '120% 0px' });
+
       const curIO = new IntersectionObserver((es) => es.forEach((x) => {
         if (!x.isIntersecting || syncLock) return;
         n = +x.target.dataset.i;
         localStorage.setItem(key, n);
         setCount();
         for (const i of [...loaded.keys()]) {
-          if (Math.abs(i - n) <= 15) continue;
+          if (Math.abs(i - n) <= 12) continue;
           const s = slots[i];
-          if (fixedH.has(i)) {
-            s.style.minHeight = fixedH.get(i) + 'px';
-            s.style.height = fixedH.get(i) + 'px';
-          }
+          const h = fixedH.get(i) ?? estH;
+          s.style.minHeight = h + 'px';
+          s.style.height = h + 'px';
           s.replaceChildren();
           loaded.delete(i);
           drop(i);
         }
       }), { root: rd, rootMargin: '-40% 0px -40% 0px' });
+
       slots.forEach((s) => { loadIO.observe(s); curIO.observe(s); });
       observers = [loadIO, curIO];
-      rd.onclick = (ev) => { if (!ev.target.closest?.('.next-btn')) rd.classList.toggle('ui-off'); };
-      // Cargar página actual, fijar altura y centrar; luego liberar syncLock
-      (async () => {
-        try {
-          for (const i of [n - 1, n, n + 1]) {
-            if (i < 0 || i >= pages.length || loaded.has(i)) continue;
-            loaded.set(i, true);
-            const im = el('img');
-            im.src = await load(i);
-            await im.decode().catch(() => {});
-            if (!slots[i].isConnected) return;
-            place(slots[i], im, i);
-          }
-        } catch (_) {}
-        const s = slots[n];
-        if (s) rd.scrollTop = s.offsetTop;
-        requestAnimationFrame(() => {
-          if (s) rd.scrollTop = s.offsetTop;
-          setTimeout(() => { syncLock = false; }, 120);
-        });
-      })();
+      rd.onclick = (ev) => {
+        if (ev.target.closest?.('.bar, .next-btn, .mosaic')) return;
+        rd.classList.toggle('ui-off');
+      };
+      goToPage(n);
     }
     setCount();
     return () => {
@@ -817,6 +918,7 @@ function reader(f, pages, zr, ctx) {
       for (const i of [...urls.keys()]) drop(i);
       document.onkeydown = null;
       document.body.style.overflow = '';
+      document.querySelector('.mosaic')?.remove();
       rd.remove();
     };
   };
