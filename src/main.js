@@ -714,18 +714,24 @@ function reader(f, pages, zr, ctx) {
       overlay.append(head, g);
       overlay.addEventListener('click', (ev) => { if (ev.target === overlay) overlay.remove(); });
       document.body.append(overlay);
-      // Cargar miniaturas en segundo plano (limitado)
+      // Miniaturas acotadas (no reutilizar el layout del lector)
       (async () => {
         for (const { i, ph } of thumbs) {
           if (!overlay.isConnected) return;
           try {
             const u = await load(i);
-            const im = el('img');
-            im.src = u;
-            im.loading = 'lazy';
-            ph.replaceChildren(im);
+            const im = new Image();
+            im.decoding = 'async';
+            im.alt = String(i + 1);
+            await new Promise((res, rej) => { im.onload = res; im.onerror = rej; im.src = u; });
+            // Pintar en canvas pequeño para no solapar con páginas a tamaño real
+            const tw = 120, th = Math.max(1, Math.round(tw * (im.naturalHeight / im.naturalWidth)));
+            const cv = el('canvas');
+            cv.width = tw; cv.height = th;
+            cv.getContext('2d').drawImage(im, 0, 0, tw, th);
+            ph.replaceChildren(cv);
           } catch (_) {}
-          if (i % 4 === 3) await new Promise((r) => setTimeout(r, 0));
+          if (i % 3 === 2) await new Promise((r) => setTimeout(r, 0));
         }
       })();
     };
@@ -798,19 +804,19 @@ function reader(f, pages, zr, ctx) {
       rd.className = 'vert';
       botC.append(gridBtn);
       botR.append(cnt);
-      // Altura estimada uniforme (sin huecos extra) → scroll predecible al cambiar de modo
-      const estH = Math.round(Math.min(window.innerWidth, 900) * 1.45);
+      const GAP = 10;
+      const estH = Math.round(Math.min(window.innerWidth, 900) * 1.42);
+      const heights = new Array(pages.length).fill(estH);
       const slots = pages.map((_, i) => {
         const d = el('div', 'slot');
         d.dataset.i = i;
-        d.style.overflowAnchor = 'none';
-        d.style.minHeight = estH + 'px';
         d.style.height = estH + 'px';
+        d.style.minHeight = estH + 'px';
+        d.style.marginBottom = GAP + 'px';
         return d;
       });
-      // Espaciador superior para centrar la 1ª página en viewport
       const topPad = el('div', 'vert-pad-top');
-      topPad.style.height = Math.round(window.innerHeight * 0.22) + 'px';
+      topPad.style.height = Math.round(window.innerHeight * 0.2) + 'px';
       const foot = el('div', 'next-comic');
       if (hasNext) {
         const nb = el('button', 'btn next-btn', 'Siguiente número →');
@@ -820,24 +826,41 @@ function reader(f, pages, zr, ctx) {
         foot.append(el('div', 'next-end', 'Fin'));
       }
       rd.append(topPad, ...slots, foot, top, bot);
-      const loaded = new Map();
-      const fixedH = new Map();
-      let syncLock = true;
 
-      const place = (slot, im, i) => {
-        const prev = fixedH.get(i) ?? estH;
+      const loaded = new Map();
+      let syncLock = true;
+      let scrollT = 0;
+
+      const yOf = (i) => {
+        let y = topPad.offsetHeight || Math.round(window.innerHeight * 0.2);
+        for (let k = 0; k < i; k++) y += heights[k] + GAP;
+        return y;
+      };
+      const pageAt = (scrollMid) => {
+        let y = topPad.offsetHeight || Math.round(window.innerHeight * 0.2);
+        for (let k = 0; k < pages.length; k++) {
+          const h = heights[k] + GAP;
+          if (y + h > scrollMid) return k;
+          y += h;
+        }
+        return pages.length - 1;
+      };
+
+      const place = (i, im) => {
+        const slot = slots[i];
         const w = Math.min(slot.clientWidth || rd.clientWidth || window.innerWidth, 900);
+        const prev = heights[i];
         let h = prev;
         if (im.naturalWidth && im.naturalHeight) {
           h = Math.round(w * (im.naturalHeight / im.naturalWidth));
         }
-        const delta = h - prev;
-        fixedH.set(i, h);
-        slot.style.minHeight = h + 'px';
+        heights[i] = h;
         slot.style.height = h + 'px';
+        slot.style.minHeight = h + 'px';
         slot.replaceChildren(im);
-        // Si la página está por encima del scroll actual, compensar para no desplazar la vista
-        if (!syncLock && delta && slot.offsetTop < rd.scrollTop) {
+        const delta = h - prev;
+        // Solo compensar si esta página está por encima de la vista (no durante el salto inicial)
+        if (!syncLock && delta && yOf(i) + h < rd.scrollTop + 8) {
           rd.scrollTop += delta;
         }
       };
@@ -851,17 +874,15 @@ function reader(f, pages, zr, ctx) {
           im.src = await load(i);
           await im.decode().catch(() => {});
           if (!slots[i].isConnected) return;
-          place(slots[i], im, i);
-        } catch { loaded.delete(i); }
+          place(i, im);
+        } catch {
+          loaded.delete(i);
+        }
       };
 
-      const scrollToIndex = (i, smooth) => {
-        const s = slots[i];
-        if (!s) return;
-        // Alinear el borde superior de la página bajo el pad (página bien visible)
-        const y = s.offsetTop - (i === 0 ? 0 : 4);
-        if (smooth) rd.scrollTo({ top: y, behavior: 'smooth' });
-        else rd.scrollTop = y;
+      const jumpTo = (i) => {
+        i = Math.max(0, Math.min(pages.length - 1, i));
+        rd.scrollTop = yOf(i);
       };
 
       goToPage = async (i) => {
@@ -870,41 +891,54 @@ function reader(f, pages, zr, ctx) {
         localStorage.setItem(key, n);
         setCount();
         syncLock = true;
-        // Medir todas las páginas hasta i para offsetTop exacto
-        for (let k = 0; k <= i; k++) await ensure(k);
-        scrollToIndex(i, false);
+        // Salto inmediato con alturas estimadas (sin cargar 0…n)
+        jumpTo(i);
+        // Cargar solo alrededores; al medir la actual, reajustar una vez
+        await ensure(i);
+        jumpTo(i);
+        ensure(i - 1);
+        ensure(i + 1);
+        ensure(i + 2);
         requestAnimationFrame(() => {
-          scrollToIndex(i, false);
-          setTimeout(() => { syncLock = false; }, 80);
+          jumpTo(i);
+          setTimeout(() => { syncLock = false; }, 150);
         });
-        // precarga vecinas
-        ensure(i + 1); ensure(i + 2); ensure(i - 1);
       };
 
-      const loadIO = new IntersectionObserver((es) => es.forEach((x) => {
-        if (!x.isIntersecting) return;
-        ensure(+x.target.dataset.i);
-      }), { root: rd, rootMargin: '120% 0px' });
+      const onScroll = () => {
+        if (syncLock) return;
+        clearTimeout(scrollT);
+        scrollT = setTimeout(() => {
+          const mid = rd.scrollTop + rd.clientHeight * 0.35;
+          const idx = pageAt(mid);
+          if (idx !== n) {
+            n = idx;
+            localStorage.setItem(key, n);
+            setCount();
+          }
+          // precarga / libera
+          for (let k = n - 2; k <= n + 4; k++) ensure(k);
+          for (const i of [...loaded.keys()]) {
+            if (Math.abs(i - n) <= 10) continue;
+            const s = slots[i];
+            s.style.height = heights[i] + 'px';
+            s.style.minHeight = heights[i] + 'px';
+            s.replaceChildren();
+            loaded.delete(i);
+            drop(i);
+          }
+        }, 80);
+      };
+      rd.addEventListener('scroll', onScroll, { passive: true });
 
-      const curIO = new IntersectionObserver((es) => es.forEach((x) => {
-        if (!x.isIntersecting || syncLock) return;
-        n = +x.target.dataset.i;
-        localStorage.setItem(key, n);
-        setCount();
-        for (const i of [...loaded.keys()]) {
-          if (Math.abs(i - n) <= 12) continue;
-          const s = slots[i];
-          const h = fixedH.get(i) ?? estH;
-          s.style.minHeight = h + 'px';
-          s.style.height = h + 'px';
-          s.replaceChildren();
-          loaded.delete(i);
-          drop(i);
-        }
-      }), { root: rd, rootMargin: '-40% 0px -40% 0px' });
+      const loadIO = new IntersectionObserver((es) => {
+        es.forEach((x) => { if (x.isIntersecting) ensure(+x.target.dataset.i); });
+      }, { root: rd, rootMargin: '80% 0px' });
+      slots.forEach((s) => loadIO.observe(s));
+      observers = [loadIO];
+      // guardar remove scroll en cleanup vía observers no sirve; monkey en return
+      observers._scroll = onScroll;
 
-      slots.forEach((s) => { loadIO.observe(s); curIO.observe(s); });
-      observers = [loadIO, curIO];
       rd.onclick = (ev) => {
         if (ev.target.closest?.('.bar, .next-btn, .mosaic')) return;
         rd.classList.toggle('ui-off');
@@ -914,7 +948,8 @@ function reader(f, pages, zr, ctx) {
     setCount();
     return () => {
       clearTimeout(uiTimer);
-      observers.forEach((o) => o.disconnect());
+      observers.forEach((o) => { try { o.disconnect(); } catch (_) {} });
+      if (observers._scroll) rd.removeEventListener('scroll', observers._scroll);
       for (const i of [...urls.keys()]) drop(i);
       document.onkeydown = null;
       document.body.style.overflow = '';
