@@ -25,6 +25,16 @@ const sizeLabel = (f) => {
   const tot = +localStorage.getItem(pagesKey(f.id));
   return tot > 0 ? `${mb} · ${tot} pág.` : mb;
 };
+const lastReadKey = 'lastRead';
+const getLastRead = () => { try { return JSON.parse(localStorage.getItem(lastReadKey) || 'null'); } catch { return null; } };
+const setLastRead = (ch, f) => {
+  try {
+    localStorage.setItem(lastReadKey, JSON.stringify({
+      ch: { id: ch.id, hash: ch.hash, name: ch.name, group: ch.group },
+      f: { id: f.id, name: f.name, size: f.size },
+    }));
+  } catch (_) {}
+};
 const readProgress = (id) => {
   const cur = +localStorage.getItem(pageKey(id));
   const tot = +localStorage.getItem(pagesKey(id));
@@ -188,21 +198,27 @@ class TgReader extends zip.Reader {
 // ---------- Archivos: ZIP (acceso aleatorio) o RAR (descarga completa) ----------
 const pageBlob = async (p) => p.blob || (await p.getData(new zip.BlobWriter(zip.getMimeType(p.filename))));
 const sniff = async (r) => { const h = await r.readUint8Array(0, 4); return h[0] === 0x52 && h[1] === 0x61 && h[2] === 0x72 ? 'rar' : 'zip'; }; // "Rar!"
-async function downloadRarBytes(m, size, status) {
+const cancelled = (ac) => !!(ac && ac.cancelled);
+const abortErr = () => Object.assign(new Error('cancelled'), { cancelled: true });
+
+async function downloadRarBytes(m, size, status, ac) {
   // 1) downloadMedia: workers internos y mejor manejo de DC
   try {
     const buf = await client.downloadMedia(m.media, {
       workers: 4,
       progressCallback: (got) => {
+        if (cancelled(ac)) throw abortErr();
         const n = Number(got?.toString?.() ?? got);
         if (size > 0 && n >= 0) status(`Descargando CBR… ${Math.min(100, Math.round((n / size) * 100))}%`);
       },
     });
+    if (cancelled(ac)) throw abortErr();
     if (buf) {
       const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
       if (u8.byteLength > 0) return u8;
     }
   } catch (e) {
+    if (e?.cancelled || cancelled(ac)) throw abortErr();
     console.warn('downloadMedia falló, se reintenta por trozos', e);
   }
   // 2) Por trozos, poca concurrencia + reintentos (evita -503 Timeout)
@@ -212,20 +228,24 @@ async function downloadRarBytes(m, size, status) {
   const data = new Uint8Array(size);
   let done = 0;
   await mapLimit(Array.from({ length: total }, (_, i) => i), 2, async (i) => {
+    if (cancelled(ac)) throw abortErr();
     const chunk = await r.chunk(i);
+    if (cancelled(ac)) throw abortErr();
     data.set(chunk, i * r.ch);
     status(`Descargando CBR… ${Math.round((++done / total) * 100)}%`);
   });
+  if (cancelled(ac)) throw abortErr();
   return data;
 }
 
-async function openPages(m, size, status) {
+async function openPages(m, size, status, ac) {
   const r = new TgReader(m, size);
   if ((await sniff(r)) === 'zip') { // incluye .cbr que en realidad son ZIP
     const zr = new zip.ZipReader(r);
     return { pages: pagesOf(await zr.getEntries()), close: () => zr.close() };
   }
-  const data = await downloadRarBytes(m, size, status);
+  const data = await downloadRarBytes(m, size, status, ac);
+  if (cancelled(ac)) throw abortErr();
   status('Extrayendo páginas…');
   // node-unrar-js exige ArrayBuffer propio (no compartido con vistas parciales)
   const ab = data.buffer.byteLength === data.byteLength && data.byteOffset === 0
@@ -243,6 +263,7 @@ async function openPages(m, size, status) {
   const out = [];
   // Generador lazy: hay que recorrerlo entero (solid RAR + liberar memoria C++)
   for (const x of ex.extract().files) {
+    if (cancelled(ac)) throw abortErr();
     const n = x.fileHeader.name || '';
     if (x.fileHeader.flags.directory || !x.extraction) continue;
     const base = n.split(/[/\\]/).pop() || n;
@@ -370,7 +391,8 @@ function comicCover(ch, f, badge, series) {
     const b = el('span', series ? 'badge series' : 'badge', String(badge));
     d.append(b);
   }
-  const prog = readProgress(f.id);
+  // Solo en cómics sueltos, nunca en la tarjeta de serie agrupada
+  const prog = series ? null : readProgress(f.id);
   if (prog) {
     const bar = el('div', 'prog');
     const fill = el('div', 'prog-fill');
@@ -435,16 +457,83 @@ function setUngrouped(ch, label, on, after) {
   after();
 }
 
+function cardNode(i) {
+  const c = el('div', 'card'), hit = el('button', 'hit'), name = el('div', 'name'), t = el('b', '', i.label);
+  hit.append(i.cover());
+  hit.onclick = i.go;
+  if (i.menu) {
+    t.classList.add('has-menu');
+    t.onclick = (ev) => { ev.stopPropagation(); i.menu(); };
+    t.title = 'Opciones';
+    t.setAttribute('role', 'button');
+  } else t.onclick = i.go;
+  name.append(t);
+  c.append(hit, name);
+  if (i.sub) c.append(el('small', '', i.sub));
+  return c;
+}
 function groupsView() {
   if (!LIB.length) return msg(synced ? 'No se encontraron canales ...::Comics::tgstorage.' : 'Conectando…');
+  const nodes = [];
+  const last = getLastRead();
+  if (last?.ch?.id && last?.f?.id) {
+    const sec = el('section', 'continue');
+    sec.append(el('div', 'sec-title', 'Siguiendo'));
+    const row = el('div', 'continue-row');
+    const ch = last.ch, f = last.f;
+    const prog = readProgress(f.id);
+    row.append(cardNode({
+      label: clean(f.name),
+      sub: prog ? `${prog.cur} / ${prog.tot} · ${prog.pct}%` : sizeLabel(f),
+      cover: () => comicCover(ch, f),
+      go: () => openComic(ch, f),
+    }));
+    sec.append(row);
+    nodes.push(sec);
+    nodes.push(el('div', 'sec-sep'));
+  }
+  nodes.push(el('div', 'sec-title', 'Editoriales'));
   const gs = [...new Set(LIB.map((c) => c.group))].sort(natural);
-  grid(gs.map((g) => {
-    const n = LIB.filter((c) => c.group === g).length;
-    return { label: g, sub: n === 1 ? '1 canal' : `${n} canales`, cover: () => art('groups', g), go: () => channelsView(g) };
-  }));
+  const g = el('div', 'grid');
+  for (const name of gs) {
+    const n = LIB.filter((c) => c.group === name).length;
+    g.append(cardNode({
+      label: name,
+      sub: n === 1 ? '1 canal' : `${n} canales`,
+      cover: () => art('groups', name),
+      go: () => channelsView(name),
+    }));
+  }
+  nodes.push(g);
+  app.replaceChildren(...nodes);
 }
 function channelsView(g) {
-  go(g, () => grid(LIB.filter((c) => c.group === g).sort((a, b) => natural(a.name, b.name)).map((ch) => ({ label: ch.name, cover: () => art('channels', ch.name), go: () => filesView(ch) })), true));
+  go(g, async (e) => {
+    const chs = LIB.filter((c) => c.group === g).sort((a, b) => natural(a.name, b.name));
+    const build = async () => {
+      const items = [];
+      for (const ch of chs) {
+        const files = (await kv.get('f:' + ch.id)) || [];
+        const n = files.length;
+        items.push({
+          label: ch.name,
+          sub: n ? (n === 1 ? '1 cómic' : `${n} cómics`) : '',
+          cover: () => art('channels', ch.name),
+          go: () => filesView(ch),
+        });
+      }
+      if (alive(e)) grid(items, true);
+    };
+    await build();
+    // refrescar listados en segundo plano para rellenar conteos
+    mapLimit(chs, 3, async (ch) => {
+      try {
+        const fresh = await fetchFiles(ch);
+        const cached = await kv.get('f:' + ch.id);
+        if (JSON.stringify(fresh) !== JSON.stringify(cached)) await build();
+      } catch (_) {}
+    });
+  });
 }
 function filesView(ch) {
   go(ch.name, async (e) => {
@@ -481,17 +570,23 @@ function seriesView(ch, s, files) {
 function openComic(ch, f) {
   go(stripExt(f.name), async (e) => {
     reading = true;
+    const ac = { cancelled: false };
     let rdClean = null;
-    cleanup = () => { reading = false; pump(); rdClean?.(); };
+    cleanup = () => { ac.cancelled = true; reading = false; pump(); rdClean?.(); };
     msg('Abriendo…');
     try {
-      const arc = await openPages(await getMsg(ch, f), f.size, msg);
-      if (!alive(e)) return arc.close();
+      setLastRead(ch, f);
+      const status = (t) => { if (!cancelled(ac) && alive(e)) msg(t); };
+      const arc = await openPages(await getMsg(ch, f), f.size, status, ac);
+      if (cancelled(ac) || !alive(e)) { try { arc.close(); } catch (_) {} return; }
       if (!arc.pages.length) return msg('No se encontraron imágenes.');
       // Guardar miniatura de portada (útil sobre todo en CBR)
       pageBlob(arc.pages[0]).then((b) => saveCoverBlob(ch, f, b)).catch(() => {});
       rdClean = reader(f, arc.pages, arc);
-    } catch (err) { msg('Error: ' + err.message); }
+    } catch (err) {
+      if (err?.cancelled || cancelled(ac)) return;
+      if (alive(e)) msg('Error: ' + err.message);
+    }
   });
 }
 
@@ -572,26 +667,66 @@ function reader(f, pages, zr) {
       turn(n);
     } else {
       rd.className = 'vert';
-      const slots = pages.map((_, i) => { const d = el('div', 'slot'); d.dataset.i = i; return d; });
+      // Altura fija por slot una vez medida → evita saltos de scroll
+      const slots = pages.map((_, i) => {
+        const d = el('div', 'slot');
+        d.dataset.i = i;
+        d.style.overflowAnchor = 'none';
+        return d;
+      });
       rd.append(...slots, top);
       const loaded = new Map();
+      const fixedH = new Map();
+      const place = (slot, im, i) => {
+        slot.replaceChildren(im);
+        // fijar altura según ratio natural y ancho real del slot
+        const w = slot.clientWidth || rd.clientWidth || window.innerWidth;
+        if (im.naturalWidth && im.naturalHeight) {
+          const h = Math.round(w * (im.naturalHeight / im.naturalWidth));
+          fixedH.set(i, h);
+          slot.style.minHeight = h + 'px';
+          slot.style.height = h + 'px';
+        }
+      };
       const loadIO = new IntersectionObserver((es) => es.forEach(async (x) => {
         const i = +x.target.dataset.i;
         if (!x.isIntersecting || loaded.has(i)) return;
         loaded.set(i, true);
-        try { const im = el('img'); im.src = await load(i); await im.decode().catch(() => {}); if (!x.target.isConnected) return; x.target.replaceChildren(im); } catch (err) { loaded.delete(i); }
-      }), { root: rd, rootMargin: '150% 0px' });
+        try {
+          const im = el('img');
+          im.decoding = 'async';
+          im.src = await load(i);
+          await im.decode().catch(() => {});
+          if (!x.target.isConnected) return;
+          place(x.target, im, i);
+        } catch (err) { loaded.delete(i); }
+      }), { root: rd, rootMargin: '180% 0px' });
       const curIO = new IntersectionObserver((es) => es.forEach((x) => {
         if (!x.isIntersecting) return;
-        n = +x.target.dataset.i; localStorage.setItem(key, n); setCount();
-        for (const i of [...loaded.keys()]) if (Math.abs(i - n) > 8) { // libera páginas lejanas
-          const s = slots[i]; const h = s.offsetHeight; if (h) s.style.minHeight = h + 'px'; s.replaceChildren(); loaded.delete(i); drop(i);
+        n = +x.target.dataset.i;
+        localStorage.setItem(key, n);
+        setCount();
+        // Liberar lejos; conservar altura fija para no desplazar el scroll
+        for (const i of [...loaded.keys()]) {
+          if (Math.abs(i - n) <= 15) continue;
+          const s = slots[i];
+          if (fixedH.has(i)) {
+            s.style.minHeight = fixedH.get(i) + 'px';
+            s.style.height = fixedH.get(i) + 'px';
+          }
+          s.replaceChildren();
+          loaded.delete(i);
+          drop(i);
         }
-      }), { root: rd, rootMargin: '-50% 0px -50% 0px' });
+      }), { root: rd, rootMargin: '-40% 0px -40% 0px' });
       slots.forEach((s) => { loadIO.observe(s); curIO.observe(s); });
       observers = [loadIO, curIO];
       rd.onclick = () => rd.classList.toggle('ui-off');
-      slots[n].scrollIntoView();
+      // restaurar posición sin animación brusca
+      requestAnimationFrame(() => {
+        const s = slots[n];
+        if (s) rd.scrollTop = s.offsetTop;
+      });
     }
     setCount();
     return () => {
