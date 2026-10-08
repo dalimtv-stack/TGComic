@@ -131,9 +131,24 @@ class TgReader extends zip.Reader {
     let p = this.cache.get(i);
     if (p) { this.cache.delete(i); this.cache.set(i, p); return p; }
     p = (async () => {
-      const it = client.iterDownload({ file: this.msg.media, offset: bigInt(i * this.ch), requestSize: this.ch, limit: 1, fileSize: bigInt(this.size) });
-      for await (const c of it) return new Uint8Array(c);
-      return new Uint8Array(0);
+      let lastErr;
+      for (let attempt = 0; attempt < 6; attempt++) {
+        try {
+          const it = client.iterDownload({ file: this.msg.media, offset: bigInt(i * this.ch), requestSize: this.ch, limit: 1, fileSize: bigInt(this.size) });
+          for await (const c of it) return new Uint8Array(c);
+          return new Uint8Array(0);
+        } catch (err) {
+          lastErr = err;
+          const em = String(err?.errorMessage || err?.message || err || '');
+          // Telegram a veces devuelve "Timeout" (no "TIMEOUT"); gramjs no reintenta
+          if (/timeout/i.test(em) || err?.code === -503 || /FLOOD/i.test(em)) {
+            await new Promise((r) => setTimeout(r, 400 * (attempt + 1) + Math.random() * 300));
+            continue;
+          }
+          throw err;
+        }
+      }
+      throw lastErr;
     })();
     p.catch(() => this.cache.delete(i));
     this.cache.set(i, p);
@@ -158,36 +173,70 @@ class TgReader extends zip.Reader {
 // ---------- Archivos: ZIP (acceso aleatorio) o RAR (descarga completa) ----------
 const pageBlob = (p) => p.blob || p.getData(new zip.BlobWriter(zip.getMimeType(p.filename)));
 const sniff = async (r) => { const h = await r.readUint8Array(0, 4); return h[0] === 0x52 && h[1] === 0x61 && h[2] === 0x72 ? 'rar' : 'zip'; }; // "Rar!"
+async function downloadRarBytes(m, size, status) {
+  // 1) downloadMedia: workers internos y mejor manejo de DC
+  try {
+    const buf = await client.downloadMedia(m.media, {
+      workers: 4,
+      progressCallback: (got) => {
+        const n = Number(got?.toString?.() ?? got);
+        if (size > 0 && n >= 0) status(`Descargando CBR… ${Math.min(100, Math.round((n / size) * 100))}%`);
+      },
+    });
+    if (buf) {
+      const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+      if (u8.byteLength > 0) return u8;
+    }
+  } catch (e) {
+    console.warn('downloadMedia falló, se reintenta por trozos', e);
+  }
+  // 2) Por trozos, poca concurrencia + reintentos (evita -503 Timeout)
+  const r = new TgReader(m, size);
+  r.max = 2;
+  const total = Math.ceil(size / r.ch);
+  const data = new Uint8Array(size);
+  let done = 0;
+  await mapLimit(Array.from({ length: total }, (_, i) => i), 2, async (i) => {
+    const chunk = await r.chunk(i);
+    data.set(chunk, i * r.ch);
+    status(`Descargando CBR… ${Math.round((++done / total) * 100)}%`);
+  });
+  return data;
+}
+
 async function openPages(m, size, status) {
   const r = new TgReader(m, size);
   if ((await sniff(r)) === 'zip') { // incluye .cbr que en realidad son ZIP
     const zr = new zip.ZipReader(r);
     return { pages: pagesOf(await zr.getEntries()), close: () => zr.close() };
   }
-  const data = new Uint8Array(size);
-  r.max = 4;
-  const total = Math.ceil(size / r.ch);
-  let done = 0;
-  await mapLimit(Array.from({ length: total }, (_, i) => i), 8, async (i) => {
-    data.set(await r.chunk(i), i * r.ch);
-    status(`Descargando CBR… ${Math.round((++done / total) * 100)}%`);
-  });
+  const data = await downloadRarBytes(m, size, status);
   status('Extrayendo páginas…');
-  // node-unrar-js exige ArrayBuffer; extraction es Uint8Array (no .data)
-  const ab = data.buffer.byteLength === data.byteLength ? data.buffer : data.slice().buffer;
+  // node-unrar-js exige ArrayBuffer propio (no compartido con vistas parciales)
+  const ab = data.buffer.byteLength === data.byteLength && data.byteOffset === 0
+    ? data.buffer
+    : data.slice().buffer;
   const ex = await createExtractorFromData({
     wasmBinary: await (await fetch(rarWasm)).arrayBuffer(),
     data: ab,
   });
   const out = [];
-  // Recorrer el generador hasta el final (lazy + solid RAR + evitar fugas de memoria)
+  // Generador lazy: hay que recorrerlo entero (solid RAR + liberar memoria C++)
   for (const x of ex.extract().files) {
     const n = x.fileHeader.name;
-    if (x.fileHeader.flags.directory || !x.extraction || !/\.(jpe?g|png|webp|gif|avif)$/i.test(n)) continue;
-    out.push({ filename: n, blob: new Blob([x.extraction], { type: zip.getMimeType(n) }) });
-    await new Promise((res) => setTimeout(res));
+    if (x.fileHeader.flags.directory || !x.extraction) continue;
+    if (!/\.(jpe?g|png|webp|gif|avif)$/i.test(n)) continue;
+    // IMPORTANTE: copiar fuera del heap WASM; si no, las imágenes salen negras/corruptas
+    const raw = x.extraction;
+    const bytes = raw.slice ? raw.slice() : new Uint8Array(raw);
+    if (!bytes.byteLength) continue;
+    const base = n.split(/[/\\]/).pop() || n;
+    out.push({ filename: n, blob: new Blob([bytes], { type: zip.getMimeType(base) }) });
+    // ceder el hilo para no congelar la UI durante la extracción
+    await new Promise((res) => setTimeout(res, 0));
   }
   out.sort((x, y) => natural(x.filename, y.filename));
+  if (!out.length) throw new Error('El CBR no contiene imágenes legibles.');
   return { pages: out, close: () => {} };
 }
 
