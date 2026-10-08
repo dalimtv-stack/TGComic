@@ -16,8 +16,26 @@ const setPref = (k, v) => localStorage.setItem('pref:' + k, v);
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const stripExt = (n) => n.replace(/\.cb[zr]$/i, '');
-// "Batman - silencio #01.cbz" -> "Batman - silencio"
-const seriesOf = (n) => stripExt(n).replace(/[\s._-]*(?:#|n[º°o]\.?|vol\.?|v)?\s*\d+(?:\.\d+)?(?:\s*[(\[][^)\]]*[)\]])*\s*$/i, '').trim() || stripExt(n);
+// Nombre limpio: sin extensión, guiones bajos ni etiquetas entre paréntesis/corchetes
+const clean = (n) => stripExt(n).replace(/_/g, ' ').replace(/\s*[(\[][^)\]]*[)\]]/g, '').replace(/\s+/g, ' ').trim();
+// Agrupa por plantilla (números -> §): "Batman - silencio #01", "#02"... -> serie "Batman - silencio"
+function groupSeries(files) {
+  const by = new Map();
+  for (const f of files) { const k = clean(f.name).toLowerCase().replace(/\d+/g, '§'); (by.get(k) || by.set(k, []).get(k)).push(f); }
+  return [...by.values()].map((fs) => {
+    const names = fs.map((f) => clean(f.name));
+    let label = names[0];
+    if (fs.length > 1) {
+      let L = 0;
+      while (names.every((x) => x[L] && x[L].toLowerCase() === names[0][L].toLowerCase())) L++;
+      label = names[0].slice(0, L).replace(/\d+$/, '');
+      let prev;
+      do { prev = label; label = label.replace(/(?:[\s#._-]|n[º°]|no\.|vol\.?|cap\.?|capítulo|issue|núm\.?|parte|part|tomo)+$/i, ''); } while (label !== prev);
+      label = label.trim() || names[0];
+    }
+    return { label, files: fs };
+  }).sort((x, y) => natural(x.label, y.label));
+}
 const pagesOf = (entries) => entries.filter((e) => !e.directory && /\.(jpe?g|png|webp|gif|avif)$/i.test(e.filename)).sort((a, b) => natural(a.filename, b.filename));
 
 // Caché persistente (IndexedDB): biblioteca, listados y portadas
@@ -161,6 +179,15 @@ const io = new IntersectionObserver((es) => es.forEach((x) => { if (x.isIntersec
 // ---------- Navegación y vistas ----------
 const app = $('#app'), titleEl = $('#title'), backBtn = $('#back'), actions = $('#actions');
 const stack = [];
+function modeBtn(after) {
+  const b = el('button', 'btn mode');
+  b._label = () => (b.textContent = pref('mode', 'page') === 'page' ? '▯ Página' : '☰ Vertical');
+  b.onclick = () => { setPref('mode', pref('mode', 'page') === 'page' ? 'vertical' : 'page'); b._label(); after?.(); };
+  b._label();
+  return b;
+}
+const hdrMode = modeBtn();
+actions.append(hdrMode);
 let cleanup = null, LIB = [], synced = false;
 
 function go(title, render) { stack.push({ title, render }); history.pushState(null, ''); show(); }
@@ -169,7 +196,7 @@ function show() {
   const e = stack[stack.length - 1];
   titleEl.textContent = e.title;
   backBtn.hidden = stack.length < 2;
-  actions.replaceChildren();
+  hdrMode._label();
   e.render(e);
 }
 backBtn.onclick = () => history.back();
@@ -177,15 +204,19 @@ addEventListener('popstate', () => { if (stack.length > 1) { stack.pop(); show()
 const msg = (t) => app.replaceChildren(el('div', 'msg', t));
 const alive = (e) => stack[stack.length - 1] === e;
 
+const ART = { groups: {}, channels: {} };
+const reg = (kind, files) => { for (const [p, url] of Object.entries(files)) ART[kind][decodeURIComponent(p.split('/').pop()).replace(/\.\w+$/, '').trim().toLowerCase()] = url; };
+reg('groups', import.meta.glob(['/groups/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP}', '/src/groups/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP}'], { eager: true, query: '?url', import: 'default' }));
+reg('channels', import.meta.glob(['/channels/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP}', '/src/channels/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP}'], { eager: true, query: '?url', import: 'default' }));
 function art(kind, name) {
   const d = el('div', 'cover'), ltr = el('span', '', name.slice(0, 1).toUpperCase());
   d.append(ltr);
-  const img = new Image(), exts = ['jpg', 'png', 'webp'];
-  let k = 0;
-  const src = () => `/${kind}/${encodeURIComponent(name)}.${exts[k]}`;
+  const img = new Image(), exts = ['jpg', 'jpeg', 'png', 'webp', 'JPG', 'PNG'];
+  let k = -1;
+  const next = () => { img.src = k < 0 && ART[kind][name.toLowerCase()] ? ART[kind][name.toLowerCase()] : (++k < exts.length ? `/${kind}/${encodeURIComponent(name)}.${exts[k]}` : ''); if (k < 0) k = -0.5; };
   img.onload = () => { ltr.remove(); d.append(img); };
-  img.onerror = () => { if (++k < exts.length) img.src = src(); };
-  img.src = src();
+  img.onerror = () => { if (k < exts.length) next(); };
+  next();
   return d;
 }
 function comicCover(ch, f, badge) {
@@ -218,11 +249,6 @@ function grid(items, withSearch) {
 }
 
 function groupsView() {
-  const b = el('button', 'btn');
-  const label = () => (b.textContent = pref('mode', 'page') === 'page' ? '▯ Página a página' : '☰ Vertical');
-  b.onclick = () => { setPref('mode', pref('mode', 'page') === 'page' ? 'vertical' : 'page'); label(); };
-  label();
-  actions.append(b);
   if (!LIB.length) return msg(synced ? 'No se encontraron canales ...::Comics::tgstorage.' : 'Conectando…');
   const gs = [...new Set(LIB.map((c) => c.group))].sort(natural);
   grid(gs.map((g) => ({ label: g, sub: `${LIB.filter((c) => c.group === g).length} canales`, cover: () => art('groups', g), go: () => channelsView(g) })));
@@ -235,11 +261,9 @@ function filesView(ch) {
     const draw = (files) => {
       if (!alive(e)) return;
       if (!files.length) return msg('No hay archivos CBZ/CBR en este canal.');
-      const by = new Map();
-      for (const f of files) { const s = seriesOf(f.name); (by.get(s) || by.set(s, []).get(s)).push(f); }
-      grid([...by].sort((a, b) => natural(a[0], b[0])).map(([s, fs]) => fs.length === 1
-        ? { label: stripExt(fs[0].name), sub: `${Math.round(fs[0].size / MB)} MB`, cover: () => comicCover(ch, fs[0]), go: () => openComic(ch, fs[0]) }
-        : { label: s, sub: `${fs.length} números`, cover: () => comicCover(ch, fs[0], fs.length), go: () => seriesView(ch, s, fs) }), true);
+      grid(groupSeries(files).map(({ label, files: fs }) => fs.length === 1
+        ? { label: clean(fs[0].name), sub: `${Math.round(fs[0].size / MB)} MB`, cover: () => comicCover(ch, fs[0]), go: () => openComic(ch, fs[0]) }
+        : { label, sub: `${fs.length} números`, cover: () => comicCover(ch, fs[0], fs.length), go: () => seriesView(ch, label, fs) }), true);
     };
     const cached = await kv.get('f:' + ch.id);
     if (cached) draw(cached); else msg('Cargando…');
@@ -251,7 +275,7 @@ function filesView(ch) {
 }
 function seriesView(ch, s, files) {
   go(s, () => grid(files.map((f) => ({
-    label: stripExt(f.name).slice(s.length).replace(/^[\s._-]+/, '') || stripExt(f.name),
+    label: (() => { const r = clean(f.name).slice(s.length).replace(/^[\s#._-]+/, ''); return /^\d/.test(r) ? '#' + r : r || clean(f.name); })(),
     sub: `${Math.round(f.size / MB)} MB`, cover: () => comicCover(ch, f), go: () => openComic(ch, f),
   })), true));
 }
@@ -275,8 +299,8 @@ function openComic(ch, f) {
 }
 
 function reader(f, pages, zr) {
-  const key = 'page:' + f.id, vert = pref('mode', 'page') === 'vertical';
-  let n = Math.min(+localStorage.getItem(key) || 0, pages.length - 1), token = 0, uiTimer;
+  const key = 'page:' + f.id;
+  let n = Math.min(+localStorage.getItem(key) || 0, pages.length - 1);
   const urls = new Map();
   const load = (i) => {
     if (i < 0 || i >= pages.length) return null;
@@ -289,96 +313,95 @@ function reader(f, pages, zr) {
   };
   const drop = (i) => { urls.get(i)?.then((u) => URL.revokeObjectURL(u), () => {}); urls.delete(i); };
 
-  const rd = el('div'); rd.id = 'rd';
-  const top = el('div', 'bar'), back = el('button', 'btn', '‹'), cnt = el('span', 'cnt');
-  back.onclick = () => history.back();
-  top.append(back, el('span', 'ttl', stripExt(f.name)), cnt);
-  document.body.append(rd);
-  document.body.style.overflow = 'hidden';
-  const setCount = () => (cnt.textContent = `${n + 1} / ${pages.length}`);
-  const hideUi = () => rd.classList.add('ui-off');
-  uiTimer = setTimeout(hideUi, 2500);
-  let observers = [];
+  const mount = () => {
+    const vert = pref('mode', 'page') === 'vertical';
+    let token = 0, observers = [];
+    const rd = el('div'); rd.id = 'rd';
+    const top = el('div', 'bar'), back = el('button', 'btn', '‹'), cnt = el('span', 'cnt');
+    back.onclick = () => history.back();
+    const mb = modeBtn(() => { unmount(); unmount = mount(); });
+    top.append(back, el('span', 'ttl', stripExt(f.name)), mb, cnt);
+    document.body.append(rd);
+    document.body.style.overflow = 'hidden';
+    const setCount = () => (cnt.textContent = `${n + 1} / ${pages.length}`);
+    const uiTimer = setTimeout(() => rd.classList.add('ui-off'), 2500);
 
-  if (!vert) {
-    rd.className = 'page fit-' + pref('fit', 'screen');
-    const fit = el('button', 'btn'), img = el('img');
-    const fitLabel = () => (fit.textContent = pref('fit', 'screen') === 'screen' ? '↔ Ancho' : '⤢ Pantalla');
-    fit.onclick = () => { setPref('fit', pref('fit', 'screen') === 'screen' ? 'width' : 'screen'); rd.className = rd.className.replace(/fit-\w+/, 'fit-' + pref('fit', 'screen')); fitLabel(); };
-    fitLabel();
-    top.insertBefore(fit, cnt);
-    img.draggable = false;
-    const eL = el('div', 'edge l'), eR = el('div', 'edge r');
-    rd.append(img, eL, eR, top);
-
-    const turn = async (i) => {
-      const t = Math.max(0, Math.min(pages.length - 1, i));
-      if (t === n && img.src) return;
-      n = t; localStorage.setItem(key, n); setCount(); rd.classList.remove('zoom');
-      const mine = ++token;
-      try {
-        const u = await load(n);
-        if (mine !== token) return;
-        img.src = u; rd.scrollTo(0, 0);
-        for (const i2 of [...urls.keys()]) if (i2 < n - 2 || i2 > n + 4) drop(i2);
-        for (const k of [1, 2, 3]) { if (token !== mine) return; await Promise.resolve(load(n + k)).catch(() => {}); } // precarga en segundo plano
-      } catch (err) { cnt.textContent = 'Error'; console.error(err); }
-    };
-    eL.onclick = () => turn(n - 1);
-    eR.onclick = () => turn(n + 1);
-    let last = 0, tapT;
-    img.onclick = () => {
-      const t = Date.now();
-      if (t - last < 300) { clearTimeout(tapT); last = 0; rd.classList.toggle('zoom'); }
-      else { last = t; tapT = setTimeout(() => rd.classList.toggle('ui-off'), 300); }
-    };
-    let sx = null, sy = 0;
-    rd.addEventListener('touchstart', (e) => { if (e.touches.length === 1) { sx = e.touches[0].clientX; sy = e.touches[0].clientY; } else sx = null; }, { passive: true });
-    rd.addEventListener('touchend', (e) => {
-      if (sx === null || (window.visualViewport?.scale || 1) > 1.05 || rd.classList.contains('zoom')) return;
-      const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy;
-      sx = null;
-      if (Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy)) turn(dx < 0 ? n + 1 : n - 1);
-    }, { passive: true });
-    document.onkeydown = (e) => { if (e.key === 'ArrowRight') turn(n + 1); if (e.key === 'ArrowLeft') turn(n - 1); };
-    turn(n);
-  } else {
-    rd.className = 'vert';
-    const slots = pages.map((_, i) => { const d = el('div', 'slot'); d.dataset.i = i; return d; });
-    rd.append(...slots, top);
-    const loaded = new Map();
-    const loadIO = new IntersectionObserver((es) => es.forEach(async (x) => {
-      const i = +x.target.dataset.i;
-      if (!x.isIntersecting || loaded.has(i)) return;
-      loaded.set(i, true);
-      try {
-        const im = el('img'); im.src = await load(i);
-        x.target.style.minHeight = '0'; x.target.replaceChildren(im);
-      } catch (err) { loaded.delete(i); }
-    }), { root: rd, rootMargin: '150% 0px' });
-    const curIO = new IntersectionObserver((es) => es.forEach((x) => {
-      if (!x.isIntersecting) return;
-      n = +x.target.dataset.i; localStorage.setItem(key, n); setCount();
-      for (const i of [...loaded.keys()]) if (Math.abs(i - n) > 8) { // libera páginas lejanas
-        const s = slots[i]; s.style.minHeight = s.clientHeight + 'px'; s.replaceChildren(); loaded.delete(i); drop(i);
-      }
-    }), { root: rd, rootMargin: '-50% 0px -50% 0px' });
-    slots.forEach((s) => { loadIO.observe(s); curIO.observe(s); });
-    observers = [loadIO, curIO];
-    rd.onclick = () => rd.classList.toggle('ui-off');
-    slots[n].scrollIntoView();
+    if (!vert) {
+      rd.className = 'page fit-' + pref('fit', 'screen');
+      const fit = el('button', 'btn'), img = el('img');
+      const fitLabel = () => (fit.textContent = pref('fit', 'screen') === 'screen' ? '↔ Ancho' : '⤢ Pantalla');
+      fit.onclick = () => { setPref('fit', pref('fit', 'screen') === 'screen' ? 'width' : 'screen'); rd.className = rd.className.replace(/fit-\w+/, 'fit-' + pref('fit', 'screen')); fitLabel(); };
+      fitLabel();
+      top.insertBefore(fit, mb);
+      img.draggable = false;
+      const eL = el('div', 'edge l'), eR = el('div', 'edge r');
+      rd.append(img, eL, eR, top);
+      const turn = async (i) => {
+        const t = Math.max(0, Math.min(pages.length - 1, i));
+        if (t === n && img.src) return;
+        n = t; localStorage.setItem(key, n); setCount(); rd.classList.remove('zoom');
+        const mine = ++token;
+        try {
+          const u = await load(n);
+          if (mine !== token) return;
+          img.src = u; rd.scrollTo(0, 0);
+          for (const i2 of [...urls.keys()]) if (i2 < n - 2 || i2 > n + 4) drop(i2);
+          for (const k of [1, 2, 3]) { if (token !== mine) return; await Promise.resolve(load(n + k)).catch(() => {}); } // precarga
+        } catch (err) { cnt.textContent = 'Error'; console.error(err); }
+      };
+      eL.onclick = () => turn(n - 1);
+      eR.onclick = () => turn(n + 1);
+      let last = 0, tapT;
+      img.onclick = () => {
+        const t = Date.now();
+        if (t - last < 300) { clearTimeout(tapT); last = 0; rd.classList.toggle('zoom'); }
+        else { last = t; tapT = setTimeout(() => rd.classList.toggle('ui-off'), 300); }
+      };
+      let sx = null, sy = 0;
+      rd.addEventListener('touchstart', (e) => { if (e.touches.length === 1) { sx = e.touches[0].clientX; sy = e.touches[0].clientY; } else sx = null; }, { passive: true });
+      rd.addEventListener('touchend', (e) => {
+        if (sx === null || (window.visualViewport?.scale || 1) > 1.05 || rd.classList.contains('zoom')) return;
+        const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy;
+        sx = null;
+        if (Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy)) turn(dx < 0 ? n + 1 : n - 1);
+      }, { passive: true });
+      document.onkeydown = (e) => { if (e.key === 'ArrowRight') turn(n + 1); if (e.key === 'ArrowLeft') turn(n - 1); };
+      turn(n);
+    } else {
+      rd.className = 'vert';
+      const slots = pages.map((_, i) => { const d = el('div', 'slot'); d.dataset.i = i; return d; });
+      rd.append(...slots, top);
+      const loaded = new Map();
+      const loadIO = new IntersectionObserver((es) => es.forEach(async (x) => {
+        const i = +x.target.dataset.i;
+        if (!x.isIntersecting || loaded.has(i)) return;
+        loaded.set(i, true);
+        try { const im = el('img'); im.src = await load(i); x.target.style.minHeight = '0'; x.target.replaceChildren(im); } catch (err) { loaded.delete(i); }
+      }), { root: rd, rootMargin: '150% 0px' });
+      const curIO = new IntersectionObserver((es) => es.forEach((x) => {
+        if (!x.isIntersecting) return;
+        n = +x.target.dataset.i; localStorage.setItem(key, n); setCount();
+        for (const i of [...loaded.keys()]) if (Math.abs(i - n) > 8) { // libera páginas lejanas
+          const s = slots[i]; s.style.minHeight = s.clientHeight + 'px'; s.replaceChildren(); loaded.delete(i); drop(i);
+        }
+      }), { root: rd, rootMargin: '-50% 0px -50% 0px' });
+      slots.forEach((s) => { loadIO.observe(s); curIO.observe(s); });
+      observers = [loadIO, curIO];
+      rd.onclick = () => rd.classList.toggle('ui-off');
+      slots[n].scrollIntoView();
+    }
     setCount();
-  }
-  setCount();
-  return () => {
-    clearTimeout(uiTimer);
-    observers.forEach((o) => o.disconnect());
-    for (const i of [...urls.keys()]) drop(i);
-    document.onkeydown = null;
-    document.body.style.overflow = '';
-    rd.remove();
-    zr.close().catch(() => {});
+    return () => {
+      clearTimeout(uiTimer);
+      observers.forEach((o) => o.disconnect());
+      for (const i of [...urls.keys()]) drop(i);
+      document.onkeydown = null;
+      document.body.style.overflow = '';
+      rd.remove();
+    };
   };
+  let unmount = mount();
+  return () => { unmount(); zr.close().catch(() => {}); };
 }
 
 // ---------- Inicio ----------

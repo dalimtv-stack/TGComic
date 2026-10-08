@@ -31,3 +31,5 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 #rd.zoom .edge{display:none}
 #rd.vert .slot{min-height:70vh;display:grid;place-items:center}
 #rd.vert .slot img{width:100%;max-width:900px}
+[hidden]{display:none!important}
+#rd .bar .mode{font-size:.9rem}
