@@ -18,6 +18,16 @@ const setPref = (k, v) => localStorage.setItem('pref:' + k, v);
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const stripExt = (n) => n.replace(/\.cb[zr]$/i, '');
+const pageKey = (id) => 'page:' + id;
+const pagesKey = (id) => 'pages:' + id;
+const readProgress = (id) => {
+  const cur = +localStorage.getItem(pageKey(id));
+  const tot = +localStorage.getItem(pagesKey(id));
+  if (!tot || tot < 1 || !cur && cur !== 0) return null;
+  if (cur <= 0) return null;
+  return { cur: cur + 1, tot, pct: Math.min(100, Math.round(((cur + 1) / tot) * 100)) };
+};
+
 // Nombre limpio: sin extensión, guiones bajos, etiquetas [..] (..) ni marcas @sitio
 const clean = (n) => stripExt(n).replace(/_/g, ' ').replace(/\s*[(\[][^)\]]*[)\]]/g, '').replace(/\s*@\S+/g, '').replace(/\s+/g, ' ').trim();
 // Número final del nombre: "#13", "Nº 5", "Vol. 2", "01 de 12", "07"...
@@ -171,7 +181,7 @@ class TgReader extends zip.Reader {
 }
 
 // ---------- Archivos: ZIP (acceso aleatorio) o RAR (descarga completa) ----------
-const pageBlob = (p) => p.blob || p.getData(new zip.BlobWriter(zip.getMimeType(p.filename)));
+const pageBlob = async (p) => p.blob || (await p.getData(new zip.BlobWriter(zip.getMimeType(p.filename))));
 const sniff = async (r) => { const h = await r.readUint8Array(0, 4); return h[0] === 0x52 && h[1] === 0x61 && h[2] === 0x72 ? 'rar' : 'zip'; }; // "Rar!"
 async function downloadRarBytes(m, size, status) {
   // 1) downloadMedia: workers internos y mejor manejo de DC
@@ -220,19 +230,25 @@ async function openPages(m, size, status) {
     wasmBinary: await (await fetch(rarWasm)).arrayBuffer(),
     data: ab,
   });
+  const mimeOf = (name) => {
+    const e = (name.split(/[/\\]/).pop() || name).toLowerCase().match(/\.(jpe?g|png|webp|gif|avif)$/);
+    if (!e) return 'application/octet-stream';
+    return ({ jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', avif: 'image/avif' })[e[1]] || 'application/octet-stream';
+  };
   const out = [];
   // Generador lazy: hay que recorrerlo entero (solid RAR + liberar memoria C++)
   for (const x of ex.extract().files) {
-    const n = x.fileHeader.name;
+    const n = x.fileHeader.name || '';
     if (x.fileHeader.flags.directory || !x.extraction) continue;
-    if (!/\.(jpe?g|png|webp|gif|avif)$/i.test(n)) continue;
-    // IMPORTANTE: copiar fuera del heap WASM; si no, las imágenes salen negras/corruptas
-    const raw = x.extraction;
-    const bytes = raw.slice ? raw.slice() : new Uint8Array(raw);
-    if (!bytes.byteLength) continue;
     const base = n.split(/[/\\]/).pop() || n;
-    out.push({ filename: n, blob: new Blob([bytes], { type: zip.getMimeType(base) }) });
-    // ceder el hilo para no congelar la UI durante la extracción
+    if (!/\.(jpe?g|png|webp|gif|avif)$/i.test(base)) continue;
+    // Copia real fuera del heap WASM (slice compartido puede corromperse)
+    const raw = x.extraction;
+    const src = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
+    if (!src.byteLength) continue;
+    const copy = new ArrayBuffer(src.byteLength);
+    new Uint8Array(copy).set(src);
+    out.push({ filename: base, blob: new Blob([copy], { type: mimeOf(base) }) });
     await new Promise((res) => setTimeout(res, 0));
   }
   out.sort((x, y) => natural(x.filename, y.filename));
@@ -292,6 +308,21 @@ function show() {
   e.render(e);
 }
 backBtn.onclick = () => history.back();
+// Header: ocultar al bajar, mostrar al subir
+let lastScrollY = 0, headerHidden = false;
+const onScrollHeader = () => {
+  const y = window.scrollY || document.documentElement.scrollTop || 0;
+  const top = $('#top');
+  if (!top || document.getElementById('rd')) return;
+  if (y > lastScrollY + 8 && y > 60) {
+    if (!headerHidden) { top.classList.add('hide'); headerHidden = true; }
+  } else if (y < lastScrollY - 8) {
+    if (headerHidden) { top.classList.remove('hide'); headerHidden = false; }
+  }
+  lastScrollY = y;
+};
+addEventListener('scroll', onScrollHeader, { passive: true });
+
 addEventListener('popstate', () => { if (stack.length > 1) { stack.pop(); show(); } });
 const msg = (t) => app.replaceChildren(el('div', 'msg', t));
 const alive = (e) => stack[stack.length - 1] === e;
@@ -311,10 +342,23 @@ function art(kind, name) {
   next();
   return d;
 }
-function comicCover(ch, f, badge) {
+function comicCover(ch, f, badge, series) {
   const d = el('div', 'cover'), ltr = el('span', '', stripExt(f.name).slice(0, 1).toUpperCase());
   d.append(ltr);
-  if (badge) d.append(el('span', 'badge', badge));
+  if (badge != null && badge !== '') {
+    const b = el('span', series ? 'badge series' : 'badge', String(badge));
+    d.append(b);
+  }
+  const prog = readProgress(f.id);
+  if (prog) {
+    const bar = el('div', 'prog');
+    const fill = el('div', 'prog-fill');
+    fill.style.width = prog.pct + '%';
+    bar.append(fill);
+    d.append(bar);
+    const pb = el('span', 'prog-badge', prog.pct >= 95 ? '✓' : prog.pct + '%');
+    d.append(pb);
+  }
   d._load = async () => {
     const b = await getCover(ch, f);
     if (!b) return;
@@ -333,6 +377,7 @@ function grid(items, withSearch) {
     // Portada: abrir cómic / serie. Título: menú de opciones si existe, si no también abre.
     hit.onclick = i.go;
     if (i.menu) {
+      t.classList.add('has-menu');
       t.onclick = (ev) => { ev.stopPropagation(); i.menu(); };
       t.title = 'Opciones';
       t.setAttribute('role', 'button');
@@ -389,7 +434,7 @@ function filesView(ch) {
       for (const { label, files: fs } of groupSeries(files)) {
         if (fs.length === 1) items.push(single(fs[0]));
         else if (un.has(label.toLowerCase())) fs.forEach((f) => items.push({ ...single(f), menu: () => sheet(label, [['Volver a agrupar la serie', () => setUngrouped(ch, label, false, redraw)]]) }));
-        else items.push({ label, sub: `${fs.length} números`, cover: () => comicCover(ch, fs[0], fs.length), go: () => seriesView(ch, label, fs), menu: () => sheet(label, [['Desagrupar serie', () => setUngrouped(ch, label, true, redraw)]]) });
+        else items.push({ label, sub: `${fs.length} números`, cover: () => comicCover(ch, fs[0], fs.length, true), go: () => seriesView(ch, label, fs), menu: () => sheet(label, [['Desagrupar serie', () => setUngrouped(ch, label, true, redraw)]]) });
       }
       grid(items, true);
     };
@@ -425,7 +470,8 @@ function openComic(ch, f) {
 }
 
 function reader(f, pages, zr) {
-  const key = 'page:' + f.id;
+  const key = pageKey(f.id);
+  try { localStorage.setItem(pagesKey(f.id), String(pages.length)); } catch (_) {}
   let n = Math.min(+localStorage.getItem(key) || 0, pages.length - 1);
   const urls = new Map();
   const load = (i) => {
