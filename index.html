@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lector de cómics</title>
+  <style>
+    :root { color-scheme: dark; --bg:#17181b; --fg:#e8e6e1; --mut:#8d8f96; --line:#2c2e33; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui, sans-serif; }
+    header { display:flex; gap:.75rem; align-items:center; padding:.75rem 1rem; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); z-index:2; }
+    header h1 { font-size:1rem; margin:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    button { background:none; color:inherit; border:1px solid var(--line); border-radius:6px; padding:.4rem .8rem; font:inherit; cursor:pointer; }
+    button:focus-visible { outline:2px solid var(--fg); }
+    ul { list-style:none; margin:0; padding:0; }
+    li button { width:100%; text-align:left; border:0; border-bottom:1px solid var(--line); border-radius:0; padding:.9rem 1rem; }
+    li small { color:var(--mut); margin-left:.5rem; }
+    #app p { padding:1rem; color:var(--mut); }
+    #viewer { display:flex; flex-direction:column; align-items:center; }
+    #viewer img { max-width:100%; height:auto; touch-action:manipulation; }
+    #viewer.zoom img { max-width:none; }
+    #viewer .bar { color:var(--mut); padding:.5rem; }
+    #viewer > button { margin-bottom:1rem; }
+  </style>
+</head>
+<body>
+  <header><button id="back" hidden>←</button><h1 id="title">Cómics</h1><button id="fs" hidden>Pantalla completa</button></header>
+  <main id="app"><p>Conectando…</p></main>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
