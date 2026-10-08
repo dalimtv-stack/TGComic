@@ -1,1 +1,1 @@
-
+Opcional: una imagen por canal con el nombre del canal, por ejemplo Batman.jpg.
