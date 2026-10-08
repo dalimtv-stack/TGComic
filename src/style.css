@@ -23,13 +23,20 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 .card small{color:var(--mut);display:block}
 .msg{padding:3rem 1rem;color:var(--mut);text-align:center}
 
-/* Home: siguiendo + editoriales */
+/* Home: seguir leyendo + editoriales */
 .sec-title{margin:.85rem .9rem .35rem;font-size:.78rem;font-weight:650;letter-spacing:.06em;text-transform:uppercase;color:var(--mut)}
 .sec-sep{height:1px;margin:1.1rem 1.25rem .4rem;background:linear-gradient(90deg,transparent,#ffffff18 20%,#ffffff18 80%,transparent)}
-.continue{padding:0 .25rem}
-.continue-row{display:grid;grid-template-columns:minmax(120px,160px);justify-content:start;gap:1rem;padding:.25rem .75rem .5rem}
-.continue-row .card{width:100%}
-.continue-row .cover{box-shadow:0 8px 22px #0009}
+.continue{padding:.15rem .75rem .35rem}
+.continue-row{display:flex;align-items:stretch;gap:.85rem;width:100%;margin:0;padding:.55rem .65rem;border:0;border-radius:14px;background:var(--card);color:inherit;font:inherit;text-align:left;cursor:pointer}
+.continue-row:active{opacity:.85}
+.continue-cover{flex:none;width:56px;height:84px;border-radius:8px;background:#121316;overflow:hidden;display:grid;place-items:center;font-size:1.35rem;font-weight:700;color:var(--mut);box-shadow:0 3px 10px #0006}
+.continue-cover img{width:100%;height:100%;object-fit:cover;display:block}
+.continue-meta{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:.2rem}
+.continue-meta b{margin:0;font-size:.95rem;font-weight:600;line-height:1.25;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.continue-meta small{color:var(--mut);font-size:.85rem}
+.continue-prog{margin-top:.35rem;height:4px;border-radius:99px;background:#0008;overflow:hidden}
+.continue-prog-fill{height:100%;background:var(--acc);border-radius:99px}
+.continue-prog-label{margin-top:.15rem;font-size:.72rem;font-weight:650;color:var(--acc)}
 
 #rd{position:fixed;inset:0;z-index:10;background:#000;overflow:auto;-webkit-overflow-scrolling:touch;overflow-anchor:none}
 #rd .bar{position:fixed;left:0;right:0;z-index:12;display:flex;align-items:center;gap:.5rem;padding:calc(var(--sat) + .5rem) .75rem 1.2rem;top:0;background:linear-gradient(#000d,#0000);transition:opacity .2s}

@@ -478,16 +478,35 @@ function groupsView() {
   const last = getLastRead();
   if (last?.ch?.id && last?.f?.id) {
     const sec = el('section', 'continue');
-    sec.append(el('div', 'sec-title', 'Siguiendo'));
-    const row = el('div', 'continue-row');
+    sec.append(el('div', 'sec-title', 'Seguir leyendo'));
     const ch = last.ch, f = last.f;
     const prog = readProgress(f.id);
-    row.append(cardNode({
-      label: clean(f.name),
-      sub: prog ? `${prog.cur} / ${prog.tot} · ${prog.pct}%` : sizeLabel(f),
-      cover: () => comicCover(ch, f),
-      go: () => openComic(ch, f),
-    }));
+    const row = el('button', 'continue-row');
+    row.type = 'button';
+    row.onclick = () => openComic(ch, f);
+    // Portada pequeña
+    const thumb = el('div', 'continue-cover');
+    const letter = el('span', '', stripExt(f.name).slice(0, 1).toUpperCase());
+    thumb.append(letter);
+    getCover(ch, f).then((b) => {
+      if (!b || !thumb.isConnected) return;
+      const img = new Image();
+      img.onload = () => { letter.remove(); thumb.prepend(img); };
+      img.src = URL.createObjectURL(b);
+    }).catch(() => {});
+    // Texto a la derecha
+    const meta = el('div', 'continue-meta');
+    meta.append(el('b', '', clean(f.name)));
+    meta.append(el('small', '', sizeLabel(f)));
+    if (prog) {
+      const bar = el('div', 'continue-prog');
+      const fill = el('div', 'continue-prog-fill');
+      fill.style.width = prog.pct + '%';
+      bar.append(fill);
+      const lab = el('span', 'continue-prog-label', prog.pct >= 95 ? '✓ Completado' : `${prog.cur} / ${prog.tot} · ${prog.pct}%`);
+      meta.append(bar, lab);
+    }
+    row.append(thumb, meta);
     sec.append(row);
     nodes.push(sec);
     nodes.push(el('div', 'sec-sep'));
