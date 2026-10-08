@@ -16,25 +16,28 @@ const setPref = (k, v) => localStorage.setItem('pref:' + k, v);
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const stripExt = (n) => n.replace(/\.cb[zr]$/i, '');
-// Nombre limpio: sin extensión, guiones bajos ni etiquetas entre paréntesis/corchetes
-const clean = (n) => stripExt(n).replace(/_/g, ' ').replace(/\s*[(\[][^)\]]*[)\]]/g, '').replace(/\s+/g, ' ').trim();
-// Agrupa por plantilla (números -> §): "Batman - silencio #01", "#02"... -> serie "Batman - silencio"
+// Nombre limpio: sin extensión, guiones bajos, etiquetas [..] (..) ni marcas @sitio
+const clean = (n) => stripExt(n).replace(/_/g, ' ').replace(/\s*[(\[][^)\]]*[)\]]/g, '').replace(/\s*@\S+/g, '').replace(/\s+/g, ' ').trim();
+// Número final del nombre: "#13", "Nº 5", "Vol. 2", "01 de 12", "07"...
+const NUM = /[\s._-]*(?:#|n[º°]\.?|no\.|vol\.?|cap\.?|issue|núm\.?|parte|part|tomo)?\s*\d+(?:\.\d+)?(?:\s*(?:de|of)\s*\d+)?\s*$/i;
+// Agrupa por serie: "Batman - The Long Halloween #01", "#13" -> serie; los especiales sin número que empiezan igual se unen
 function groupSeries(files) {
-  const by = new Map();
-  for (const f of files) { const k = clean(f.name).toLowerCase().replace(/\d+/g, '§'); (by.get(k) || by.set(k, []).get(k)).push(f); }
-  return [...by.values()].map((fs) => {
-    const names = fs.map((f) => clean(f.name));
-    let label = names[0];
-    if (fs.length > 1) {
-      let L = 0;
-      while (names.every((x) => x[L] && x[L].toLowerCase() === names[0][L].toLowerCase())) L++;
-      label = names[0].slice(0, L).replace(/\d+$/, '');
-      let prev;
-      do { prev = label; label = label.replace(/(?:[\s#._-]|n[º°]|no\.|vol\.?|cap\.?|capítulo|issue|núm\.?|parte|part|tomo)+$/i, ''); } while (label !== prev);
-      label = label.trim() || names[0];
-    }
-    return { label, files: fs };
-  }).sort((x, y) => natural(x.label, y.label));
+  const by = new Map(), loose = [];
+  for (const f of files) {
+    const c = clean(f.name), b = c.replace(NUM, '').replace(/[\s._-]+$/, '');
+    if (b && b !== c) { const k = b.toLowerCase(); (by.get(k) || by.set(k, { label: b, files: [] }).get(k)).files.push(f); }
+    else loose.push([f, c]);
+  }
+  const groups = [...by.values()], rest = [];
+  for (const [f, c] of loose) {
+    const cl = c.toLowerCase();
+    const g = groups.filter((x) => { const l = x.label.toLowerCase(); return cl.startsWith(l) && !/[\p{L}\d]/u.test(cl[l.length] || ' '); })
+      .sort((x, y) => y.label.length - x.label.length)[0];
+    if (g) g.files.push(f); else rest.push({ label: c, files: [f] });
+  }
+  return [...groups, ...rest]
+    .map((g) => ({ label: g.label, files: g.files.sort((x, y) => natural(clean(x.name), clean(y.name))) }))
+    .sort((x, y) => natural(x.label, y.label));
 }
 const pagesOf = (entries) => entries.filter((e) => !e.directory && /\.(jpe?g|png|webp|gif|avif)$/i.test(e.filename)).sort((a, b) => natural(a.filename, b.filename));
 
