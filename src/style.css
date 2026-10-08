@@ -33,3 +33,14 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 #rd.vert .slot img{width:100%;max-width:900px}
 [hidden]{display:none!important}
 #rd .bar .mode{font-size:.9rem}
+.card{text-align:center;cursor:default}
+.card .hit{display:block;width:100%;border:0;background:none;padding:0;color:inherit;font:inherit;cursor:pointer}
+.card .name{display:flex;align-items:flex-start;justify-content:center;gap:.2rem;margin-top:.5rem}
+.card .name b{margin:0;cursor:pointer}
+.card small{display:block}
+.gear{flex:none;border:0;background:none;color:var(--mut);font-size:1.1rem;line-height:1.2;padding:.1rem .35rem;cursor:pointer}
+#rd.page.fit-width img{margin:auto}
+.sheet{position:fixed;inset:0;z-index:30;background:#000a;display:flex;align-items:flex-end;justify-content:center}
+.sheet .box{width:100%;max-width:480px;background:var(--card);border-radius:18px 18px 0 0;padding:1rem 1rem calc(var(--sab) + 1rem);display:grid;gap:.6rem}
+.sheet .sh-title{text-align:center;color:var(--mut);font-size:.9rem}
+.sheet .btn{background:#2a2b30;height:50px}

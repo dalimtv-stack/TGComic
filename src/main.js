@@ -3,6 +3,8 @@ import { TelegramClient, Api } from 'telegram';
 import { StringSession } from 'telegram/sessions';
 import bigInt from 'big-integer';
 import * as zip from '@zip.js/zip.js';
+import { createExtractorFromData } from 'node-unrar-js';
+import rarWasm from 'node-unrar-js/esm/js/unrar.wasm?url';
 
 const apiId = Number(import.meta.env.VITE_API_ID);
 const apiHash = import.meta.env.VITE_API_HASH;
@@ -153,6 +155,36 @@ class TgReader extends zip.Reader {
   }
 }
 
+// ---------- Archivos: ZIP (acceso aleatorio) o RAR (descarga completa) ----------
+const pageBlob = (p) => p.blob || p.getData(new zip.BlobWriter(zip.getMimeType(p.filename)));
+const sniff = async (r) => { const h = await r.readUint8Array(0, 4); return h[0] === 0x52 && h[1] === 0x61 && h[2] === 0x72 ? 'rar' : 'zip'; }; // "Rar!"
+async function openPages(m, size, status) {
+  const r = new TgReader(m, size);
+  if ((await sniff(r)) === 'zip') { // incluye .cbr que en realidad son ZIP
+    const zr = new zip.ZipReader(r);
+    return { pages: pagesOf(await zr.getEntries()), close: () => zr.close() };
+  }
+  const data = new Uint8Array(size);
+  r.max = 4;
+  const total = Math.ceil(size / r.ch);
+  let done = 0;
+  await mapLimit(Array.from({ length: total }, (_, i) => i), 8, async (i) => {
+    data.set(await r.chunk(i), i * r.ch);
+    status(`Descargando CBR… ${Math.round((++done / total) * 100)}%`);
+  });
+  status('Extrayendo páginas…');
+  const ex = await createExtractorFromData({ wasmBinary: await (await fetch(rarWasm)).arrayBuffer(), data });
+  const out = [];
+  for (const x of ex.extract().files) {
+    const n = x.fileHeader.name;
+    if (x.fileHeader.flags.directory || !x.extraction || !/\.(jpe?g|png|webp|gif|avif)$/i.test(n)) continue;
+    out.push({ filename: n, blob: new Blob([x.extraction.data], { type: zip.getMimeType(n) }) });
+    await new Promise((res) => setTimeout(res));
+  }
+  out.sort((x, y) => natural(x.filename, y.filename));
+  return { pages: out, close: () => {} };
+}
+
 // ---------- Portadas (primera imagen del CBZ, miniatura cacheada) ----------
 const cq = []; let crun = 0, reading = false;
 const enqueue = (fn) => new Promise((res) => { cq.push(() => fn().then(res, () => res(null))); pump(); });
@@ -161,14 +193,16 @@ function pump() { if (reading) return; while (crun < 2 && cq.length) { crun++; c
 async function getCover(ch, f) {
   const key = `c:${ch.id}:${f.id}`;
   let b = await kv.get(key);
-  if (!b && /\.cbz$/i.test(f.name)) b = await enqueue(() => makeCover(ch, f, key));
-  return b;
+  if (!b) b = await enqueue(() => makeCover(ch, f, key));
+  return b === 'none' ? null : b;
 }
 async function makeCover(ch, f, key) {
-  const zr = new zip.ZipReader(new TgReader(await getMsg(ch, f), f.size));
+  const r = new TgReader(await getMsg(ch, f), f.size);
+  if ((await sniff(r)) !== 'zip') { await kv.set(key, 'none'); return null; }
+  const zr = new zip.ZipReader(r);
   try {
     const first = pagesOf(await zr.getEntries())[0];
-    const bmp = await createImageBitmap(await first.getData(new zip.BlobWriter(zip.getMimeType(first.filename))));
+    const bmp = await createImageBitmap(await pageBlob(first));
     const w = 320, h = Math.round((bmp.height * w) / bmp.width);
     const cv = el('canvas'); cv.width = w; cv.height = h;
     cv.getContext('2d').drawImage(bmp, 0, 0, w, h);
@@ -239,16 +273,37 @@ function comicCover(ch, f, badge) {
 function grid(items, withSearch) {
   const g = el('div', 'grid'), nodes = [];
   const draw = (q = '') => g.replaceChildren(...items.filter((i) => i.label.toLowerCase().includes(q)).map((i) => {
-    const b = el('button', 'card');
-    b.append(i.cover(), el('b', '', i.label));
-    if (i.sub) b.append(el('small', '', i.sub));
-    b.onclick = i.go;
-    return b;
+    const c = el('div', 'card'), hit = el('button', 'hit'), name = el('div', 'name'), t = el('b', '', i.label);
+    hit.append(i.cover());
+    hit.onclick = t.onclick = i.go;
+    name.append(t);
+    if (i.menu) { const gear = el('button', 'gear', '⚙'); gear.setAttribute('aria-label', 'Opciones'); gear.onclick = (ev) => { ev.stopPropagation(); i.menu(); }; name.append(gear); }
+    c.append(hit, name);
+    if (i.sub) c.append(el('small', '', i.sub));
+    return c;
   }));
   if (withSearch) { const s = el('input'); s.id = 'search'; s.type = 'search'; s.placeholder = 'Buscar…'; s.oninput = () => draw(s.value.toLowerCase().trim()); nodes.push(s); }
   nodes.push(g);
   app.replaceChildren(...nodes);
   draw();
+}
+function sheet(title, opts) {
+  const bg = el('div', 'sheet'), box = el('div', 'box'), close = () => bg.remove();
+  box.append(el('div', 'sh-title', title));
+  for (const [label, fn] of opts) { const b = el('button', 'btn', label); b.onclick = () => { close(); fn(); }; box.append(b); }
+  const c = el('button', 'btn', 'Cancelar'); c.onclick = close;
+  box.append(c);
+  bg.onclick = (ev) => { if (ev.target === bg) close(); };
+  bg.append(box);
+  document.body.append(bg);
+}
+const ugKey = (ch) => 'ungroup:' + ch.id;
+const ungrouped = (ch) => new Set(JSON.parse(localStorage.getItem(ugKey(ch)) || '[]'));
+function setUngrouped(ch, label, on, after) {
+  const u = ungrouped(ch);
+  on ? u.add(label.toLowerCase()) : u.delete(label.toLowerCase());
+  localStorage.setItem(ugKey(ch), JSON.stringify([...u]));
+  after();
 }
 
 function groupsView() {
@@ -261,12 +316,19 @@ function channelsView(g) {
 }
 function filesView(ch) {
   go(ch.name, async (e) => {
+    let cur = [];
+    const single = (f) => ({ label: clean(f.name), sub: `${Math.round(f.size / MB)} MB`, cover: () => comicCover(ch, f), go: () => openComic(ch, f) });
     const draw = (files) => {
       if (!alive(e)) return;
+      cur = files;
       if (!files.length) return msg('No hay archivos CBZ/CBR en este canal.');
-      grid(groupSeries(files).map(({ label, files: fs }) => fs.length === 1
-        ? { label: clean(fs[0].name), sub: `${Math.round(fs[0].size / MB)} MB`, cover: () => comicCover(ch, fs[0]), go: () => openComic(ch, fs[0]) }
-        : { label, sub: `${fs.length} números`, cover: () => comicCover(ch, fs[0], fs.length), go: () => seriesView(ch, label, fs) }), true);
+      const un = ungrouped(ch), items = [], redraw = () => draw(cur);
+      for (const { label, files: fs } of groupSeries(files)) {
+        if (fs.length === 1) items.push(single(fs[0]));
+        else if (un.has(label.toLowerCase())) fs.forEach((f) => items.push({ ...single(f), menu: () => sheet(label, [['Volver a agrupar la serie', () => setUngrouped(ch, label, false, redraw)]]) }));
+        else items.push({ label, sub: `${fs.length} números`, cover: () => comicCover(ch, fs[0], fs.length), go: () => seriesView(ch, label, fs), menu: () => sheet(label, [['Desagrupar serie', () => setUngrouped(ch, label, true, redraw)]]) });
+      }
+      grid(items, true);
     };
     const cached = await kv.get('f:' + ch.id);
     if (cached) draw(cached); else msg('Cargando…');
@@ -289,14 +351,12 @@ function openComic(ch, f) {
     reading = true;
     let rdClean = null;
     cleanup = () => { reading = false; pump(); rdClean?.(); };
-    if (/\.cbr$/i.test(f.name)) return msg('CBR todavía no está soportado.');
     msg('Abriendo…');
     try {
-      const zr = new zip.ZipReader(new TgReader(await getMsg(ch, f), f.size));
-      const pages = pagesOf(await zr.getEntries());
-      if (!alive(e)) return zr.close();
-      if (!pages.length) return msg('No se encontraron imágenes.');
-      rdClean = reader(f, pages, zr);
+      const arc = await openPages(await getMsg(ch, f), f.size, msg);
+      if (!alive(e)) return arc.close();
+      if (!arc.pages.length) return msg('No se encontraron imágenes.');
+      rdClean = reader(f, arc.pages, arc);
     } catch (err) { msg('Error: ' + err.message); }
   });
 }
@@ -308,7 +368,7 @@ function reader(f, pages, zr) {
   const load = (i) => {
     if (i < 0 || i >= pages.length) return null;
     if (!urls.has(i)) {
-      const p = pages[i].getData(new zip.BlobWriter(zip.getMimeType(pages[i].filename))).then((b) => URL.createObjectURL(b));
+      const p = pageBlob(pages[i]).then((b) => URL.createObjectURL(b));
       p.catch(() => urls.delete(i));
       urls.set(i, p);
     }
@@ -331,7 +391,8 @@ function reader(f, pages, zr) {
 
     if (!vert) {
       rd.className = 'page fit-' + pref('fit', 'screen');
-      const fit = el('button', 'btn'), img = el('img');
+      const fit = el('button', 'btn');
+      let img = el('img');
       const fitLabel = () => (fit.textContent = pref('fit', 'screen') === 'screen' ? '↔ Ancho' : '⤢ Pantalla');
       fit.onclick = () => { setPref('fit', pref('fit', 'screen') === 'screen' ? 'width' : 'screen'); rd.className = rd.className.replace(/fit-\w+/, 'fit-' + pref('fit', 'screen')); fitLabel(); };
       fitLabel();
@@ -347,7 +408,10 @@ function reader(f, pages, zr) {
         try {
           const u = await load(n);
           if (mine !== token) return;
-          img.src = u; rd.scrollTo(0, 0);
+          const im = el('img'); im.draggable = false; im.src = u;
+          await im.decode().catch(() => {});
+          if (mine !== token) return;
+          img.replaceWith(im); img = im; rd.scrollTo(0, 0);
           for (const i2 of [...urls.keys()]) if (i2 < n - 2 || i2 > n + 4) drop(i2);
           for (const k of [1, 2, 3]) { if (token !== mine) return; await Promise.resolve(load(n + k)).catch(() => {}); } // precarga
         } catch (err) { cnt.textContent = 'Error'; console.error(err); }
@@ -355,7 +419,8 @@ function reader(f, pages, zr) {
       eL.onclick = () => turn(n - 1);
       eR.onclick = () => turn(n + 1);
       let last = 0, tapT;
-      img.onclick = () => {
+      rd.onclick = (ev) => {
+        if (ev.target.tagName !== 'IMG') return;
         const t = Date.now();
         if (t - last < 300) { clearTimeout(tapT); last = 0; rd.classList.toggle('zoom'); }
         else { last = t; tapT = setTimeout(() => rd.classList.toggle('ui-off'), 300); }
@@ -379,7 +444,7 @@ function reader(f, pages, zr) {
         const i = +x.target.dataset.i;
         if (!x.isIntersecting || loaded.has(i)) return;
         loaded.set(i, true);
-        try { const im = el('img'); im.src = await load(i); x.target.style.minHeight = '0'; x.target.replaceChildren(im); } catch (err) { loaded.delete(i); }
+        try { const im = el('img'); im.src = await load(i); x.target.style.minHeight = i === 0 || i === pages.length - 1 ? '100dvh' : '0'; x.target.replaceChildren(im); } catch (err) { loaded.delete(i); }
       }), { root: rd, rootMargin: '150% 0px' });
       const curIO = new IntersectionObserver((es) => es.forEach((x) => {
         if (!x.isIntersecting) return;
@@ -404,7 +469,7 @@ function reader(f, pages, zr) {
     };
   };
   let unmount = mount();
-  return () => { unmount(); zr.close().catch(() => {}); };
+  return () => { unmount(); Promise.resolve(zr.close()).catch(() => {}); };
 }
 
 // ---------- Inicio ----------
