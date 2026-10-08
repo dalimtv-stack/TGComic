@@ -1,0 +1,20 @@
+{
+  "name": "comic-reader",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@zip.js/zip.js": "^2.23.0",
+    "big-integer": "^1.6.52",
+    "telegram": "^2.26.22"
+  },
+  "devDependencies": {
+    "vite": "^8.3.3",
+    "vite-plugin-node-polyfills": "^0.28.0"
+  }
+}
