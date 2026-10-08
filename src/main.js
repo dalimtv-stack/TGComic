@@ -20,6 +20,11 @@ const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls)
 const stripExt = (n) => n.replace(/\.cb[zr]$/i, '');
 const pageKey = (id) => 'page:' + id;
 const pagesKey = (id) => 'pages:' + id;
+const sizeLabel = (f) => {
+  const mb = `${Math.round(f.size / MB)} MB`;
+  const tot = +localStorage.getItem(pagesKey(f.id));
+  return tot > 0 ? `${mb} · ${tot} pág.` : mb;
+};
 const readProgress = (id) => {
   const cur = +localStorage.getItem(pageKey(id));
   const tot = +localStorage.getItem(pagesKey(id));
@@ -264,21 +269,36 @@ function pump() { if (reading) return; while (crun < 2 && cq.length) { crun++; c
 async function getCover(ch, f) {
   const key = `c:${ch.id}:${f.id}`;
   let b = await kv.get(key);
+  if (b === 'none') b = undefined; // legacy: CBR marcados como none
   if (!b) b = await enqueue(() => makeCover(ch, f, key));
-  return b === 'none' ? null : b;
+  return b && b !== 'none' ? b : null;
+}
+async function thumbFromBlob(blob) {
+  const bmp = await createImageBitmap(blob);
+  const w = 320, h = Math.round((bmp.height * w) / bmp.width);
+  const cv = el('canvas'); cv.width = w; cv.height = h;
+  cv.getContext('2d').drawImage(bmp, 0, 0, w, h);
+  bmp.close?.();
+  return new Promise((r) => cv.toBlob(r, 'image/jpeg', 0.8));
+}
+async function saveCoverBlob(ch, f, blob) {
+  if (!blob) return;
+  const key = `c:${ch.id}:${f.id}`;
+  try {
+    const out = await thumbFromBlob(blob);
+    if (out) await kv.set(key, out);
+  } catch (e) { console.warn('portada', e); }
 }
 async function makeCover(ch, f, key) {
   const r = new TgReader(await getMsg(ch, f), f.size);
-  if ((await sniff(r)) !== 'zip') { await kv.set(key, 'none'); return null; }
+  // Solo CBZ en caliente; los CBR guardan portada al abrir el cómic
+  if ((await sniff(r)) !== 'zip') return null;
   const zr = new zip.ZipReader(r);
   try {
     const first = pagesOf(await zr.getEntries())[0];
-    const bmp = await createImageBitmap(await pageBlob(first));
-    const w = 320, h = Math.round((bmp.height * w) / bmp.width);
-    const cv = el('canvas'); cv.width = w; cv.height = h;
-    cv.getContext('2d').drawImage(bmp, 0, 0, w, h);
-    const out = await new Promise((r) => cv.toBlob(r, 'image/jpeg', 0.8));
-    await kv.set(key, out);
+    if (!first) return null;
+    const out = await thumbFromBlob(await pageBlob(first));
+    if (out) await kv.set(key, out);
     return out;
   } finally { zr.close().catch(() => {}); }
 }
@@ -304,6 +324,7 @@ function show() {
   const e = stack[stack.length - 1];
   titleEl.textContent = e.title;
   backBtn.hidden = stack.length < 2;
+  $('#top')?.classList.toggle('home', stack.length < 2);
   hdrMode._label();
   e.render(e);
 }
@@ -417,7 +438,10 @@ function setUngrouped(ch, label, on, after) {
 function groupsView() {
   if (!LIB.length) return msg(synced ? 'No se encontraron canales ...::Comics::tgstorage.' : 'Conectando…');
   const gs = [...new Set(LIB.map((c) => c.group))].sort(natural);
-  grid(gs.map((g) => ({ label: g, sub: `${LIB.filter((c) => c.group === g).length} canales`, cover: () => art('groups', g), go: () => channelsView(g) })));
+  grid(gs.map((g) => {
+    const n = LIB.filter((c) => c.group === g).length;
+    return { label: g, sub: n === 1 ? '1 canal' : `${n} canales`, cover: () => art('groups', g), go: () => channelsView(g) };
+  }));
 }
 function channelsView(g) {
   go(g, () => grid(LIB.filter((c) => c.group === g).sort((a, b) => natural(a.name, b.name)).map((ch) => ({ label: ch.name, cover: () => art('channels', ch.name), go: () => filesView(ch) })), true));
@@ -425,7 +449,7 @@ function channelsView(g) {
 function filesView(ch) {
   go(ch.name, async (e) => {
     let cur = [];
-    const single = (f) => ({ label: clean(f.name), sub: `${Math.round(f.size / MB)} MB`, cover: () => comicCover(ch, f), go: () => openComic(ch, f) });
+    const single = (f) => ({ label: clean(f.name), sub: sizeLabel(f), cover: () => comicCover(ch, f), go: () => openComic(ch, f) });
     const draw = (files) => {
       if (!alive(e)) return;
       cur = files;
@@ -449,7 +473,7 @@ function filesView(ch) {
 function seriesView(ch, s, files) {
   go(s, () => grid(files.map((f) => ({
     label: (() => { const r = clean(f.name).slice(s.length).replace(/^[\s#._-]+/, ''); return /^\d/.test(r) ? '#' + r : r || clean(f.name); })(),
-    sub: `${Math.round(f.size / MB)} MB`, cover: () => comicCover(ch, f), go: () => openComic(ch, f),
+    sub: sizeLabel(f), cover: () => comicCover(ch, f), go: () => openComic(ch, f),
   })), true));
 }
 
@@ -464,6 +488,8 @@ function openComic(ch, f) {
       const arc = await openPages(await getMsg(ch, f), f.size, msg);
       if (!alive(e)) return arc.close();
       if (!arc.pages.length) return msg('No se encontraron imágenes.');
+      // Guardar miniatura de portada (útil sobre todo en CBR)
+      pageBlob(arc.pages[0]).then((b) => saveCoverBlob(ch, f, b)).catch(() => {});
       rdClean = reader(f, arc.pages, arc);
     } catch (err) { msg('Error: ' + err.message); }
   });
@@ -553,13 +579,13 @@ function reader(f, pages, zr) {
         const i = +x.target.dataset.i;
         if (!x.isIntersecting || loaded.has(i)) return;
         loaded.set(i, true);
-        try { const im = el('img'); im.src = await load(i); x.target.style.minHeight = i === 0 || i === pages.length - 1 ? '100dvh' : '0'; x.target.replaceChildren(im); } catch (err) { loaded.delete(i); }
+        try { const im = el('img'); im.src = await load(i); await im.decode().catch(() => {}); if (!x.target.isConnected) return; x.target.replaceChildren(im); } catch (err) { loaded.delete(i); }
       }), { root: rd, rootMargin: '150% 0px' });
       const curIO = new IntersectionObserver((es) => es.forEach((x) => {
         if (!x.isIntersecting) return;
         n = +x.target.dataset.i; localStorage.setItem(key, n); setCount();
         for (const i of [...loaded.keys()]) if (Math.abs(i - n) > 8) { // libera páginas lejanas
-          const s = slots[i]; s.style.minHeight = s.clientHeight + 'px'; s.replaceChildren(); loaded.delete(i); drop(i);
+          const s = slots[i]; const h = s.offsetHeight; if (h) s.style.minHeight = h + 'px'; s.replaceChildren(); loaded.delete(i); drop(i);
         }
       }), { root: rd, rootMargin: '-50% 0px -50% 0px' });
       slots.forEach((s) => { loadIO.observe(s); curIO.observe(s); });
