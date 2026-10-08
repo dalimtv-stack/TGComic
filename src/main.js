@@ -557,7 +557,7 @@ function channelsView(g) {
 function filesView(ch) {
   go(ch.name, async (e) => {
     let cur = [];
-    const single = (f) => ({ label: clean(f.name), sub: sizeLabel(f), cover: () => comicCover(ch, f), go: () => openComic(ch, f) });
+    const single = (f) => ({ label: clean(f.name), sub: sizeLabel(f), cover: () => comicCover(ch, f), go: () => openComic(ch, f, cur) });
     const draw = (files) => {
       if (!alive(e)) return;
       cur = files;
@@ -581,13 +581,25 @@ function filesView(ch) {
 function seriesView(ch, s, files) {
   go(s, () => grid(files.map((f) => ({
     label: (() => { const r = clean(f.name).slice(s.length).replace(/^[\s#._-]+/, ''); return /^\d/.test(r) ? '#' + r : r || clean(f.name); })(),
-    sub: sizeLabel(f), cover: () => comicCover(ch, f), go: () => openComic(ch, f),
+    sub: sizeLabel(f), cover: () => comicCover(ch, f), go: () => openComic(ch, f, files),
   })), true));
 }
 
 // ---------- Lector ----------
-function openComic(ch, f) {
-  go(stripExt(f.name), async (e) => {
+async function resolveQueue(ch, f) {
+  try {
+    let files = (await kv.get('f:' + ch.id)) || [];
+    if (!files.length) files = await fetchFiles(ch);
+    for (const { files: fs } of groupSeries(files)) {
+      if (fs.some((x) => x.id === f.id)) return fs.length > 1 ? fs : files;
+    }
+    return files;
+  } catch { return [f]; }
+}
+
+function openComic(ch, f, queue, opts = {}) {
+  const start = async (e) => {
+    e._isComic = true;
     reading = true;
     const ac = { cancelled: false };
     let rdClean = null;
@@ -596,20 +608,30 @@ function openComic(ch, f) {
     try {
       setLastRead(ch, f);
       const status = (t) => { if (!cancelled(ac) && alive(e)) msg(t); };
+      const list = queue && queue.length ? queue : await resolveQueue(ch, f);
+      const idx = Math.max(0, list.findIndex((x) => x.id === f.id));
       const arc = await openPages(await getMsg(ch, f), f.size, status, ac);
       if (cancelled(ac) || !alive(e)) { try { arc.close(); } catch (_) {} return; }
       if (!arc.pages.length) return msg('No se encontraron imágenes.');
-      // Guardar miniatura de portada (útil sobre todo en CBR)
       pageBlob(arc.pages[0]).then((b) => saveCoverBlob(ch, f, b)).catch(() => {});
-      rdClean = reader(f, arc.pages, arc);
+      rdClean = reader(f, arc.pages, arc, { ch, list, idx });
     } catch (err) {
       if (err?.cancelled || cancelled(ac)) return;
       if (alive(e)) msg('Error: ' + err.message);
     }
-  });
+  };
+  if (opts.replace && stack.length) {
+    cleanup?.(); cleanup = null;
+    stack.pop();
+    stack.push({ title: stripExt(f.name), render: start, _isComic: true });
+    try { history.replaceState(null, ''); } catch (_) {}
+    show();
+  } else {
+    go(stripExt(f.name), start);
+  }
 }
 
-function reader(f, pages, zr) {
+function reader(f, pages, zr, ctx) {
   const key = pageKey(f.id);
   try { localStorage.setItem(pagesKey(f.id), String(pages.length)); } catch (_) {}
   let n = Math.min(+localStorage.getItem(key) || 0, pages.length - 1);
@@ -624,14 +646,26 @@ function reader(f, pages, zr) {
     return urls.get(i);
   };
   const drop = (i) => { urls.get(i)?.then((u) => URL.revokeObjectURL(u), () => {}); urls.delete(i); };
+  const hasNext = !!(ctx?.list && ctx.idx >= 0 && ctx.idx < ctx.list.length - 1);
+  const openNext = () => {
+    if (!hasNext) return;
+    try { localStorage.setItem(key, String(pages.length - 1)); } catch (_) {}
+    openComic(ctx.ch, ctx.list[ctx.idx + 1], ctx.list, { replace: true });
+  };
 
   const mount = () => {
+    // Releer página guardada al cambiar de modo (evita saltos)
+    n = Math.min(+localStorage.getItem(key) || n || 0, pages.length - 1);
     const vert = pref('mode', 'page') === 'vertical';
     let token = 0, observers = [];
     const rd = el('div'); rd.id = 'rd';
     const top = el('div', 'bar'), back = el('button', 'btn', '‹'), cnt = el('span', 'cnt');
     back.onclick = () => history.back();
-    const mb = modeBtn(() => { unmount(); unmount = mount(); });
+    const mb = modeBtn(() => {
+      try { localStorage.setItem(key, String(n)); } catch (_) {}
+      unmount();
+      unmount = mount();
+    });
     top.append(back, el('span', 'ttl', stripExt(f.name)), mb, cnt);
     document.body.append(rd);
     document.body.style.overflow = 'hidden';
@@ -650,6 +684,8 @@ function reader(f, pages, zr) {
       const eL = el('div', 'edge l'), eR = el('div', 'edge r');
       rd.append(img, eL, eR, top);
       const turn = async (i) => {
+        if (i > pages.length - 1) { if (hasNext) openNext(); return; }
+        if (i < 0) return;
         const t = Math.max(0, Math.min(pages.length - 1, i));
         if (t === n && img.src) return;
         n = t; localStorage.setItem(key, n); setCount(); rd.classList.remove('zoom');
@@ -675,7 +711,13 @@ function reader(f, pages, zr) {
         else { last = t; tapT = setTimeout(() => rd.classList.toggle('ui-off'), 300); }
       };
       let sx = null, sy = 0;
-      rd.addEventListener('touchstart', (e) => { if (e.touches.length === 1) { sx = e.touches[0].clientX; sy = e.touches[0].clientY; } else sx = null; }, { passive: true });
+      rd.addEventListener('touchstart', (e) => {
+        if (e.touches.length !== 1) { sx = null; return; }
+        const x = e.touches[0].clientX, y = e.touches[0].clientY;
+        // Zona de gesto "atrás" de iOS (~borde izquierdo): no contar como pasar página
+        if (x < 48 || x > window.innerWidth - 24) { sx = null; return; }
+        sx = x; sy = y;
+      }, { passive: true });
       rd.addEventListener('touchend', (e) => {
         if (sx === null || (window.visualViewport?.scale || 1) > 1.05 || rd.classList.contains('zoom')) return;
         const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy;
@@ -686,19 +728,26 @@ function reader(f, pages, zr) {
       turn(n);
     } else {
       rd.className = 'vert';
-      // Altura fija por slot una vez medida → evita saltos de scroll
+      let syncLock = true; // no actualizar n hasta centrar la página guardada
       const slots = pages.map((_, i) => {
         const d = el('div', 'slot');
         d.dataset.i = i;
         d.style.overflowAnchor = 'none';
         return d;
       });
-      rd.append(...slots, top);
+      const foot = el('div', 'next-comic');
+      if (hasNext) {
+        const nb = el('button', 'btn next-btn', 'Siguiente número →');
+        nb.onclick = (ev) => { ev.stopPropagation(); openNext(); };
+        foot.append(nb);
+      } else {
+        foot.append(el('div', 'next-end', 'Fin'));
+      }
+      rd.append(...slots, foot, top);
       const loaded = new Map();
       const fixedH = new Map();
       const place = (slot, im, i) => {
         slot.replaceChildren(im);
-        // fijar altura según ratio natural y ancho real del slot
         const w = slot.clientWidth || rd.clientWidth || window.innerWidth;
         if (im.naturalWidth && im.naturalHeight) {
           const h = Math.round(w * (im.naturalHeight / im.naturalWidth));
@@ -721,11 +770,10 @@ function reader(f, pages, zr) {
         } catch (err) { loaded.delete(i); }
       }), { root: rd, rootMargin: '180% 0px' });
       const curIO = new IntersectionObserver((es) => es.forEach((x) => {
-        if (!x.isIntersecting) return;
+        if (!x.isIntersecting || syncLock) return;
         n = +x.target.dataset.i;
         localStorage.setItem(key, n);
         setCount();
-        // Liberar lejos; conservar altura fija para no desplazar el scroll
         for (const i of [...loaded.keys()]) {
           if (Math.abs(i - n) <= 15) continue;
           const s = slots[i];
@@ -740,12 +788,27 @@ function reader(f, pages, zr) {
       }), { root: rd, rootMargin: '-40% 0px -40% 0px' });
       slots.forEach((s) => { loadIO.observe(s); curIO.observe(s); });
       observers = [loadIO, curIO];
-      rd.onclick = () => rd.classList.toggle('ui-off');
-      // restaurar posición sin animación brusca
-      requestAnimationFrame(() => {
+      rd.onclick = (ev) => { if (!ev.target.closest?.('.next-btn')) rd.classList.toggle('ui-off'); };
+      // Cargar página actual, fijar altura y centrar; luego liberar syncLock
+      (async () => {
+        try {
+          for (const i of [n - 1, n, n + 1]) {
+            if (i < 0 || i >= pages.length || loaded.has(i)) continue;
+            loaded.set(i, true);
+            const im = el('img');
+            im.src = await load(i);
+            await im.decode().catch(() => {});
+            if (!slots[i].isConnected) return;
+            place(slots[i], im, i);
+          }
+        } catch (_) {}
         const s = slots[n];
         if (s) rd.scrollTop = s.offsetTop;
-      });
+        requestAnimationFrame(() => {
+          if (s) rd.scrollTop = s.offsetTop;
+          setTimeout(() => { syncLock = false; }, 120);
+        });
+      })();
     }
     setCount();
     return () => {
