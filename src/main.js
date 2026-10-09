@@ -121,7 +121,7 @@ const kv = (() => {
     const d = await db;
     return new Promise((res, rej) => { const t = d.transaction('kv', mode); const q = fn(t.objectStore('kv')); t.oncomplete = () => res(q.result); t.onerror = () => rej(t.error); });
   };
-  return { get: (k) => tx('readonly', (s) => s.get(k)).catch(() => undefined), set: (k, v) => tx('readwrite', (s) => s.put(v, k)).catch(() => {}) };
+  return { get: (k) => tx('readonly', (s) => s.get(k)).catch(() => undefined), set: (k, v) => tx('readwrite', (s) => s.put(v, k)).catch(() => {}), del: (k) => tx('readwrite', (s) => s.delete(k)).catch(() => {}) };
 })();
 
 async function mapLimit(items, n, fn) {
@@ -427,17 +427,18 @@ async function fetchArtBlob(url, cached) {
   if (cached?.modified) headers['If-Modified-Since'] = cached.modified;
   try {
     const res = await fetch(url, { headers, cache: 'no-cache' });
-    if (res.status === 304) return null; // sin cambios
-    if (!res.ok) return null;
+    if (res.status === 304) return { unchanged: true };
+    if (res.status === 404 || res.status === 410) return { gone: true };
+    if (!res.ok) return { gone: true };
     const blob = await res.blob();
-    if (!blob || !blob.size) return null;
+    if (!blob || !blob.size) return { gone: true };
     return {
       blob,
       etag: res.headers.get('ETag') || cached?.etag || '',
       modified: res.headers.get('Last-Modified') || cached?.modified || '',
     };
   } catch {
-    return null;
+    return { gone: true };
   }
 }
 
@@ -476,27 +477,14 @@ function art(kind, name) {
     img.src = url;
   };
 
-  (async () => {
-    const cached = await kv.get(key);
-    if (cached?.blob) showBlob(cached.blob);
-
-    if (cached?.blob && cached?.url) {
-      fetchArtBlob(cached.url, cached).then(async (fresh) => {
-        if (!fresh) return;
-        fresh.url = cached.url;
-        await kv.set(key, fresh);
-        if (d.isConnected) showBlob(fresh.blob);
-      });
-      return;
-    }
-
+  const tryCandidates = async (skipUrl) => {
     for (const url of candidates) {
+      if (skipUrl && url === skipUrl) continue;
       try {
-        const res = await fetch(url, { cache: 'force-cache' });
+        const res = await fetch(url, { cache: 'no-cache' });
         if (!res.ok) continue;
         const blob = await res.blob();
         if (!blob.size) continue;
-        if (!cached?.blob) showBlob(blob);
         const meta = {
           blob,
           url,
@@ -504,17 +492,40 @@ function art(kind, name) {
           modified: res.headers.get('Last-Modified') || '',
         };
         await kv.set(key, meta);
-        fetchArtBlob(url, meta).then(async (fresh) => {
-          if (!fresh) return;
-          fresh.url = url;
-          await kv.set(key, fresh);
-          if (d.isConnected) showBlob(fresh.blob);
-        });
-        return;
+        if (d.isConnected) showBlob(blob);
+        return true;
       } catch {
         continue;
       }
     }
+    return false;
+  };
+
+  (async () => {
+    const cached = await kv.get(key);
+    if (cached?.blob) showBlob(cached.blob);
+
+    // Revalidar URL guardada; si ya no existe (borrada/renombrada), buscar otra
+    if (cached?.blob && cached?.url) {
+      const fresh = await fetchArtBlob(cached.url, cached);
+      if (fresh?.unchanged) return;
+      if (fresh?.blob) {
+        fresh.url = cached.url;
+        await kv.set(key, fresh);
+        if (d.isConnected) showBlob(fresh.blob);
+        return;
+      }
+      // gone o error → probar resto de candidatas (p. ej. .JPG nuevo)
+      const found = await tryCandidates(cached.url);
+      if (!found) {
+        // Nada en red: invalidar caché obsoleta
+        try { await kv.del(key); } catch (_) {}
+      }
+      return;
+    }
+
+    // Sin caché: primera carga
+    await tryCandidates();
   })();
 
   return d;
