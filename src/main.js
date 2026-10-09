@@ -15,6 +15,18 @@ const SEP = '::', TSEP = ':', POST = SEP + 'tgstorage', LIBRARY = 'comics', MB =
 const natural = (a, b) => a.localeCompare(b, undefined, { numeric: true });
 const pref = (k, d) => localStorage.getItem('pref:' + k) || d;
 const setPref = (k, v) => localStorage.setItem('pref:' + k, v);
+/** Evita el zoom atascado de iOS al girar el dispositivo */
+function resetMobileViewport() {
+  const meta = document.querySelector('meta[name="viewport"]');
+  if (!meta) return;
+  const base = 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover';
+  meta.setAttribute('content', base.replace('maximum-scale=1', 'maximum-scale=1.01'));
+  requestAnimationFrame(() => {
+    meta.setAttribute('content', base);
+    window.scrollTo(0, 0);
+    try { document.body.scrollTop = 0; document.documentElement.scrollTop = 0; } catch (_) {}
+  });
+}
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const stripExt = (n) => n.replace(/\.cb[zr]$/i, '');
@@ -992,7 +1004,9 @@ function reader(f, pages, zr, ctx) {
       }, { passive: true });
       document.onkeydown = (e) => { if (e.key === 'ArrowRight') turn(n + 1); if (e.key === 'ArrowLeft') turn(n - 1); };
       const onOrientPage = () => {
-        // Forzar reflujo de la imagen al cambiar orientación
+        resetMobileViewport();
+        rd.style.width = window.innerWidth + 'px';
+        rd.style.height = window.innerHeight + 'px';
         rd.className = 'page fit-' + pref('fit', 'screen');
         if (img) { const s = img.src; img.src = ''; img.src = s; }
       };
@@ -1146,27 +1160,59 @@ function reader(f, pages, zr, ctx) {
         rd.classList.toggle('ui-off');
       };
       const onResize = () => {
-        // Recalcular alturas de páginas cargadas al girar el móvil
-        const w = rd.clientWidth || window.innerWidth;
-        for (const [i, ok] of [...loaded.entries()]) {
-          if (!ok) continue;
-          const im = slots[i].querySelector('img');
-          if (!im || !im.naturalWidth) continue;
-          const prev = heights[i];
-          const h = Math.round(w * (im.naturalHeight / im.naturalWidth));
+        resetMobileViewport();
+        const w = window.innerWidth;
+        const vh = window.innerHeight;
+        // Forzar tamaño del contenedor (iOS a veces deja el layout del alto anterior)
+        rd.style.width = w + 'px';
+        rd.style.height = vh + 'px';
+        topPad.style.height = Math.round(vh * 0.2) + 'px';
+        const newEst = Math.round(Math.min(w, 900) * 1.42);
+        for (let i = 0; i < pages.length; i++) {
+          const im = loaded.has(i) ? slots[i].querySelector('img') : null;
+          let h = newEst;
+          if (im && im.naturalWidth) {
+            h = Math.round(w * (im.naturalHeight / im.naturalWidth));
+            // Reaplicar estilos de imagen por si el navegador dejó un tamaño “pegado”
+            im.style.width = '100%';
+            im.style.maxWidth = '100%';
+            im.style.height = 'auto';
+          }
           heights[i] = h;
+          slots[i].style.width = '100%';
           slots[i].style.height = h + 'px';
           slots[i].style.minHeight = h + 'px';
         }
-        jumpTo(n);
+        requestAnimationFrame(() => {
+          jumpTo(n);
+          // Segunda pasada cuando iOS termina de animar la rotación
+          setTimeout(() => {
+            const w2 = window.innerWidth;
+            rd.style.width = w2 + 'px';
+            rd.style.height = window.innerHeight + 'px';
+            for (let i = 0; i < pages.length; i++) {
+              const im = slots[i].querySelector('img');
+              if (!im || !im.naturalWidth) continue;
+              const h = Math.round(w2 * (im.naturalHeight / im.naturalWidth));
+              heights[i] = h;
+              slots[i].style.height = h + 'px';
+              slots[i].style.minHeight = h + 'px';
+            }
+            jumpTo(n);
+          }, 280);
+        });
       };
       let resizeT = 0;
       const onOrient = () => {
         clearTimeout(resizeT);
-        resizeT = setTimeout(onResize, 120);
+        resizeT = setTimeout(onResize, 80);
       };
       addEventListener('resize', onOrient);
       addEventListener('orientationchange', onOrient);
+      if (window.visualViewport) {
+        visualViewport.addEventListener('resize', onOrient);
+        observers._vv = onOrient;
+      }
       observers._resize = onOrient;
       goToPage(n);
     }
@@ -1179,6 +1225,11 @@ function reader(f, pages, zr, ctx) {
         removeEventListener('resize', observers._resize);
         removeEventListener('orientationchange', observers._resize);
       }
+      if (observers._vv && window.visualViewport) {
+        visualViewport.removeEventListener('resize', observers._vv);
+      }
+      // limpiar estilos forzados del contenedor
+      try { rd.style.width = ''; rd.style.height = ''; } catch (_) {}
       for (const i of [...urls.keys()]) drop(i);
       document.onkeydown = null;
       document.body.style.overflow = '';
