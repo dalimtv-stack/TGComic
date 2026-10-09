@@ -18,11 +18,52 @@ const setPref = (k, v) => localStorage.setItem('pref:' + k, v);
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const stripExt = (n) => n.replace(/\.cb[zr]$/i, '');
-const pageKey = (id) => 'page:' + id;
-const pagesKey = (id) => 'pages:' + id;
-const sizeLabel = (f) => {
+// Progreso por canal+mensaje (evita colisiones entre canales)
+const pageKey = (chId, msgId) => `page:${chId}:${msgId}`;
+const pagesKey = (chId, msgId) => `pages:${chId}:${msgId}`;
+const legacyPageKey = (msgId) => 'page:' + msgId;
+const legacyPagesKey = (msgId) => 'pages:' + msgId;
+
+function getPageIndex(chId, msgId) {
+  const k = pageKey(chId, msgId);
+  let v = localStorage.getItem(k);
+  if (v == null) {
+    // Migración desde clave antigua page:MSG_ID
+    v = localStorage.getItem(legacyPageKey(msgId));
+    if (v != null) {
+      try { localStorage.setItem(k, v); } catch (_) {}
+    }
+  }
+  return Math.max(0, +(v || 0) || 0);
+}
+function setPageIndex(chId, msgId, n) {
+  try {
+    localStorage.setItem(pageKey(chId, msgId), String(n));
+    // Limpiar legado de este mensaje tras escribir la clave nueva
+    localStorage.removeItem(legacyPageKey(msgId));
+  } catch (_) {}
+}
+function getPagesTotal(chId, msgId) {
+  const k = pagesKey(chId, msgId);
+  let v = localStorage.getItem(k);
+  if (v == null) {
+    v = localStorage.getItem(legacyPagesKey(msgId));
+    if (v != null) {
+      try { localStorage.setItem(k, v); } catch (_) {}
+    }
+  }
+  return Math.max(0, +(v || 0) || 0);
+}
+function setPagesTotal(chId, msgId, tot) {
+  try {
+    localStorage.setItem(pagesKey(chId, msgId), String(tot));
+    localStorage.removeItem(legacyPagesKey(msgId));
+  } catch (_) {}
+}
+
+const sizeLabel = (f, ch) => {
   const mb = `${Math.round(f.size / MB)} MB`;
-  const tot = +localStorage.getItem(pagesKey(f.id));
+  const tot = ch ? getPagesTotal(ch.id, f.id) : 0;
   return tot > 0 ? `${mb} · ${tot} pág.` : mb;
 };
 const lastReadKey = 'lastRead';
@@ -35,10 +76,10 @@ const setLastRead = (ch, f) => {
     }));
   } catch (_) {}
 };
-const readProgress = (id) => {
-  const cur = +localStorage.getItem(pageKey(id));
-  const tot = +localStorage.getItem(pagesKey(id));
-  if (!tot || tot < 1 || !cur && cur !== 0) return null;
+const readProgress = (chId, msgId) => {
+  const cur = getPageIndex(chId, msgId);
+  const tot = getPagesTotal(chId, msgId);
+  if (!tot || tot < 1) return null;
   if (cur <= 0) return null;
   return { cur: cur + 1, tot, pct: Math.min(100, Math.round(((cur + 1) / tot) * 100)) };
 };
@@ -392,7 +433,7 @@ function comicCover(ch, f, badge, series) {
     d.append(b);
   }
   // Solo en cómics sueltos, nunca en la tarjeta de serie agrupada
-  const prog = series ? null : readProgress(f.id);
+  const prog = series ? null : readProgress(ch.id, f.id);
   if (prog) {
     const bar = el('div', 'prog');
     const fill = el('div', 'prog-fill');
@@ -480,7 +521,7 @@ function groupsView() {
     const sec = el('section', 'continue');
     sec.append(el('div', 'sec-title', 'Seguir leyendo'));
     const ch = last.ch, f = last.f;
-    const prog = readProgress(f.id);
+    const prog = readProgress(ch.id, f.id);
     const row = el('button', 'continue-row');
     row.type = 'button';
     row.onclick = () => openComic(ch, f);
@@ -497,7 +538,7 @@ function groupsView() {
     // Texto a la derecha
     const meta = el('div', 'continue-meta');
     meta.append(el('b', '', clean(f.name)));
-    meta.append(el('small', '', sizeLabel(f)));
+    meta.append(el('small', '', sizeLabel(f, ch)));
     if (prog) {
       const bar = el('div', 'continue-prog');
       const fill = el('div', 'continue-prog-fill');
@@ -562,7 +603,7 @@ function channelsView(g) {
 function filesView(ch) {
   go(ch.name, async (e) => {
     let cur = [];
-    const single = (f) => ({ label: clean(f.name), sub: sizeLabel(f), cover: () => comicCover(ch, f), go: () => openComic(ch, f, cur) });
+    const single = (f) => ({ label: clean(f.name), sub: sizeLabel(f, ch), cover: () => comicCover(ch, f), go: () => openComic(ch, f, cur) });
     const draw = (files) => {
       if (!alive(e)) return;
       cur = files;
@@ -586,7 +627,7 @@ function filesView(ch) {
 function seriesView(ch, s, files) {
   go(s, () => grid(files.map((f) => ({
     label: (() => { const r = clean(f.name).slice(s.length).replace(/^[\s#._-]+/, ''); return /^\d/.test(r) ? '#' + r : r || clean(f.name); })(),
-    sub: sizeLabel(f), cover: () => comicCover(ch, f), go: () => openComic(ch, f, files),
+    sub: sizeLabel(f, ch), cover: () => comicCover(ch, f), go: () => openComic(ch, f, files),
   })), true));
 }
 
@@ -637,9 +678,10 @@ function openComic(ch, f, queue, opts = {}) {
 }
 
 function reader(f, pages, zr, ctx) {
-  const key = pageKey(f.id);
-  try { localStorage.setItem(pagesKey(f.id), String(pages.length)); } catch (_) {}
-  let n = Math.min(+localStorage.getItem(key) || 0, pages.length - 1);
+  const chId = ctx?.ch?.id;
+  const savePage = (i) => { if (chId != null) setPageIndex(chId, f.id, i); };
+  if (chId != null) setPagesTotal(chId, f.id, pages.length);
+  let n = Math.min(chId != null ? getPageIndex(chId, f.id) : 0, pages.length - 1);
   const urls = new Map();
   const load = (i) => {
     if (i < 0 || i >= pages.length) return null;
@@ -654,12 +696,12 @@ function reader(f, pages, zr, ctx) {
   const hasNext = !!(ctx?.list && ctx.idx >= 0 && ctx.idx < ctx.list.length - 1);
   const openNext = () => {
     if (!hasNext) return;
-    try { localStorage.setItem(key, String(pages.length - 1)); } catch (_) {}
+    savePage(pages.length - 1);
     openComic(ctx.ch, ctx.list[ctx.idx + 1], ctx.list, { replace: true });
   };
 
   const mount = () => {
-    n = Math.min(+localStorage.getItem(key) || n || 0, pages.length - 1);
+    n = Math.min(chId != null ? getPageIndex(chId, f.id) : (n || 0), pages.length - 1);
     const vert = pref('mode', 'page') === 'vertical';
     let token = 0, observers = [];
     const rd = el('div'); rd.id = 'rd';
@@ -672,7 +714,7 @@ function reader(f, pages, zr, ctx) {
     back.setAttribute('aria-label', 'Atrás');
     back.onclick = () => history.back();
     const mb = modeBtn(() => {
-      try { localStorage.setItem(key, String(n)); } catch (_) {}
+      savePage(n);
       unmount();
       unmount = mount();
     });
@@ -759,7 +801,7 @@ function reader(f, pages, zr, ctx) {
         if (i < 0) return;
         const t = Math.max(0, Math.min(pages.length - 1, i));
         if (t === n && img.src) return;
-        n = t; localStorage.setItem(key, n); setCount(); rd.classList.remove('zoom');
+        n = t; savePage(n); setCount(); rd.classList.remove('zoom');
         const mine = ++token;
         try {
           const u = await load(n);
@@ -896,7 +938,7 @@ function reader(f, pages, zr, ctx) {
       goToPage = async (i) => {
         i = Math.max(0, Math.min(pages.length - 1, i));
         n = i;
-        localStorage.setItem(key, n);
+        savePage(n);
         setCount();
         syncLock = true;
         // Salto inmediato con alturas estimadas (sin cargar 0…n)
@@ -921,7 +963,7 @@ function reader(f, pages, zr, ctx) {
           const idx = pageAt(mid);
           if (idx !== n) {
             n = idx;
-            localStorage.setItem(key, n);
+            savePage(n);
             setCount();
           }
           // precarga / libera
