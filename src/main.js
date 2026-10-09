@@ -414,15 +414,90 @@ const ART = { groups: {}, channels: {} };
 const reg = (kind, files) => { for (const [p, url] of Object.entries(files)) ART[kind][decodeURIComponent(p.split('/').pop()).replace(/\.\w+$/, '').trim().toLowerCase()] = url; };
 reg('groups', import.meta.glob(['/groups/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP}', '/src/groups/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP}'], { eager: true, query: '?url', import: 'default' }));
 reg('channels', import.meta.glob(['/channels/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP}', '/src/channels/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP}'], { eager: true, query: '?url', import: 'default' }));
+async function fetchArtBlob(url, cached) {
+  const headers = {};
+  if (cached?.etag) headers['If-None-Match'] = cached.etag;
+  if (cached?.modified) headers['If-Modified-Since'] = cached.modified;
+  try {
+    const res = await fetch(url, { headers, cache: 'no-cache' });
+    if (res.status === 304) return null; // sin cambios
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    if (!blob || !blob.size) return null;
+    return {
+      blob,
+      etag: res.headers.get('ETag') || cached?.etag || '',
+      modified: res.headers.get('Last-Modified') || cached?.modified || '',
+    };
+  } catch {
+    return null;
+  }
+}
+
 function art(kind, name) {
-  const d = el('div', kind === 'groups' ? 'cover square' : 'cover'), ltr = el('span', '', name.slice(0, 1).toUpperCase());
+  const d = el('div', kind === 'groups' ? 'cover square' : 'cover');
+  const ltr = el('span', '', name.slice(0, 1).toUpperCase());
   d.append(ltr);
-  const img = new Image(), exts = ['jpg', 'jpeg', 'png', 'webp', 'JPG', 'PNG'];
-  let k = -1;
-  const next = () => { img.src = k < 0 && ART[kind][name.toLowerCase()] ? ART[kind][name.toLowerCase()] : (++k < exts.length ? `/${kind}/${encodeURIComponent(name)}.${exts[k]}` : ''); if (k < 0) k = -0.5; };
-  img.onload = () => { ltr.remove(); d.append(img); };
-  img.onerror = () => { if (k < exts.length) next(); };
-  next();
+  const key = `art:${kind}:${name.toLowerCase()}`;
+  const exts = ['jpg', 'jpeg', 'png', 'webp', 'JPG', 'PNG'];
+  const candidates = [];
+  const bundled = ART[kind][name.toLowerCase()];
+  if (bundled) candidates.push(bundled);
+  for (const e of exts) candidates.push(`/${kind}/${encodeURIComponent(name)}.${e}`);
+
+  const showBlob = (blob) => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      ltr.remove();
+      d.querySelector('img')?.remove();
+      d.append(img);
+    };
+    img.src = url;
+  };
+
+  (async () => {
+    const cached = await kv.get(key);
+    if (cached?.blob) showBlob(cached.blob);
+
+    if (cached?.blob && cached?.url) {
+      // Revalidar en segundo plano la URL conocida
+      fetchArtBlob(cached.url, cached).then(async (fresh) => {
+        if (!fresh) return;
+        fresh.url = cached.url;
+        await kv.set(key, fresh);
+        if (d.isConnected) showBlob(fresh.blob);
+      });
+      return;
+    }
+
+    for (const url of candidates) {
+      try {
+        const res = await fetch(url, { cache: 'force-cache' });
+        if (!res.ok) continue;
+        const blob = await res.blob();
+        if (!blob.size) continue;
+        if (!cached?.blob) showBlob(blob);
+        const meta = {
+          blob,
+          url,
+          etag: res.headers.get('ETag') || '',
+          modified: res.headers.get('Last-Modified') || '',
+        };
+        await kv.set(key, meta);
+        fetchArtBlob(url, meta).then(async (fresh) => {
+          if (!fresh) return;
+          fresh.url = url;
+          await kv.set(key, fresh);
+          if (d.isConnected) showBlob(fresh.blob);
+        });
+        return;
+      } catch {
+        continue;
+      }
+    }
+  })();
+
   return d;
 }
 function comicCover(ch, f, badge, series) {
@@ -829,13 +904,20 @@ function reader(f, pages, zr, ctx) {
       rd.addEventListener('touchstart', (e) => {
         if (e.touches.length !== 1) { sx = null; return; }
         const x = e.touches[0].clientX, y = e.touches[0].clientY;
-        if (x < 48 || x > window.innerWidth - 24) { sx = null; return; }
+        // Borde izquierdo iOS: no contar (gesto atrás del sistema)
+        if (x < 48) { sx = null; return; }
         sx = x; sy = y;
       }, { passive: true });
       rd.addEventListener('touchend', (e) => {
         if (sx === null || (window.visualViewport?.scale || 1) > 1.05 || rd.classList.contains('zoom')) return;
         const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy;
         sx = null;
+        // Deslizar de arriba hacia abajo → cerrar (como atrás)
+        if (dy > 90 && dy > 1.6 * Math.abs(dx)) {
+          history.back();
+          return;
+        }
+        // Horizontal → cambiar página
         if (Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy)) turn(dx < 0 ? n + 1 : n - 1);
       }, { passive: true });
       document.onkeydown = (e) => { if (e.key === 'ArrowRight') turn(n + 1); if (e.key === 'ArrowLeft') turn(n - 1); };

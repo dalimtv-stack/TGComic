@@ -15,6 +15,7 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 .cover{position:relative;aspect-ratio:2/3;border-radius:14px;background:var(--card);overflow:hidden;display:grid;place-items:center;font-size:2.4rem;font-weight:700;color:var(--mut);box-shadow:0 6px 18px #0007}
 .cover img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .cover.square{aspect-ratio:1/1;width:78%;margin:0 auto;border-radius:18px;font-size:1.8rem;box-shadow:0 4px 14px #0006}
+.cover.square img{object-fit:contain;background:#121316}
 .grid-pubs{grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:1rem .65rem}
 .badge{position:absolute;right:6px;top:6px;background:rgba(60,62,70,.72);color:var(--fg);border-radius:99px;padding:.15rem .55rem;font-size:.78rem;font-weight:600;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
 .badge.series{background:rgba(60,62,70,.72);color:var(--acc)}
