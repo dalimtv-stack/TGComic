@@ -330,7 +330,7 @@ const app = $('#app'), titleEl = $('#title'), backBtn = $('#back'), actions = $(
 const stack = [];
 function modeBtn(after) {
   const b = el('button', 'btn mode');
-  b._label = () => (b.textContent = pref('mode', 'page') === 'page' ? '▯ Página' : '☰ Vertical');
+  b._label = () => (b.textContent = pref('mode', 'page') === 'page' ? '☰ Vertical' : '▯ Página');
   b.onclick = () => { setPref('mode', pref('mode', 'page') === 'page' ? 'vertical' : 'page'); b._label(); after?.(); };
   b._label();
   return b;
