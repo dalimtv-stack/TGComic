@@ -388,7 +388,19 @@ function show() {
   backBtn.hidden = stack.length < 2;
   $('#top')?.classList.toggle('home', stack.length < 2);
   hdrMode._label();
+  // Reset scroll al cambiar de vista (evita entrar "descentrado")
+  window.scrollTo(0, 0);
+  document.documentElement.scrollTop = 0;
+  document.body.scrollTop = 0;
+  lastScrollY = 0;
+  headerHidden = false;
+  $('#top')?.classList.remove('hide');
   e.render(e);
+  // Por si el render asíncrono deja el scroll más abajo
+  requestAnimationFrame(() => {
+    window.scrollTo(0, 0);
+    lastScrollY = 0;
+  });
 }
 backBtn.onclick = () => history.back();
 // Header: ocultar al bajar, mostrar al subir
@@ -607,6 +619,8 @@ function grid(items, withSearch) {
   nodes.push(g);
   app.replaceChildren(...nodes);
   draw();
+  window.scrollTo(0, 0);
+  lastScrollY = 0;
 }
 function sheet(title, opts) {
   const bg = el('div', 'sheet'), box = el('div', 'box'), close = () => bg.remove();
@@ -700,6 +714,8 @@ function groupsView() {
   fold.addEventListener('toggle', () => setPref('pubsOpen', fold.open ? '1' : '0'));
   nodes.push(fold);
   app.replaceChildren(...nodes);
+  window.scrollTo(0, 0);
+  lastScrollY = 0;
 }
 function channelsView(g) {
   go(g, async (e) => {
