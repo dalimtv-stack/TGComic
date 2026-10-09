@@ -681,11 +681,9 @@ function reader(f, pages, zr, ctx) {
     gridBtn.title = 'Páginas';
     const cnt = el('span', 'cnt');
     const setCount = () => (cnt.textContent = `${n + 1} / ${pages.length}`);
-    const botL = el('div', 'bot-side');
-    const botC = el('div', 'bot-mid');
-    const botR = el('div', 'bot-side');
-    botL.append(back, mb);
-    bot.append(botL, botC, botR);
+    const cluster = el('div', 'bot-cluster');
+    cluster.append(back, mb);
+    bot.append(cluster);
     document.body.append(rd);
     document.body.style.overflow = 'hidden';
     let uiTimer = setTimeout(() => rd.classList.add('ui-off'), 2500);
@@ -756,8 +754,7 @@ function reader(f, pages, zr, ctx) {
         pokeUI();
       };
       fitLabel();
-      botC.append(gridBtn);
-      botR.append(fit, cnt);
+      cluster.append(gridBtn, fit, cnt);
       img.draggable = false;
       const eL = el('div', 'edge l'), eR = el('div', 'edge r');
       rd.append(img, eL, eR, top, bot);
@@ -804,11 +801,20 @@ function reader(f, pages, zr, ctx) {
         if (Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy)) turn(dx < 0 ? n + 1 : n - 1);
       }, { passive: true });
       document.onkeydown = (e) => { if (e.key === 'ArrowRight') turn(n + 1); if (e.key === 'ArrowLeft') turn(n - 1); };
+      const onOrientPage = () => {
+        // Forzar reflujo de la imagen al cambiar orientación
+        rd.className = 'page fit-' + pref('fit', 'screen');
+        if (img) { const s = img.src; img.src = ''; img.src = s; }
+      };
+      let rt = 0;
+      const onOrientPageD = () => { clearTimeout(rt); rt = setTimeout(onOrientPage, 120); };
+      addEventListener('resize', onOrientPageD);
+      addEventListener('orientationchange', onOrientPageD);
+      observers._resize = onOrientPageD;
       turn(n);
     } else {
       rd.className = 'vert';
-      botC.append(gridBtn);
-      botR.append(cnt);
+      cluster.append(gridBtn, cnt);
       const GAP = 10;
       const estH = Math.round(Math.min(window.innerWidth, 900) * 1.42);
       const heights = new Array(pages.length).fill(estH);
@@ -853,19 +859,20 @@ function reader(f, pages, zr, ctx) {
 
       const place = (i, im) => {
         const slot = slots[i];
-        const w = Math.min(slot.clientWidth || rd.clientWidth || window.innerWidth, 900);
         const prev = heights[i];
-        let h = prev;
-        if (im.naturalWidth && im.naturalHeight) {
-          h = Math.round(w * (im.naturalHeight / im.naturalWidth));
-        }
+        im.style.width = '100%';
+        im.style.height = 'auto';
+        im.style.display = 'block';
+        slot.style.height = 'auto';
+        slot.style.minHeight = '0';
+        slot.replaceChildren(im);
+        // Altura real tras layout (evita recortes)
+        const h = Math.max(slot.offsetHeight, im.offsetHeight, 1);
         heights[i] = h;
         slot.style.height = h + 'px';
         slot.style.minHeight = h + 'px';
-        slot.replaceChildren(im);
         const delta = h - prev;
-        // Solo compensar si esta página está por encima de la vista (no durante el salto inicial)
-        if (!syncLock && delta && yOf(i) + h < rd.scrollTop + 8) {
+        if (!syncLock && delta && yOf(i) + Math.min(prev, h) <= rd.scrollTop + 2) {
           rd.scrollTop += delta;
         }
       };
@@ -948,6 +955,29 @@ function reader(f, pages, zr, ctx) {
         if (ev.target.closest?.('.bar, .next-btn, .mosaic')) return;
         rd.classList.toggle('ui-off');
       };
+      const onResize = () => {
+        // Recalcular alturas de páginas cargadas al girar el móvil
+        const w = rd.clientWidth || window.innerWidth;
+        for (const [i, ok] of [...loaded.entries()]) {
+          if (!ok) continue;
+          const im = slots[i].querySelector('img');
+          if (!im || !im.naturalWidth) continue;
+          const prev = heights[i];
+          const h = Math.round(w * (im.naturalHeight / im.naturalWidth));
+          heights[i] = h;
+          slots[i].style.height = h + 'px';
+          slots[i].style.minHeight = h + 'px';
+        }
+        jumpTo(n);
+      };
+      let resizeT = 0;
+      const onOrient = () => {
+        clearTimeout(resizeT);
+        resizeT = setTimeout(onResize, 120);
+      };
+      addEventListener('resize', onOrient);
+      addEventListener('orientationchange', onOrient);
+      observers._resize = onOrient;
       goToPage(n);
     }
     setCount();
@@ -955,6 +985,10 @@ function reader(f, pages, zr, ctx) {
       clearTimeout(uiTimer);
       observers.forEach((o) => { try { o.disconnect(); } catch (_) {} });
       if (observers._scroll) rd.removeEventListener('scroll', observers._scroll);
+      if (observers._resize) {
+        removeEventListener('resize', observers._resize);
+        removeEventListener('orientationchange', observers._resize);
+      }
       for (const i of [...urls.keys()]) drop(i);
       document.onkeydown = null;
       document.body.style.overflow = '';
