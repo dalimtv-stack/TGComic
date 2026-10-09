@@ -511,8 +511,11 @@ function groupsView() {
     nodes.push(sec);
     nodes.push(el('div', 'sec-sep'));
   }
-  nodes.push(el('div', 'sec-title', 'Editoriales'));
   const gs = [...new Set(LIB.map((c) => c.group))].sort(natural);
+  const fold = el('details', 'pubs-fold');
+  if (pref('pubsOpen', '0') === '1') fold.open = true;
+  const sum = el('summary', '', 'Editoriales');
+  fold.append(sum);
   const g = el('div', 'grid grid-pubs');
   for (const name of gs) {
     const n = LIB.filter((c) => c.group === name).length;
@@ -523,7 +526,9 @@ function groupsView() {
       go: () => channelsView(name),
     }));
   }
-  nodes.push(g);
+  fold.append(g);
+  fold.addEventListener('toggle', () => setPref('pubsOpen', fold.open ? '1' : '0'));
+  nodes.push(fold);
   app.replaceChildren(...nodes);
 }
 function channelsView(g) {
