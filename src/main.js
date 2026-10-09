@@ -442,7 +442,7 @@ async function fetchArtBlob(url, cached) {
   }
 }
 
-function art(kind, name) {
+function art(kind, name, ch) {
   const d = el('div', kind === 'groups' ? 'cover square' : 'cover');
   const ltr = el('span', '', name.slice(0, 1).toUpperCase());
   d.append(ltr);
@@ -450,7 +450,6 @@ function art(kind, name) {
   const nfd = name.normalize('NFD').trim();
   const key = `art:${kind}:${artNorm(nfc)}`;
   const exts = ['jpg', 'jpeg', 'png', 'webp', 'avif', 'gif', 'JPG', 'JPEG', 'PNG', 'WEBP', 'AVIF', 'GIF'];
-  // Nombres a probar (Unicode NFC/NFD + original)
   const nameVars = [...new Set([nfc, nfd, name.trim()].filter(Boolean))];
   const candidates = [];
   const seen = new Set();
@@ -460,10 +459,7 @@ function art(kind, name) {
     add(ART[kind][n.normalize('NFD').trim().toLowerCase()]);
   }
   for (const n of nameVars) {
-    for (const e of exts) {
-      add(`/${kind}/${encodeURIComponent(n)}.${e}`);
-      // Variante con espacios como %20 ya va en encodeURIComponent; probar también +
-    }
+    for (const e of exts) add(`/${kind}/${encodeURIComponent(n)}.${e}`);
   }
 
   const showBlob = (blob) => {
@@ -501,12 +497,32 @@ function art(kind, name) {
     return false;
   };
 
+  // Sin imagen en GitHub → portada del primer cómic del canal
+  const fallbackComic = async () => {
+    if (kind !== 'channels' || !ch) return false;
+    try {
+      let files = (await kv.get('f:' + ch.id)) || [];
+      if (!files.length) {
+        try { files = await fetchFiles(ch); } catch (_) { return false; }
+      }
+      if (!files.length) return false;
+      const f = files[0];
+      const b = await getCover(ch, f);
+      if (!b) return false;
+      await kv.set(key, { blob: b, url: `comic:${ch.id}:${f.id}`, fromComic: true });
+      if (d.isConnected) showBlob(b);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  };
+
   (async () => {
     const cached = await kv.get(key);
     if (cached?.blob) showBlob(cached.blob);
 
-    // Revalidar URL guardada; si ya no existe (borrada/renombrada), buscar otra
-    if (cached?.blob && cached?.url) {
+    // Caché de GitHub: revalidar
+    if (cached?.blob && cached?.url && !cached.fromComic) {
       const fresh = await fetchArtBlob(cached.url, cached);
       if (fresh?.unchanged) return;
       if (fresh?.blob) {
@@ -515,17 +531,24 @@ function art(kind, name) {
         if (d.isConnected) showBlob(fresh.blob);
         return;
       }
-      // gone o error → probar resto de candidatas (p. ej. .JPG nuevo)
       const found = await tryCandidates(cached.url);
       if (!found) {
-        // Nada en red: invalidar caché obsoleta
         try { await kv.del(key); } catch (_) {}
+        await fallbackComic();
       }
       return;
     }
 
-    // Sin caché: primera carga
-    await tryCandidates();
+    // Caché desde cómic: intentar GitHub por si subieron imagen después
+    if (cached?.fromComic) {
+      const found = await tryCandidates();
+      if (!found) return; // se mantiene la del cómic
+      return;
+    }
+
+    // Sin caché
+    const found = await tryCandidates();
+    if (!found) await fallbackComic();
   })();
 
   return d;
@@ -689,7 +712,7 @@ function channelsView(g) {
         items.push({
           label: ch.name,
           sub: n ? (n === 1 ? '1 cómic' : `${n} cómics`) : '',
-          cover: () => art('channels', ch.name),
+          cover: () => art('channels', ch.name, ch),
           go: () => filesView(ch),
         });
       }
