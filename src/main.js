@@ -411,7 +411,14 @@ const msg = (t) => app.replaceChildren(el('div', 'msg', t));
 const alive = (e) => stack[stack.length - 1] === e;
 
 const ART = { groups: {}, channels: {} };
-const reg = (kind, files) => { for (const [p, url] of Object.entries(files)) ART[kind][decodeURIComponent(p.split('/').pop()).replace(/\.\w+$/, '').trim().toLowerCase()] = url; };
+const artNorm = (s) => s.normalize('NFC').trim().toLowerCase();
+const reg = (kind, files) => {
+  for (const [p, url] of Object.entries(files)) {
+    const base = decodeURIComponent(p.split('/').pop()).replace(/\.\w+$/i, '').trim();
+    ART[kind][artNorm(base)] = url;
+    ART[kind][base.normalize('NFD').trim().toLowerCase()] = url;
+  }
+};
 reg('groups', import.meta.glob(['/groups/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP}', '/src/groups/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP}'], { eager: true, query: '?url', import: 'default' }));
 reg('channels', import.meta.glob(['/channels/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP}', '/src/channels/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP}'], { eager: true, query: '?url', import: 'default' }));
 async function fetchArtBlob(url, cached) {
@@ -438,12 +445,25 @@ function art(kind, name) {
   const d = el('div', kind === 'groups' ? 'cover square' : 'cover');
   const ltr = el('span', '', name.slice(0, 1).toUpperCase());
   d.append(ltr);
-  const key = `art:${kind}:${name.toLowerCase()}`;
-  const exts = ['jpg', 'jpeg', 'png', 'webp', 'JPG', 'PNG'];
+  const nfc = name.normalize('NFC').trim();
+  const nfd = name.normalize('NFD').trim();
+  const key = `art:${kind}:${artNorm(nfc)}`;
+  const exts = ['jpg', 'jpeg', 'png', 'webp', 'avif', 'gif', 'JPG', 'JPEG', 'PNG', 'WEBP', 'AVIF', 'GIF'];
+  // Nombres a probar (Unicode NFC/NFD + original)
+  const nameVars = [...new Set([nfc, nfd, name.trim()].filter(Boolean))];
   const candidates = [];
-  const bundled = ART[kind][name.toLowerCase()];
-  if (bundled) candidates.push(bundled);
-  for (const e of exts) candidates.push(`/${kind}/${encodeURIComponent(name)}.${e}`);
+  const seen = new Set();
+  const add = (u) => { if (u && !seen.has(u)) { seen.add(u); candidates.push(u); } };
+  for (const n of nameVars) {
+    add(ART[kind][artNorm(n)]);
+    add(ART[kind][n.normalize('NFD').trim().toLowerCase()]);
+  }
+  for (const n of nameVars) {
+    for (const e of exts) {
+      add(`/${kind}/${encodeURIComponent(n)}.${e}`);
+      // Variante con espacios como %20 ya va en encodeURIComponent; probar también +
+    }
+  }
 
   const showBlob = (blob) => {
     const url = URL.createObjectURL(blob);
@@ -461,7 +481,6 @@ function art(kind, name) {
     if (cached?.blob) showBlob(cached.blob);
 
     if (cached?.blob && cached?.url) {
-      // Revalidar en segundo plano la URL conocida
       fetchArtBlob(cached.url, cached).then(async (fresh) => {
         if (!fresh) return;
         fresh.url = cached.url;
@@ -500,6 +519,7 @@ function art(kind, name) {
 
   return d;
 }
+
 function comicCover(ch, f, badge, series) {
   const d = el('div', 'cover'), ltr = el('span', '', stripExt(f.name).slice(0, 1).toUpperCase());
   d.append(ltr);
