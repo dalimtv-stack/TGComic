@@ -294,9 +294,9 @@ async function getCover(ch, f) {
   if (!b) b = await enqueue(() => makeCover(ch, f, key));
   return b && b !== 'none' ? b : null;
 }
-async function thumbFromBlob(blob, w = 320) {
+async function thumbFromBlob(blob) {
   const bmp = await createImageBitmap(blob);
-  const h = Math.round((bmp.height * w) / bmp.width);
+  const w = 320, h = Math.round((bmp.height * w) / bmp.width);
   const cv = el('canvas'); cv.width = w; cv.height = h;
   cv.getContext('2d').drawImage(bmp, 0, 0, w, h);
   bmp.close?.();
@@ -328,9 +328,9 @@ const io = new IntersectionObserver((es) => es.forEach((x) => { if (x.isIntersec
 // ---------- Navegación y vistas ----------
 const app = $('#app'), titleEl = $('#title'), backBtn = $('#back'), actions = $('#actions');
 const stack = [];
-function modeBtn(after, compact) {
+function modeBtn(after) {
   const b = el('button', 'btn mode');
-  b._label = () => { const pg = pref('mode', 'page') === 'page'; b.textContent = compact ? (pg ? '▯' : '☰') : (pg ? '▯ Página' : '☰ Vertical'); b.title = pg ? 'Modo página a página' : 'Modo vertical'; b.setAttribute('aria-label', b.title); };
+  b._label = () => (b.textContent = pref('mode', 'page') === 'page' ? '▯ Página' : '☰ Vertical');
   b.onclick = () => { setPref('mode', pref('mode', 'page') === 'page' ? 'vertical' : 'page'); b._label(); after?.(); };
   b._label();
   return b;
@@ -374,7 +374,7 @@ const reg = (kind, files) => { for (const [p, url] of Object.entries(files)) ART
 reg('groups', import.meta.glob(['/groups/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP}', '/src/groups/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP}'], { eager: true, query: '?url', import: 'default' }));
 reg('channels', import.meta.glob(['/channels/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP}', '/src/channels/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP}'], { eager: true, query: '?url', import: 'default' }));
 function art(kind, name) {
-  const d = el('div', 'cover'), ltr = el('span', '', name.slice(0, 1).toUpperCase());
+  const d = el('div', kind === 'groups' ? 'cover square' : 'cover'), ltr = el('span', '', name.slice(0, 1).toUpperCase());
   d.append(ltr);
   const img = new Image(), exts = ['jpg', 'jpeg', 'png', 'webp', 'JPG', 'PNG'];
   let k = -1;
@@ -513,7 +513,7 @@ function groupsView() {
   }
   nodes.push(el('div', 'sec-title', 'Editoriales'));
   const gs = [...new Set(LIB.map((c) => c.group))].sort(natural);
-  const g = el('div', 'grid');
+  const g = el('div', 'grid grid-pubs');
   for (const name of gs) {
     const n = LIB.filter((c) => c.group === name).length;
     g.append(cardNode({
@@ -670,15 +670,17 @@ function reader(f, pages, zr, ctx) {
       try { localStorage.setItem(key, String(n)); } catch (_) {}
       unmount();
       unmount = mount();
-    }, true);
+    });
     const gridBtn = el('button', 'btn grid-btn', '▦');
     gridBtn.setAttribute('aria-label', 'Mosaico de páginas');
     gridBtn.title = 'Páginas';
     const cnt = el('span', 'cnt');
     const setCount = () => (cnt.textContent = `${n + 1} / ${pages.length}`);
-    const dock = el('div', 'dock');
-    const sep = () => el('span', 'sep');
-    bot.append(dock);
+    const botL = el('div', 'bot-side');
+    const botC = el('div', 'bot-mid');
+    const botR = el('div', 'bot-side');
+    botL.append(back, mb);
+    bot.append(botL, botC, botR);
     document.body.append(rd);
     document.body.style.overflow = 'hidden';
     let uiTimer = setTimeout(() => rd.classList.add('ui-off'), 2500);
@@ -688,49 +690,50 @@ function reader(f, pages, zr, ctx) {
       uiTimer = setTimeout(() => rd.classList.add('ui-off'), 2500);
     };
 
-    const thumbOf = async (i) => {
-      const k = `t:${f.id}:${i}`;
-      let b = await kv.get(k);
-      if (!b) { b = await thumbFromBlob(await pageBlob(pages[i]), 160); if (b) await kv.set(k, b); }
-      return b;
-    };
     const showMosaic = () => {
       pokeUI();
       const overlay = el('div', 'mosaic');
       const head = el('div', 'mosaic-head');
-      head.append(el('span', '', `Páginas · ${pages.length}`), el('button', 'btn', 'Cerrar'));
+      head.append(el('span', '', 'Páginas'), el('button', 'btn', 'Cerrar'));
       head.querySelector('button').onclick = () => overlay.remove();
       const g = el('div', 'mosaic-grid');
-      const queue = []; let running = 0;
-      const pump2 = () => { while (running < 2 && queue.length) { running++; queue.shift()().finally(() => { running--; pump2(); }); } };
-      const io2 = new IntersectionObserver((es) => es.forEach((x) => {
-        if (!x.isIntersecting) return;
-        io2.unobserve(x.target);
-        const { i, ph } = x.target._t;
-        queue.push(async () => {
-          if (!overlay.isConnected) return;
-          try {
-            const im = new Image();
-            im.onload = () => { ph.replaceChildren(im); URL.revokeObjectURL(im.src); };
-            im.src = URL.createObjectURL(await thumbOf(i));
-          } catch (_) {}
-        });
-        pump2();
-      }), { root: g, rootMargin: '300px' });
+      const thumbs = [];
       for (let i = 0; i < pages.length; i++) {
         const cell = el('button', 'mosaic-cell' + (i === n ? ' on' : ''));
         cell.type = 'button';
+        cell.append(el('span', 'mosaic-num', String(i + 1)));
         const ph = el('div', 'mosaic-ph');
-        cell.append(ph, el('span', 'mosaic-num', String(i + 1)));
-        cell._t = { i, ph };
-        cell.onclick = () => { overlay.remove(); goToPage(i); };
+        cell.append(ph);
+        cell.onclick = () => {
+          overlay.remove();
+          goToPage(i);
+        };
         g.append(cell);
-        io2.observe(cell);
+        thumbs.push({ i, ph, cell });
       }
       overlay.append(head, g);
       overlay.addEventListener('click', (ev) => { if (ev.target === overlay) overlay.remove(); });
       document.body.append(overlay);
-      g.querySelector('.on')?.scrollIntoView({ block: 'center' });
+      // Miniaturas acotadas (no reutilizar el layout del lector)
+      (async () => {
+        for (const { i, ph } of thumbs) {
+          if (!overlay.isConnected) return;
+          try {
+            const u = await load(i);
+            const im = new Image();
+            im.decoding = 'async';
+            im.alt = String(i + 1);
+            await new Promise((res, rej) => { im.onload = res; im.onerror = rej; im.src = u; });
+            // Pintar en canvas pequeño para no solapar con páginas a tamaño real
+            const tw = 120, th = Math.max(1, Math.round(tw * (im.naturalHeight / im.naturalWidth)));
+            const cv = el('canvas');
+            cv.width = tw; cv.height = th;
+            cv.getContext('2d').drawImage(im, 0, 0, tw, th);
+            ph.replaceChildren(cv);
+          } catch (_) {}
+          if (i % 3 === 2) await new Promise((r) => setTimeout(r, 0));
+        }
+      })();
     };
     gridBtn.onclick = showMosaic;
 
@@ -740,7 +743,7 @@ function reader(f, pages, zr, ctx) {
       rd.className = 'page fit-' + pref('fit', 'screen');
       const fit = el('button', 'btn');
       let img = el('img');
-      const fitLabel = () => { const sc = pref('fit', 'screen') === 'screen'; fit.textContent = sc ? '↔' : '⤢'; fit.title = sc ? 'Ajustar al ancho' : 'Ajustar a pantalla'; fit.setAttribute('aria-label', fit.title); };
+      const fitLabel = () => (fit.textContent = pref('fit', 'screen') === 'screen' ? '↔ Ancho' : '⤢ Pantalla');
       fit.onclick = () => {
         setPref('fit', pref('fit', 'screen') === 'screen' ? 'width' : 'screen');
         rd.className = rd.className.replace(/fit-\w+/, 'fit-' + pref('fit', 'screen'));
@@ -748,7 +751,8 @@ function reader(f, pages, zr, ctx) {
         pokeUI();
       };
       fitLabel();
-      dock.append(back, sep(), gridBtn, mb, fit, sep(), cnt);
+      botC.append(gridBtn);
+      botR.append(fit, cnt);
       img.draggable = false;
       const eL = el('div', 'edge l'), eR = el('div', 'edge r');
       rd.append(img, eL, eR, top, bot);
@@ -798,7 +802,8 @@ function reader(f, pages, zr, ctx) {
       turn(n);
     } else {
       rd.className = 'vert';
-      dock.append(back, sep(), gridBtn, mb, sep(), cnt);
+      botC.append(gridBtn);
+      botR.append(cnt);
       const GAP = 10;
       const estH = Math.round(Math.min(window.innerWidth, 900) * 1.42);
       const heights = new Array(pages.length).fill(estH);
@@ -811,7 +816,7 @@ function reader(f, pages, zr, ctx) {
         return d;
       });
       const topPad = el('div', 'vert-pad-top');
-      topPad.style.height = Math.max(0, Math.round((window.innerHeight - estH) / 2)) + 'px';
+      topPad.style.height = Math.round(window.innerHeight * 0.2) + 'px';
       const foot = el('div', 'next-comic');
       if (hasNext) {
         const nb = el('button', 'btn next-btn', 'Siguiente número →');
@@ -827,12 +832,12 @@ function reader(f, pages, zr, ctx) {
       let scrollT = 0;
 
       const yOf = (i) => {
-        let y = topPad.offsetHeight;
+        let y = topPad.offsetHeight || Math.round(window.innerHeight * 0.2);
         for (let k = 0; k < i; k++) y += heights[k] + GAP;
         return y;
       };
       const pageAt = (scrollMid) => {
-        let y = topPad.offsetHeight;
+        let y = topPad.offsetHeight || Math.round(window.innerHeight * 0.2);
         for (let k = 0; k < pages.length; k++) {
           const h = heights[k] + GAP;
           if (y + h > scrollMid) return k;
@@ -850,7 +855,6 @@ function reader(f, pages, zr, ctx) {
           h = Math.round(w * (im.naturalHeight / im.naturalWidth));
         }
         heights[i] = h;
-        if (i === 0) topPad.style.height = Math.max(0, Math.round((rd.clientHeight - h) / 2)) + 'px';
         slot.style.height = h + 'px';
         slot.style.minHeight = h + 'px';
         slot.replaceChildren(im);
@@ -878,7 +882,7 @@ function reader(f, pages, zr, ctx) {
 
       const jumpTo = (i) => {
         i = Math.max(0, Math.min(pages.length - 1, i));
-        rd.scrollTop = yOf(i) - Math.max(0, Math.round((rd.clientHeight - heights[i]) / 2));
+        rd.scrollTop = yOf(i);
       };
 
       goToPage = async (i) => {
