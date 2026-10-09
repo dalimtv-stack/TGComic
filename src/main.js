@@ -98,21 +98,45 @@ const readProgress = (chId, msgId) => {
 
 // Nombre limpio: sin extensión, guiones bajos, etiquetas [..] (..) ni marcas @sitio
 const clean = (n) => stripExt(n).replace(/_/g, ' ').replace(/\s*[(\[][^)\]]*[)\]]/g, '').replace(/\s*@\S+/g, '').replace(/\s+/g, ' ').trim();
-// Número final del nombre: "#13", "Nº 5", "Vol. 2", "01 de 12", "07"...
+// Número al final: "#13", "Nº 5", "Vol. 2", "01 de 12"...
 const NUM = /[\s._-]*(?:#|n[º°]\.?|no\.|vol\.?|cap\.?|issue|núm\.?|parte|part|tomo)?\s*\d+(?:\.\d+)?(?:\s*(?:de|of)\s*\d+)?\s*$/i;
-// Agrupa por serie: "Batman - The Long Halloween #01", "#13" -> serie; los especiales sin número que empiezan igual se unen
+// Primer número de episodio en el nombre (permite "Serie #01 - Batman #575")
+const FIRST_ISSUE = /^(.+?)[\s._-]+(?:#|n[º°]\.?|no\.?|vol\.?|cap\.?|issue|núm\.?)?\s*\d+(?:\.\d+)?(?:\b|$)/i;
+/** Base de serie a partir del nombre del archivo */
+function seriesBase(name) {
+  const c = clean(name);
+  if (!c) return '';
+  // 1) Texto antes del primer "#01" / "Nº 2" / etc. → "La Sombra del Murcielago #01 - Batman #575"
+  const m = c.match(FIRST_ISSUE);
+  if (m) {
+    const base = m[1].replace(/[\s._-]+$/, '').trim();
+    // Evitar bases demasiado cortas o solo números
+    if (base.length >= 3 && !/^\d+$/.test(base)) return base;
+  }
+  // 2) Quitar solo el número final → "Batman - The Long Halloween #01"
+  const b = c.replace(NUM, '').replace(/[\s._-]+$/, '').trim();
+  if (b && b !== c && b.length >= 3) return b;
+  return '';
+}
+// Agrupa por serie; los especiales sin número que empiezan igual se unen
 function groupSeries(files) {
   const by = new Map(), loose = [];
   for (const f of files) {
-    const c = clean(f.name), b = c.replace(NUM, '').replace(/[\s._-]+$/, '');
-    if (b && b !== c) { const k = b.toLowerCase(); (by.get(k) || by.set(k, { label: b, files: [] }).get(k)).files.push(f); }
-    else loose.push([f, c]);
+    const c = clean(f.name), b = seriesBase(f.name);
+    if (b) {
+      const k = b.toLowerCase();
+      (by.get(k) || by.set(k, { label: b, files: [] }).get(k)).files.push(f);
+    } else {
+      loose.push([f, c]);
+    }
   }
   const groups = [...by.values()], rest = [];
   for (const [f, c] of loose) {
     const cl = c.toLowerCase();
-    const g = groups.filter((x) => { const l = x.label.toLowerCase(); return cl.startsWith(l) && !/[\p{L}\d]/u.test(cl[l.length] || ' '); })
-      .sort((x, y) => y.label.length - x.label.length)[0];
+    const g = groups.filter((x) => {
+      const l = x.label.toLowerCase();
+      return cl.startsWith(l) && !/[\p{L}\d]/u.test(cl[l.length] || ' ');
+    }).sort((x, y) => y.label.length - x.label.length)[0];
     if (g) g.files.push(f); else rest.push({ label: c, files: [f] });
   }
   return [...groups, ...rest]
@@ -783,7 +807,13 @@ function filesView(ch) {
 }
 function seriesView(ch, s, files) {
   go(s, () => grid(files.map((f) => ({
-    label: (() => { const r = clean(f.name).slice(s.length).replace(/^[\s#._-]+/, ''); return /^\d/.test(r) ? '#' + r : r || clean(f.name); })(),
+    label: (() => {
+      const c = clean(f.name);
+      let r = c.startsWith(s) ? c.slice(s.length) : c;
+      r = r.replace(/^[\s._-]+/, '');
+      if (/^\d/.test(r)) r = '#' + r;
+      return r || c;
+    })(),
     sub: sizeLabel(f, ch), cover: () => comicCover(ch, f), go: () => openComic(ch, f, files),
   })), true));
 }
