@@ -723,16 +723,12 @@ function reader(f, pages, zr, ctx) {
           if (!overlay.isConnected) return;
           try {
             const u = await load(i);
-            const im = new Image();
-            im.decoding = 'async';
+            const im = el('img');
             im.alt = String(i + 1);
-            await new Promise((res, rej) => { im.onload = res; im.onerror = rej; im.src = u; });
-            // Pintar en canvas pequeño para no solapar con páginas a tamaño real
-            const tw = 120, th = Math.max(1, Math.round(tw * (im.naturalHeight / im.naturalWidth)));
-            const cv = el('canvas');
-            cv.width = tw; cv.height = th;
-            cv.getContext('2d').drawImage(im, 0, 0, tw, th);
-            ph.replaceChildren(cv);
+            im.decoding = 'async';
+            im.loading = 'lazy';
+            im.src = u;
+            ph.replaceChildren(im);
           } catch (_) {}
           if (i % 3 === 2) await new Promise((r) => setTimeout(r, 0));
         }
