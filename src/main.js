@@ -407,8 +407,21 @@ const app = $('#app'), titleEl = $('#title'), backBtn = $('#back'), actions = $(
 const stack = [];
 function modeBtn(after) {
   const b = el('button', 'btn mode');
-  b._label = () => (b.textContent = pref('mode', 'page') === 'page' ? '☰ Vertical' : '▯ Página');
-  b.onclick = () => { setPref('mode', pref('mode', 'page') === 'page' ? 'vertical' : 'page'); b._label(); after?.(); };
+  // Muestra el modo AL QUE se cambia
+  const nextOf = { page: 'vertical', vertical: 'horizontal', horizontal: 'page' };
+  const labelOf = { page: '☰ Vertical', vertical: '⇔ Horizontal', horizontal: '▯ Página' };
+  b._label = () => {
+    let cur = pref('mode', 'page');
+    if (!nextOf[cur]) cur = 'page';
+    b.textContent = labelOf[cur];
+  };
+  b.onclick = () => {
+    let cur = pref('mode', 'page');
+    if (!nextOf[cur]) cur = 'page';
+    setPref('mode', nextOf[cur]);
+    b._label();
+    after?.();
+  };
   b._label();
   return b;
 }
@@ -669,12 +682,35 @@ function sheet(title, opts) {
   document.body.append(bg);
 }
 const ugKey = (ch) => 'ungroup:' + ch.id;
-const ungrouped = (ch) => new Set(JSON.parse(localStorage.getItem(ugKey(ch)) || '[]'));
-function setUngrouped(ch, label, on, after) {
-  const u = ungrouped(ch);
-  on ? u.add(label.toLowerCase()) : u.delete(label.toLowerCase());
-  localStorage.setItem(ugKey(ch), JSON.stringify([...u]));
-  after();
+/** Mapa serie → 'short' | 'full' (legado: array → full) */
+function ungroupMap(ch) {
+  try {
+    const raw = JSON.parse(localStorage.getItem(ugKey(ch)) || '{}');
+    if (Array.isArray(raw)) {
+      const m = {};
+      for (const k of raw) m[String(k).toLowerCase()] = 'full';
+      return m;
+    }
+    return raw && typeof raw === 'object' ? raw : {};
+  } catch {
+    return {};
+  }
+}
+function setUngroupMode(ch, label, mode, after) {
+  const m = ungroupMap(ch);
+  const k = label.toLowerCase();
+  if (!mode) delete m[k];
+  else m[k] = mode;
+  try { localStorage.setItem(ugKey(ch), JSON.stringify(m)); } catch (_) {}
+  after?.();
+}
+/** Etiqueta de número sin el nombre de la serie */
+function issueLabel(series, f) {
+  const c = clean(f.name);
+  let r = c.toLowerCase().startsWith(series.toLowerCase()) ? c.slice(series.length) : c;
+  r = r.replace(/^[\s._-]+/, '');
+  if (/^\d/.test(r)) r = '#' + r;
+  return r || c;
 }
 
 function cardNode(i) {
@@ -789,11 +825,31 @@ function filesView(ch) {
       if (!alive(e)) return;
       cur = files;
       if (!files.length) return msg('No hay archivos CBZ/CBR en este canal.');
-      const un = ungrouped(ch), items = [], redraw = () => draw(cur);
+      const un = ungroupMap(ch), items = [], redraw = () => draw(cur);
       for (const { label, files: fs } of groupSeries(files)) {
         if (fs.length === 1) items.push(single(fs[0]));
-        else if (un.has(label.toLowerCase())) fs.forEach((f) => items.push({ ...single(f), menu: () => sheet(label, [['Volver a agrupar la serie', () => setUngrouped(ch, label, false, redraw)]]) }));
-        else items.push({ label, sub: `${fs.length} números`, cover: () => comicCover(ch, fs[0], fs.length, true), go: () => seriesView(ch, label, fs), menu: () => sheet(label, [['Desagrupar serie', () => setUngrouped(ch, label, true, redraw)]]) });
+        else if (un[label.toLowerCase()]) {
+          const mode = un[label.toLowerCase()];
+          fs.forEach((f) => {
+            const it = single(f);
+            if (mode === 'short') it.label = issueLabel(label, f);
+            items.push({
+              ...it,
+              menu: () => sheet(label, [['Volver a agrupar la serie', () => setUngroupMode(ch, label, null, redraw)]]),
+            });
+          });
+        } else {
+          items.push({
+            label,
+            sub: `${fs.length} números`,
+            cover: () => comicCover(ch, fs[0], fs.length, true),
+            go: () => seriesView(ch, label, fs),
+            menu: () => sheet(label, [
+              ['Desagrupar serie', () => setUngroupMode(ch, label, 'short', redraw)],
+              ['Desagrupar serie (con nombre)', () => setUngroupMode(ch, label, 'full', redraw)],
+            ]),
+          });
+        }
       }
       grid(items, true);
     };
@@ -889,7 +945,11 @@ function reader(f, pages, zr, ctx) {
 
   const mount = () => {
     n = Math.min(chId != null ? getPageIndex(chId, f.id) : (n || 0), pages.length - 1);
-    const vert = pref('mode', 'page') === 'vertical';
+    let mode = pref('mode', 'page');
+    if (mode !== 'page' && mode !== 'vertical' && mode !== 'horizontal') mode = 'page';
+    const vert = mode === 'vertical';
+    const horiz = mode === 'horizontal';
+    const continuous = vert || horiz;
     let token = 0, observers = [];
     const rd = el('div'); rd.id = 'rd';
     // Barra superior: solo título
@@ -967,7 +1027,7 @@ function reader(f, pages, zr, ctx) {
 
     let goToPage = (i) => {}; // se asigna en cada modo
 
-    if (!vert) {
+    if (!continuous) {
       rd.className = 'page fit-' + pref('fit', 'screen');
       const fit = el('button', 'btn');
       let img = el('img');
@@ -1033,6 +1093,13 @@ function reader(f, pages, zr, ctx) {
         if (Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy)) turn(dx < 0 ? n + 1 : n - 1);
       }, { passive: true });
       document.onkeydown = (e) => { if (e.key === 'ArrowRight') turn(n + 1); if (e.key === 'ArrowLeft') turn(n - 1); };
+      const onWheel = (e) => {
+        e.preventDefault();
+        if (e.deltaY > 10) turn(n + 1);
+        else if (e.deltaY < -10) turn(n - 1);
+      };
+      rd.addEventListener('wheel', onWheel, { passive: false });
+      observers._wheel = onWheel;
       const onOrientPage = () => {
         resetMobileViewport();
         rd.style.width = window.innerWidth + 'px';
@@ -1047,21 +1114,42 @@ function reader(f, pages, zr, ctx) {
       observers._resize = onOrientPageD;
       turn(n);
     } else {
-      rd.className = 'vert';
-      cluster.append(gridBtn, cnt);
+      const fitMode = () => pref('fit', 'screen') === 'width' ? 'width' : 'screen';
+      rd.className = (horiz ? 'horiz' : 'vert') + ' fit-' + fitMode();
+      const fit = el('button', 'btn');
+      const fitLabel = () => (fit.textContent = fitMode() === 'screen' ? '↔ Ancho' : '⤢ Pantalla');
+      let onResize = null;
+      fit.onclick = () => {
+        setPref('fit', fitMode() === 'screen' ? 'width' : 'screen');
+        rd.className = (horiz ? 'horiz' : 'vert') + ' fit-' + fitMode();
+        fitLabel();
+        pokeUI();
+        onResize?.();
+      };
+      fitLabel();
+      cluster.append(gridBtn, fit, cnt);
       const GAP = 10;
       const estH = Math.round(Math.min(window.innerWidth, 900) * 1.42);
-      const heights = new Array(pages.length).fill(estH);
+      const estW = Math.round(window.innerHeight * 0.7);
+      const sizes = new Array(pages.length).fill(horiz ? estW : estH);
       const slots = pages.map((_, i) => {
         const d = el('div', 'slot');
         d.dataset.i = i;
-        d.style.height = estH + 'px';
-        d.style.minHeight = estH + 'px';
-        d.style.marginBottom = GAP + 'px';
+        if (horiz) {
+          d.style.width = estW + 'px';
+          d.style.minWidth = estW + 'px';
+          d.style.marginRight = GAP + 'px';
+          d.style.height = '100%';
+        } else {
+          d.style.height = estH + 'px';
+          d.style.minHeight = estH + 'px';
+          d.style.marginBottom = GAP + 'px';
+        }
         return d;
       });
-      const topPad = el('div', 'vert-pad-top');
-      topPad.style.height = Math.round(window.innerHeight * 0.2) + 'px';
+      const topPad = el('div', horiz ? 'horiz-pad-start' : 'vert-pad-top');
+      if (horiz) topPad.style.width = Math.round(window.innerWidth * 0.08) + 'px';
+      else topPad.style.height = Math.round(window.innerHeight * 0.2) + 'px';
       const foot = el('div', 'next-comic');
       if (hasNext) {
         const nb = el('button', 'btn next-btn', 'Siguiente número →');
@@ -1076,15 +1164,19 @@ function reader(f, pages, zr, ctx) {
       let syncLock = true;
       let scrollT = 0;
 
-      const yOf = (i) => {
-        let y = topPad.offsetHeight || Math.round(window.innerHeight * 0.2);
-        for (let k = 0; k < i; k++) y += heights[k] + GAP;
+      const posOf = (i) => {
+        let y = horiz
+          ? (topPad.offsetWidth || Math.round(window.innerWidth * 0.08))
+          : (topPad.offsetHeight || Math.round(window.innerHeight * 0.2));
+        for (let k = 0; k < i; k++) y += sizes[k] + GAP;
         return y;
       };
       const pageAt = (scrollMid) => {
-        let y = topPad.offsetHeight || Math.round(window.innerHeight * 0.2);
+        let y = horiz
+          ? (topPad.offsetWidth || Math.round(window.innerWidth * 0.08))
+          : (topPad.offsetHeight || Math.round(window.innerHeight * 0.2));
         for (let k = 0; k < pages.length; k++) {
-          const h = heights[k] + GAP;
+          const h = sizes[k] + GAP;
           if (y + h > scrollMid) return k;
           y += h;
         }
@@ -1093,21 +1185,38 @@ function reader(f, pages, zr, ctx) {
 
       const place = (i, im) => {
         const slot = slots[i];
-        const prev = heights[i];
-        im.style.width = '100%';
-        im.style.height = 'auto';
+        const prev = sizes[i];
         im.style.display = 'block';
-        slot.style.height = 'auto';
-        slot.style.minHeight = '0';
+        if (horiz) {
+          im.style.height = '100%';
+          im.style.width = 'auto';
+          im.style.maxHeight = '100%';
+          slot.style.width = 'auto';
+          slot.style.minWidth = '0';
+          slot.style.height = '100%';
+        } else {
+          im.style.width = '100%';
+          im.style.height = 'auto';
+          im.style.maxWidth = '100%';
+          slot.style.height = 'auto';
+          slot.style.minHeight = '0';
+        }
         slot.replaceChildren(im);
-        // Altura real tras layout (evita recortes)
-        const h = Math.max(slot.offsetHeight, im.offsetHeight, 1);
-        heights[i] = h;
-        slot.style.height = h + 'px';
-        slot.style.minHeight = h + 'px';
+        const h = horiz
+          ? Math.max(slot.offsetWidth, im.offsetWidth, 1)
+          : Math.max(slot.offsetHeight, im.offsetHeight, 1);
+        sizes[i] = h;
+        if (horiz) {
+          slot.style.width = h + 'px';
+          slot.style.minWidth = h + 'px';
+        } else {
+          slot.style.height = h + 'px';
+          slot.style.minHeight = h + 'px';
+        }
         const delta = h - prev;
-        if (!syncLock && delta && yOf(i) + Math.min(prev, h) <= rd.scrollTop + 2) {
-          rd.scrollTop += delta;
+        if (!syncLock && delta) {
+          if (horiz && posOf(i) + Math.min(prev, h) <= rd.scrollLeft + 2) rd.scrollLeft += delta;
+          if (!horiz && posOf(i) + Math.min(prev, h) <= rd.scrollTop + 2) rd.scrollTop += delta;
         }
       };
 
@@ -1128,7 +1237,9 @@ function reader(f, pages, zr, ctx) {
 
       const jumpTo = (i) => {
         i = Math.max(0, Math.min(pages.length - 1, i));
-        rd.scrollTop = yOf(i);
+        const p = posOf(i);
+        if (horiz) rd.scrollLeft = p;
+        else rd.scrollTop = p;
       };
 
       goToPage = async (i) => {
@@ -1155,20 +1266,26 @@ function reader(f, pages, zr, ctx) {
         if (syncLock) return;
         clearTimeout(scrollT);
         scrollT = setTimeout(() => {
-          const mid = rd.scrollTop + rd.clientHeight * 0.35;
+          const mid = horiz
+            ? rd.scrollLeft + rd.clientWidth * 0.35
+            : rd.scrollTop + rd.clientHeight * 0.35;
           const idx = pageAt(mid);
           if (idx !== n) {
             n = idx;
             savePage(n);
             setCount();
           }
-          // precarga / libera
           for (let k = n - 2; k <= n + 4; k++) ensure(k);
           for (const i of [...loaded.keys()]) {
             if (Math.abs(i - n) <= 10) continue;
             const s = slots[i];
-            s.style.height = heights[i] + 'px';
-            s.style.minHeight = heights[i] + 'px';
+            if (horiz) {
+              s.style.width = sizes[i] + 'px';
+              s.style.minWidth = sizes[i] + 'px';
+            } else {
+              s.style.height = sizes[i] + 'px';
+              s.style.minHeight = sizes[i] + 'px';
+            }
             s.replaceChildren();
             loaded.delete(i);
             drop(i);
@@ -1179,7 +1296,7 @@ function reader(f, pages, zr, ctx) {
 
       const loadIO = new IntersectionObserver((es) => {
         es.forEach((x) => { if (x.isIntersecting) ensure(+x.target.dataset.i); });
-      }, { root: rd, rootMargin: '80% 0px' });
+      }, { root: rd, rootMargin: horiz ? '0px 80%' : '80% 0px' });
       slots.forEach((s) => loadIO.observe(s));
       observers = [loadIO];
       // guardar remove scroll en cleanup vía observers no sirve; monkey en return
@@ -1189,47 +1306,45 @@ function reader(f, pages, zr, ctx) {
         if (ev.target.closest?.('.bar, .next-btn, .mosaic')) return;
         rd.classList.toggle('ui-off');
       };
-      const onResize = () => {
+      onResize = () => {
         resetMobileViewport();
         const w = window.innerWidth;
         const vh = window.innerHeight;
-        // Forzar tamaño del contenedor (iOS a veces deja el layout del alto anterior)
         rd.style.width = w + 'px';
         rd.style.height = vh + 'px';
-        topPad.style.height = Math.round(vh * 0.2) + 'px';
-        const newEst = Math.round(Math.min(w, 900) * 1.42);
+        if (horiz) topPad.style.width = Math.round(w * 0.08) + 'px';
+        else topPad.style.height = Math.round(vh * 0.2) + 'px';
+        const newEst = horiz ? Math.round(vh * 0.7) : Math.round(Math.min(w, 900) * 1.42);
         for (let i = 0; i < pages.length; i++) {
-          const im = loaded.has(i) ? slots[i].querySelector('img') : null;
+          const im = slots[i].querySelector('img');
           let h = newEst;
           if (im && im.naturalWidth) {
-            h = Math.round(w * (im.naturalHeight / im.naturalWidth));
-            // Reaplicar estilos de imagen por si el navegador dejó un tamaño “pegado”
-            im.style.width = '100%';
-            im.style.maxWidth = '100%';
-            im.style.height = 'auto';
+            if (horiz) {
+              im.style.height = '100%';
+              im.style.width = 'auto';
+              im.style.maxHeight = '100%';
+              h = Math.round(vh * (im.naturalWidth / im.naturalHeight));
+            } else {
+              im.style.width = '100%';
+              im.style.maxWidth = '100%';
+              im.style.height = 'auto';
+              h = Math.round(w * (im.naturalHeight / im.naturalWidth));
+            }
           }
-          heights[i] = h;
-          slots[i].style.width = '100%';
-          slots[i].style.height = h + 'px';
-          slots[i].style.minHeight = h + 'px';
+          sizes[i] = h;
+          if (horiz) {
+            slots[i].style.width = h + 'px';
+            slots[i].style.minWidth = h + 'px';
+            slots[i].style.height = '100%';
+          } else {
+            slots[i].style.width = '100%';
+            slots[i].style.height = h + 'px';
+            slots[i].style.minHeight = h + 'px';
+          }
         }
         requestAnimationFrame(() => {
           jumpTo(n);
-          // Segunda pasada cuando iOS termina de animar la rotación
-          setTimeout(() => {
-            const w2 = window.innerWidth;
-            rd.style.width = w2 + 'px';
-            rd.style.height = window.innerHeight + 'px';
-            for (let i = 0; i < pages.length; i++) {
-              const im = slots[i].querySelector('img');
-              if (!im || !im.naturalWidth) continue;
-              const h = Math.round(w2 * (im.naturalHeight / im.naturalWidth));
-              heights[i] = h;
-              slots[i].style.height = h + 'px';
-              slots[i].style.minHeight = h + 'px';
-            }
-            jumpTo(n);
-          }, 280);
+          setTimeout(() => jumpTo(n), 280);
         });
       };
       let resizeT = 0;
@@ -1251,6 +1366,7 @@ function reader(f, pages, zr, ctx) {
       clearTimeout(uiTimer);
       observers.forEach((o) => { try { o.disconnect(); } catch (_) {} });
       if (observers._scroll) rd.removeEventListener('scroll', observers._scroll);
+      if (observers._wheel) rd.removeEventListener('wheel', observers._wheel);
       if (observers._resize) {
         removeEventListener('resize', observers._resize);
         removeEventListener('orientationchange', observers._resize);
