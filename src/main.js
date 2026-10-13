@@ -128,8 +128,13 @@ const clean = (n) => stripExt(n).replace(/_/g, ' ').replace(/\s*[(\[][^)\]]*[)\]
 const NUM = /[\s._-]*(?:#|n[º°]\.?|no\.|vol\.?|cap\.?|issue|núm\.?|parte|part|tomo)?\s*\d+(?:\.\d+)?[a-zA-Z]?(?:\s*(?:de|of)\s*\d+)?\s*$/i;
 const FIRST_ISSUE = /^(.+?)[\s._-]+(?:#|n[º°]\.?|no\.?|vol\.?|cap\.?|issue|núm\.?)?\s*\d+(?:\.\d+)?[a-zA-Z]?(?:\b|$)/i;
 const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-/** Quita (paréntesis) y [corchetes] del tramo info */
-const cleanInfo = (s) => (s || '').replace(/\s*\[[^\]]*\]/g, '').replace(/\s*\((?!\d+\s*de\s*\d+)[^)]*\)/gi, '').replace(/\s+/g, ' ').trim();
+/** Quita (paréntesis), [corchetes] y créditos "por Grupo" del tramo info */
+const cleanInfo = (s) => (s || '')
+  .replace(/\s*\[[^\]]*\]/g, '')
+  .replace(/\s*\((?!\d+\s*de\s*\d+)[^)]*\)/gi, '')
+  .replace(/\s+por\s+\S.*$/i, '')
+  .replace(/\s+/g, ' ')
+  .trim();
 /**
  * Formatos preferidos:
  * 1.  [channel] - [serie] #[n|Special|Especial|Extra] [- info]
@@ -184,7 +189,7 @@ function parseComicName(name, channelName) {
   // Canal - serie #n [- info]
   if (ch) {
     const re1 = new RegExp(
-      `^${escRe(ch)}\\s*-\\s*(.+?)\\s*#\\s*(${ISSUE_TAG})(?:\\s*-\\s*(.+))?\\s*$`,
+      `^${escRe(ch)}\\s*-\\s*(.+?)\\s*#\\s*(${ISSUE_TAG})(?:\\s*-?\\s+(.+))?\\s*$`,
       'i'
     );
     const m1 = raw.match(re1);
@@ -201,7 +206,7 @@ function parseComicName(name, channelName) {
     }
   }
   // Serie #n [- info]  (info no empieza por #n de rango ya cubierto)
-  const re2 = new RegExp(`^(.+?)\\s*#\\s*(${ISSUE_TAG})(?:\\s*-\\s*(.+))?\\s*$`, 'i');
+  const re2 = new RegExp(`^(.+?)\\s*#\\s*(${ISSUE_TAG})(?:\\s*-?\\s+(.+))?\\s*$`, 'i');
   const m2 = raw.match(re2);
   if (m2) {
     let info = m2[3] || '';
@@ -216,7 +221,7 @@ function parseComicName(name, channelName) {
   // Sin #: Canal - serie 07b [- info]
   if (ch) {
     const re3 = new RegExp(
-      `^${escRe(ch)}\\s*-\\s*(.+?)\\s+(${ISSUE_TAG})(?:\\s*-\\s*(.+))?\\s*$`,
+      `^${escRe(ch)}\\s*-\\s*(.+?)\\s+(${ISSUE_TAG})(?:\\s*-?\\s+(.+))?\\s*$`,
       'i'
     );
     const m3 = raw.match(re3);
@@ -226,7 +231,7 @@ function parseComicName(name, channelName) {
     }
   }
   // Sin #: Serie 07b [- info]  (p.ej. "Fabulas 07b - 1001 Noches…")
-  const re4 = new RegExp(`^(.+?)\\s+(${ISSUE_TAG})(?:\\s*-\\s*(.+))?\\s*$`, 'i');
+  const re4 = new RegExp(`^(.+?)\\s+(${ISSUE_TAG})(?:\\s*-?\\s+(.+))?\\s*$`, 'i');
   const m4 = raw.match(re4);
   if (m4) {
     const ser = stripCh(m4[1]);
