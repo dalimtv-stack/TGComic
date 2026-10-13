@@ -1279,7 +1279,7 @@ function reader(f, pages, zr, ctx) {
         return pages.length - 1;
       };
 
-      /** Aplica estilos de imagen según eje + ajuste y devuelve tamaño en el eje de scroll */
+      /** Aplica estilos de imagen según eje + ajuste */
       const applyImg = (im, slot) => {
         const screen = fitMode() === 'screen';
         im.style.display = 'block';
@@ -1287,22 +1287,30 @@ function reader(f, pages, zr, ctx) {
         im.style.objectFit = 'contain';
         if (horiz) {
           if (screen) {
-            // Cabe entera en el viewport
             im.style.width = 'auto';
             im.style.height = 'auto';
             im.style.maxWidth = vw() + 'px';
             im.style.maxHeight = vh() + 'px';
+            slot.style.overflowX = 'hidden';
+            slot.style.overflowY = 'hidden';
+            slot.style.alignItems = 'center';
+            slot.style.justifyContent = 'center';
           } else {
-            // Ancho = 100% del viewport
+            // Ancho = viewport; si es más alta, scroll vertical dentro del slot
             im.style.width = vw() + 'px';
             im.style.maxWidth = vw() + 'px';
             im.style.height = 'auto';
             im.style.maxHeight = 'none';
+            slot.style.overflowX = 'hidden';
+            slot.style.overflowY = 'auto';
+            slot.style.alignItems = 'flex-start';
+            slot.style.justifyContent = 'center';
+            slot.style.webkitOverflowScrolling = 'touch';
+            slot.style.touchAction = 'pan-y';
           }
           slot.style.height = '100%';
           slot.style.display = 'flex';
-          slot.style.alignItems = 'center';
-          slot.style.justifyContent = 'center';
+          slot.style.flexDirection = 'column';
         } else {
           if (screen) {
             im.style.width = 'auto';
@@ -1315,6 +1323,7 @@ function reader(f, pages, zr, ctx) {
             im.style.height = 'auto';
             im.style.maxHeight = 'none';
           }
+          slot.style.overflow = 'hidden';
           slot.style.width = '100%';
           slot.style.display = 'flex';
           slot.style.justifyContent = 'center';
@@ -1323,7 +1332,11 @@ function reader(f, pages, zr, ctx) {
       };
 
       const measure = (im, slot) => {
-        if (horiz) return Math.max(1, Math.round(im.getBoundingClientRect().width) || im.offsetWidth || sizes[0]);
+        if (horiz) {
+          // El eje de scroll horizontal es el ancho de página (= viewport en Ancho)
+          if (fitMode() === 'width') return Math.max(1, vw());
+          return Math.max(1, Math.round(im.getBoundingClientRect().width) || im.offsetWidth || sizes[0]);
+        }
         return Math.max(1, Math.round(im.getBoundingClientRect().height) || im.offsetHeight || sizes[0]);
       };
 
@@ -1470,6 +1483,41 @@ function reader(f, pages, zr, ctx) {
         observers._vv = onOrient;
       }
       observers._resize = onOrient;
+
+      // PC: rueda vertical dentro de la página (Horizontal+Ancho); al llegar al borde, cambia de página
+      if (horiz) {
+        const onWheelH = (e) => {
+          if (fitMode() !== 'width') {
+            // Pantalla: rueda horizontal o vertical → siguiente/anterior
+            if (Math.abs(e.deltaY) > 8 || Math.abs(e.deltaX) > 8) {
+              e.preventDefault();
+              const dir = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+              if (dir > 10) goToPage(n + 1);
+              else if (dir < -10) goToPage(n - 1);
+            }
+            return;
+          }
+          const slot = slots[n];
+          if (!slot) return;
+          const canY = slot.scrollHeight > slot.clientHeight + 2;
+          if (canY) {
+            const atTop = slot.scrollTop <= 0;
+            const atBot = slot.scrollTop + slot.clientHeight >= slot.scrollHeight - 2;
+            if ((e.deltaY < 0 && !atTop) || (e.deltaY > 0 && !atBot)) {
+              // Dejar que el slot haga scroll vertical (no preventDefault del padre)
+              return;
+            }
+          }
+          // Borde o página corta → cambiar página
+          if (Math.abs(e.deltaY) > 10) {
+            e.preventDefault();
+            if (e.deltaY > 0) goToPage(n + 1);
+            else goToPage(n - 1);
+          }
+        };
+        rd.addEventListener('wheel', onWheelH, { passive: false });
+        observers._wheel = onWheelH;
+      }
 
       goToPage(n);
     }
