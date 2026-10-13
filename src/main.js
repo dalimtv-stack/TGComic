@@ -588,15 +588,15 @@ function modeBtn(after) {
   b._label();
   return b;
 }
-const hdrMode = modeBtn();
 const menuBtn = el('button', 'btn menu-btn', '☰');
 menuBtn.setAttribute('aria-label', 'Menú');
 menuBtn.title = 'Menú';
 const menuPanel = el('div', 'app-menu');
 menuPanel.hidden = true;
 const menuInfoBtn = el('button', 'app-menu-item', 'Información');
-menuPanel.append(menuInfoBtn);
-actions.append(hdrMode, menuBtn);
+const menuCfgBtn = el('button', 'app-menu-item', 'Configuración Visor');
+menuPanel.append(menuInfoBtn, menuCfgBtn);
+actions.append(menuBtn);
 document.body.append(menuPanel);
 
 function closeAppMenu() { menuPanel.hidden = true; menuBtn.classList.remove('on'); }
@@ -660,6 +660,75 @@ function showInfoFrame() {
 }
 menuInfoBtn.onclick = (ev) => { ev.stopPropagation(); showInfoFrame(); };
 
+function showViewerConfig() {
+  closeAppMenu();
+  document.querySelector('.info-frame.cfg')?.remove();
+  const frame = el('div', 'info-frame cfg');
+  const box = el('div', 'info-box');
+  const head = el('div', 'info-head');
+  head.append(el('span', '', 'Configuración Visor'));
+  const close = el('button', 'btn info-close', '×');
+  close.setAttribute('aria-label', 'Cerrar');
+  close.onclick = () => frame.remove();
+  head.append(close);
+  const body = el('div', 'info-body');
+
+  const section = (title) => {
+    body.append(el('div', 'info-sec', title));
+  };
+  const toggleGroup = (options, getVal, setVal) => {
+    const wrap = el('div', 'cfg-group');
+    const btns = [];
+    const paint = () => {
+      const cur = getVal();
+      btns.forEach(({ b, val }) => b.classList.toggle('on', val === cur));
+    };
+    for (const [val, label] of options) {
+      const b = el('button', 'cfg-toggle', label);
+      b.type = 'button';
+      b.onclick = () => {
+        setVal(val);
+        paint();
+      };
+      btns.push({ b, val });
+      wrap.append(b);
+    }
+    body.append(wrap);
+    paint();
+    return paint;
+  };
+
+  section('Visualización páginas');
+  toggleGroup(
+    [
+      ['page', 'Modo Página'],
+      ['vertical', 'Modo Vertical'],
+      ['horizontal', 'Modo Horizontal'],
+    ],
+    () => {
+      const m = pref('mode', 'page');
+      return (m === 'vertical' || m === 'horizontal') ? m : 'page';
+    },
+    (v) => setPref('mode', v)
+  );
+
+  section('Ajuste Páginas');
+  toggleGroup(
+    [
+      ['width', 'Modo Ancho'],
+      ['screen', 'Modo Pantalla'],
+    ],
+    () => (pref('fit', 'screen') === 'width' ? 'width' : 'screen'),
+    (v) => setPref('fit', v)
+  );
+
+  box.append(head, body);
+  frame.append(box);
+  frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+  document.body.append(frame);
+}
+menuCfgBtn.onclick = (ev) => { ev.stopPropagation(); showViewerConfig(); };
+
 let cleanup = null, LIB = [], synced = false;
 
 function go(title, render) { stack.push({ title, render }); history.pushState(null, ''); show(); }
@@ -669,7 +738,6 @@ function show() {
   titleEl.textContent = e.title;
   backBtn.hidden = stack.length < 2;
   $('#top')?.classList.toggle('home', stack.length < 2);
-  hdrMode._label();
   // Reset scroll al cambiar de vista (evita entrar "descentrado")
   window.scrollTo(0, 0);
   document.documentElement.scrollTop = 0;
