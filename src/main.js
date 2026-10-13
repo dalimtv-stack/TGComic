@@ -991,6 +991,95 @@ function comicCover(ch, f, badge, series) {
   io.observe(d);
   return d;
 }
+/** Pulsación larga (móvil/tablet) sin disparar el click */
+function bindLongPress(node, fn, ms = 480) {
+  if (!fn || !node) return;
+  let timer = null, sx = 0, sy = 0, moved = false, fired = false;
+  const clear = () => { if (timer) { clearTimeout(timer); timer = null; } };
+  const onStart = (e) => {
+    const t = e.touches ? e.touches[0] : e;
+    sx = t.clientX; sy = t.clientY;
+    moved = false; fired = false;
+    clear();
+    timer = setTimeout(() => {
+      fired = true;
+      try { navigator.vibrate?.(12); } catch (_) {}
+      fn(e);
+    }, ms);
+  };
+  const onMove = (e) => {
+    const t = e.touches ? e.touches[0] : e;
+    if (Math.abs(t.clientX - sx) > 12 || Math.abs(t.clientY - sy) > 12) {
+      moved = true;
+      clear();
+    }
+  };
+  const onEnd = (e) => {
+    clear();
+    if (fired) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  };
+  node.addEventListener('touchstart', onStart, { passive: true });
+  node.addEventListener('touchmove', onMove, { passive: true });
+  node.addEventListener('touchend', onEnd, { passive: false });
+  node.addEventListener('touchcancel', clear, { passive: true });
+  // Escritorio: botón derecho como alternativa
+  node.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    fn(e);
+  });
+  // Evitar click tras long-press
+  node.addEventListener('click', (e) => {
+    if (fired) { e.preventDefault(); e.stopPropagation(); fired = false; }
+  }, true);
+}
+
+function showComicInfo(ch, f) {
+  document.querySelector('.info-frame.comic-info')?.remove();
+  const parsed = parseComicName(f.name, ch?.name);
+  const series = parsed?.series || seriesBase(f.name, ch?.name) || '—';
+  const title = parsed
+    ? (parsed.info ? `${series} #${parsed.number} - ${parsed.info}` : `${series} #${parsed.number}`)
+    : comicDisplay(f.name, ch?.name);
+  const ext = (f.name.match(/\.cb[zr]$/i) || [])[0] || '';
+  const fmt = /\.cbz$/i.test(f.name) ? 'CBZ (ZIP)' : /\.cbr$/i.test(f.name) ? 'CBR (RAR)' : (ext || '—');
+  const pages = ch ? getPagesTotal(ch.id, f.id) : 0;
+  const pagesLabel = pages > 0 ? String(pages) : '— (se conoce al abrir)';
+  // Formato de páginas: no se indexa hasta abrir; orientación genérica
+  const pageFmt = pages > 0 ? 'Imágenes (JPEG/PNG/WebP/…)' : '— (se detecta al abrir)';
+
+  const frame = el('div', 'info-frame comic-info');
+  const box = el('div', 'info-box');
+  const head = el('div', 'info-head');
+  head.append(el('span', '', 'Información'));
+  const close = el('button', 'btn info-close', '×');
+  close.setAttribute('aria-label', 'Cerrar');
+  close.onclick = () => frame.remove();
+  head.append(close);
+  const body = el('div', 'info-body');
+  const row = (label, value) => {
+    const r = el('div', 'info-row');
+    r.append(el('span', 'info-label', label), el('span', 'info-value', value));
+    return r;
+  };
+  body.append(el('div', 'info-sec', 'Cómic'));
+  body.append(row('Título', title || '—'));
+  body.append(row('Serie', series));
+  body.append(row('Canal', ch?.name || '—'));
+  body.append(row('Editorial', ch?.group || '—'));
+  body.append(row('Nombre archivo', f.name || '—'));
+  body.append(row('Formato archivo', fmt));
+  body.append(row('Tamaño', formatBytes(f.size)));
+  body.append(row('Número de páginas', pagesLabel));
+  body.append(row('Formato páginas', pageFmt));
+  box.append(head, body);
+  frame.append(box);
+  frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+  document.body.append(frame);
+}
+
 function grid(items, withSearch) {
   const g = el('div', 'grid'), nodes = [];
   const draw = (q = '') => g.replaceChildren(...items.filter((i) => i.label.toLowerCase().includes(q)).map((i) => {
@@ -998,6 +1087,7 @@ function grid(items, withSearch) {
     hit.append(i.cover());
     // Portada: abrir cómic / serie. Título: menú de opciones si existe, si no también abre.
     hit.onclick = i.go;
+    if (i.longPress) bindLongPress(hit, i.longPress);
     if (i.menu) {
       t.classList.add('has-menu');
       t.onclick = (ev) => { ev.stopPropagation(); i.menu(); };
@@ -1007,6 +1097,7 @@ function grid(items, withSearch) {
     } else {
       t.onclick = i.go;
     }
+    if (i.longPress) bindLongPress(t, i.longPress);
     name.append(t);
     c.append(hit, name);
     if (i.sub) c.append(el('small', '', i.sub));
@@ -1170,7 +1261,16 @@ function channelsView(g) {
 function filesView(ch) {
   go(ch.name, async (e) => {
     let cur = [];
-    const single = (f) => ({ label: comicDisplay(f.name, ch.name), sub: sizeLabel(f, ch), cover: () => comicCover(ch, f), go: () => openComic(ch, f, cur) });
+    const comicMenu = (f) => () => sheet(comicDisplay(f.name, ch.name), [
+      ['Información', () => showComicInfo(ch, f)],
+    ]);
+    const single = (f) => ({
+      label: comicDisplay(f.name, ch.name),
+      sub: sizeLabel(f, ch),
+      cover: () => comicCover(ch, f),
+      go: () => openComic(ch, f, cur),
+      longPress: comicMenu(f),
+    });
     const draw = (files) => {
       if (!alive(e)) return;
       cur = files;
@@ -1218,7 +1318,12 @@ function seriesView(ch, s, files) {
       if (p && p.series.toLowerCase() === s.toLowerCase()) return issueDisplay(p);
       return issueLabel(s, f, ch.name);
     })(),
-    sub: sizeLabel(f, ch), cover: () => comicCover(ch, f), go: () => openComic(ch, f, files),
+    sub: sizeLabel(f, ch),
+    cover: () => comicCover(ch, f),
+    go: () => openComic(ch, f, files),
+    longPress: () => sheet(comicDisplay(f.name, ch.name), [
+      ['Información', () => showComicInfo(ch, f)],
+    ]),
   })), true));
 }
 
