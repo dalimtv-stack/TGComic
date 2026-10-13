@@ -1306,7 +1306,7 @@ function reader(f, pages, zr, ctx) {
             slot.style.alignItems = 'flex-start';
             slot.style.justifyContent = 'center';
             slot.style.webkitOverflowScrolling = 'touch';
-            slot.style.touchAction = 'pan-y';
+            slot.style.touchAction = 'pan-x pan-y';
           }
           slot.style.height = '100%';
           slot.style.display = 'flex';
@@ -1392,9 +1392,12 @@ function reader(f, pages, zr, ctx) {
         savePage(n);
         setCount();
         syncLock = true;
+        // Al cambiar de página, subir el scroll vertical interno
+        slots.forEach((s) => { try { s.scrollTop = 0; } catch (_) {} });
         jumpTo(i);
         await ensure(i);
         jumpTo(i);
+        try { slots[i].scrollTop = 0; } catch (_) {}
         ensure(i - 1); ensure(i + 1); ensure(i + 2);
         requestAnimationFrame(() => {
           jumpTo(i);
@@ -1484,11 +1487,34 @@ function reader(f, pages, zr, ctx) {
       }
       observers._resize = onOrient;
 
-      // PC: rueda vertical dentro de la página (Horizontal+Ancho); al llegar al borde, cambia de página
+      // Navegación entre páginas en Horizontal (gesto + rueda)
       if (horiz) {
+        // Gesto horizontal → siguiente/anterior (el vertical lo maneja el slot con overflow-y)
+        let tX = null, tY = null, tSlot = null;
+        const onTs = (e) => {
+          if (e.touches.length !== 1) { tX = null; return; }
+          tX = e.touches[0].clientX;
+          tY = e.touches[0].clientY;
+          tSlot = e.target.closest?.('.slot') || slots[n];
+        };
+        const onTe = (e) => {
+          if (tX == null) return;
+          const dx = e.changedTouches[0].clientX - tX;
+          const dy = e.changedTouches[0].clientY - tY;
+          tX = null;
+          // Solo si el gesto es claramente horizontal
+          if (Math.abs(dx) < 55 || Math.abs(dx) < 1.4 * Math.abs(dy)) return;
+          // Si el slot puede hacer scroll vertical y el gesto fue más vertical, ya filtrado arriba
+          if (dx < 0) goToPage(n + 1);
+          else goToPage(n - 1);
+        };
+        rd.addEventListener('touchstart', onTs, { passive: true });
+        rd.addEventListener('touchend', onTe, { passive: true });
+        observers._touchStart = onTs;
+        observers._touchEnd = onTe;
+
         const onWheelH = (e) => {
           if (fitMode() !== 'width') {
-            // Pantalla: rueda horizontal o vertical → siguiente/anterior
             if (Math.abs(e.deltaY) > 8 || Math.abs(e.deltaX) > 8) {
               e.preventDefault();
               const dir = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
@@ -1499,16 +1525,19 @@ function reader(f, pages, zr, ctx) {
           }
           const slot = slots[n];
           if (!slot) return;
+          // Rueda horizontal o shift+rueda → cambiar página
+          if (Math.abs(e.deltaX) > 10 && Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+            e.preventDefault();
+            if (e.deltaX > 0) goToPage(n + 1);
+            else goToPage(n - 1);
+            return;
+          }
           const canY = slot.scrollHeight > slot.clientHeight + 2;
           if (canY) {
             const atTop = slot.scrollTop <= 0;
             const atBot = slot.scrollTop + slot.clientHeight >= slot.scrollHeight - 2;
-            if ((e.deltaY < 0 && !atTop) || (e.deltaY > 0 && !atBot)) {
-              // Dejar que el slot haga scroll vertical (no preventDefault del padre)
-              return;
-            }
+            if ((e.deltaY < 0 && !atTop) || (e.deltaY > 0 && !atBot)) return;
           }
-          // Borde o página corta → cambiar página
           if (Math.abs(e.deltaY) > 10) {
             e.preventDefault();
             if (e.deltaY > 0) goToPage(n + 1);
@@ -1527,6 +1556,8 @@ function reader(f, pages, zr, ctx) {
       observers.forEach((o) => { try { o.disconnect(); } catch (_) {} });
       if (observers._scroll) rd.removeEventListener('scroll', observers._scroll);
       if (observers._wheel) rd.removeEventListener('wheel', observers._wheel);
+      if (observers._touchStart) rd.removeEventListener('touchstart', observers._touchStart);
+      if (observers._touchEnd) rd.removeEventListener('touchend', observers._touchEnd);
       if (observers._resize) {
         removeEventListener('resize', observers._resize);
         removeEventListener('orientationchange', observers._resize);
