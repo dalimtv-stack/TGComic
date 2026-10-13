@@ -20,8 +20,9 @@ const SYNC_PREFIXES = [
   'seriesName:',
   'comicName:',
   'ungroup:',
+  'read:',
 ];
-const SYNC_KEYS = ['channelNames', 'groupNames', 'lastRead'];
+const SYNC_KEYS = ['channelNames', 'groupNames', 'lastRead', 'recentReads'];
 
 function configured() {
   return !!(SUPABASE_URL && SUPABASE_ANON);
