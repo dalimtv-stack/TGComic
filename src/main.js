@@ -11,6 +11,13 @@ import {
   stripExt, clean, parseComicName, issueDisplay, comicDisplay,
   seriesBase, groupSeries, issueLabel,
 } from './parse.js';
+import {
+  getPageIndex, setPageIndex, getPagesTotal, setPagesTotal,
+  getPageFormat, setPageFormat, detectPageFormats,
+  isComicRead, readProgress, markComicRead, markComicUnread,
+  markSeriesRead, markSeriesUnread,
+  getLastRead, setLastRead, getRecentReads, getContinueList,
+} from './progress.js';
 
 const apiId = Number(import.meta.env.VITE_API_ID);
 const apiHash = import.meta.env.VITE_API_HASH;
@@ -36,174 +43,11 @@ function resetMobileViewport() {
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 // Progreso por canal+mensaje (evita colisiones entre canales)
-const pageKey = (chId, msgId) => `page:${chId}:${msgId}`;
-const pagesKey = (chId, msgId) => `pages:${chId}:${msgId}`;
-const legacyPageKey = (msgId) => 'page:' + msgId;
-const legacyPagesKey = (msgId) => 'pages:' + msgId;
-
-function getPageIndex(chId, msgId) {
-  const k = pageKey(chId, msgId);
-  let v = localStorage.getItem(k);
-  if (v == null) {
-    // Migración desde clave antigua page:MSG_ID
-    v = localStorage.getItem(legacyPageKey(msgId));
-    if (v != null) {
-      try { localStorage.setItem(k, v); } catch (_) {}
-    }
-  }
-  return Math.max(0, +(v || 0) || 0);
-}
-function setPageIndex(chId, msgId, n) {
-  try {
-    localStorage.setItem(pageKey(chId, msgId), String(n));
-    // Limpiar legado de este mensaje tras escribir la clave nueva
-    localStorage.removeItem(legacyPageKey(msgId));
-  } catch (_) {}
-  try { sync.schedulePush(); } catch (_) {}
-}
-function getPagesTotal(chId, msgId) {
-  const k = pagesKey(chId, msgId);
-  let v = localStorage.getItem(k);
-  if (v == null) {
-    v = localStorage.getItem(legacyPagesKey(msgId));
-    if (v != null) {
-      try { localStorage.setItem(k, v); } catch (_) {}
-    }
-  }
-  return Math.max(0, +(v || 0) || 0);
-}
-function setPagesTotal(chId, msgId, tot) {
-  try {
-    localStorage.setItem(pagesKey(chId, msgId), String(tot));
-    localStorage.removeItem(legacyPagesKey(msgId));
-  } catch (_) {}
-}
-const pageFmtKey = (chId, msgId) => `pagefmt:${chId}:${msgId}`;
-function getPageFormat(chId, msgId) {
-  try { return localStorage.getItem(pageFmtKey(chId, msgId)) || ''; } catch { return ''; }
-}
-function setPageFormat(chId, msgId, fmt) {
-  try { if (fmt) localStorage.setItem(pageFmtKey(chId, msgId), fmt); } catch (_) {}
-}
-function detectPageFormats(pages) {
-  const set = new Set();
-  for (const p of pages || []) {
-    const n = String(p.filename || p.name || '').toLowerCase();
-    if (/\.jpe?g$/.test(n)) set.add('JPEG');
-    else if (/\.png$/.test(n)) set.add('PNG');
-    else if (/\.webp$/.test(n)) set.add('WebP');
-    else if (/\.gif$/.test(n)) set.add('GIF');
-    else if (/\.avif$/.test(n)) set.add('AVIF');
-    else if (p.blob?.type) {
-      const tp = p.blob.type;
-      if (tp.includes('jpeg')) set.add('JPEG');
-      else if (tp.includes('png')) set.add('PNG');
-      else if (tp.includes('webp')) set.add('WebP');
-      else if (tp.includes('gif')) set.add('GIF');
-    }
-  }
-  return [...set].join(' / ');
-}
-
 const sizeLabel = (f, ch) => {
   const mb = `${Math.round(f.size / MB)} MB`;
   const tot = ch ? getPagesTotal(ch.id, f.id) : 0;
   return tot > 0 ? `${mb} · ${tot} pág.` : mb;
 };
-const lastReadKey = 'lastRead';
-const recentKey = 'recentReads';
-const readFlagKey = (chId, msgId) => `read:${chId}:${msgId}`;
-
-const getLastRead = () => { try { return JSON.parse(localStorage.getItem(lastReadKey) || 'null'); } catch { return null; } };
-
-const isComicRead = (chId, msgId) => {
-  try {
-    if (localStorage.getItem(readFlagKey(chId, msgId)) === '1') return true;
-  } catch (_) {}
-  const prog = readProgress(chId, msgId);
-  return !!(prog && prog.pct >= 95);
-};
-
-const markComicRead = (ch, f, after) => {
-  try { localStorage.setItem(readFlagKey(ch.id, f.id), '1'); } catch (_) {}
-  const tot = getPagesTotal(ch.id, f.id);
-  if (tot > 0) {
-    try { localStorage.setItem(pageKey(ch.id, f.id), String(Math.max(0, tot - 1))); } catch (_) {}
-  }
-  // quitar de recientes incompletos
-  try {
-    const list = getRecentReads().filter((x) => !(x.ch?.id === ch.id && x.f?.id === f.id));
-    localStorage.setItem(recentKey, JSON.stringify(list.slice(0, 5)));
-  } catch (_) {}
-  try { sync.schedulePush(); } catch (_) {}
-  after?.();
-};
-
-const markComicUnread = (ch, f, after) => {
-  try { localStorage.removeItem(readFlagKey(ch.id, f.id)); } catch (_) {}
-  try { localStorage.setItem(pageKey(ch.id, f.id), '0'); } catch (_) {}
-  try { sync.schedulePush(); } catch (_) {}
-  after?.();
-};
-
-const markSeriesRead = (ch, files, after) => {
-  for (const f of files || []) markComicRead(ch, f);
-  after?.();
-};
-const markSeriesUnread = (ch, files, after) => {
-  for (const f of files || []) markComicUnread(ch, f);
-  after?.();
-};
-
-const getRecentReads = () => {
-  try {
-    const raw = JSON.parse(localStorage.getItem(recentKey) || '[]');
-    return Array.isArray(raw) ? raw : [];
-  } catch { return []; }
-};
-
-/** Últimos abiertos no terminados (máx. 5) */
-const getContinueList = () => {
-  const list = getRecentReads().filter((x) => x?.ch?.id && x?.f?.id && !isComicRead(x.ch.id, x.f.id));
-  // Migración: incluir lastRead si no está
-  const last = getLastRead();
-  if (last?.ch?.id && last?.f?.id && !isComicRead(last.ch.id, last.f.id)) {
-    if (!list.some((x) => x.ch.id === last.ch.id && x.f.id === last.f.id)) {
-      list.unshift(last);
-    }
-  }
-  return list.slice(0, 5);
-};
-
-const setLastRead = (ch, f) => {
-  const entry = {
-    ch: { id: ch.id, hash: ch.hash, name: ch.name, group: ch.group },
-    f: { id: f.id, name: f.name, size: f.size },
-    at: Date.now(),
-  };
-  try {
-    localStorage.setItem(lastReadKey, JSON.stringify(entry));
-    let list = getRecentReads().filter((x) => !(x.ch?.id === ch.id && x.f?.id === f.id));
-    list.unshift(entry);
-    localStorage.setItem(recentKey, JSON.stringify(list.slice(0, 12)));
-  } catch (_) {}
-  try { sync.schedulePush(); } catch (_) {}
-};
-
-const readProgress = (chId, msgId) => {
-  const marked = (() => { try { return localStorage.getItem(readFlagKey(chId, msgId)) === '1'; } catch { return false; } })();
-  const cur = getPageIndex(chId, msgId);
-  const tot = getPagesTotal(chId, msgId);
-  // Marcado leído a mano: siempre 100% (aunque no se conozcan páginas)
-  if (marked) {
-    const t = tot > 0 ? tot : 1;
-    return { cur: t, tot: t, pct: 100 };
-  }
-  if (!tot || tot < 1) return null;
-  if (cur <= 0) return null;
-  return { cur: cur + 1, tot, pct: Math.min(100, Math.round(((cur + 1) / tot) * 100)) };
-};
-
 const pagesOf = (entries) => entries.filter((e) => !e.directory && /\.(jpe?g|png|webp|gif|avif)$/i.test(e.filename)).sort((a, b) => natural(a.filename, b.filename));
 
 // Caché persistente (IndexedDB): biblioteca, listados y portadas
@@ -3004,13 +2848,14 @@ function reader(f, pages, zr, ctx) {
         im.style.display = 'block';
         im.style.margin = '0 auto';
         im.style.objectFit = 'contain';
+        im.style.objectPosition = 'center';
         if (horiz) {
           if (screen) {
-            // Cabe entera → centrada
-            im.style.width = 'auto';
-            im.style.height = 'auto';
-            im.style.maxWidth = vw() + 'px';
-            im.style.maxHeight = vh() + 'px';
+            // Escalar hasta llenar (también imágenes pequeñas), sin recortar
+            im.style.width = '100%';
+            im.style.height = '100%';
+            im.style.maxWidth = '100%';
+            im.style.maxHeight = '100%';
             im.style.flexShrink = '0';
             slot.style.overflow = 'hidden';
             slot.style.display = 'flex';
@@ -3027,16 +2872,15 @@ function reader(f, pages, zr, ctx) {
             slot.style.overflowX = 'hidden';
             slot.style.overflowY = 'auto';
             slot.style.webkitOverflowScrolling = 'touch';
-            // Centrado o arriba se decide en place() según si es alta
           }
           slot.style.height = '100%';
           slot.style.maxHeight = '100%';
 
         } else {
           if (screen) {
-            im.style.width = 'auto';
-            im.style.height = 'auto';
+            im.style.width = '100%';
             im.style.maxWidth = '100%';
+            im.style.height = 'auto';
             im.style.maxHeight = vh() + 'px';
           } else {
             im.style.width = '100%';
