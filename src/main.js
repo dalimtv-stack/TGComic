@@ -227,8 +227,101 @@ const kv = (() => {
     const d = await db;
     return new Promise((res, rej) => { const t = d.transaction('kv', mode); const q = fn(t.objectStore('kv')); t.oncomplete = () => res(q.result); t.onerror = () => rej(t.error); });
   };
-  return { get: (k) => tx('readonly', (s) => s.get(k)).catch(() => undefined), set: (k, v) => tx('readwrite', (s) => s.put(v, k)).catch(() => {}), del: (k) => tx('readwrite', (s) => s.delete(k)).catch(() => {}) };
+  return {
+    get: (k) => tx('readonly', (s) => s.get(k)).catch(() => undefined),
+    set: (k, v) => tx('readwrite', (s) => s.put(v, k)).catch(() => {}),
+    del: (k) => tx('readwrite', (s) => s.delete(k)).catch(() => {}),
+    keys: () => tx('readonly', (s) => s.getAllKeys()).catch(() => []),
+    entries: async () => {
+      try {
+        const d = await db;
+        return await new Promise((res, rej) => {
+          const t = d.transaction('kv', 'readonly');
+          const s = t.objectStore('kv');
+          const out = [];
+          const req = s.openCursor();
+          req.onsuccess = (e) => {
+            const cur = e.target.result;
+            if (cur) { out.push([cur.key, cur.value]); cur.continue(); }
+            else res(out);
+          };
+          req.onerror = () => rej(req.error);
+          t.onerror = () => rej(t.error);
+        });
+      } catch {
+        return [];
+      }
+    },
+  };
 })();
+
+const formatBytes = (n) => {
+  n = Math.max(0, Number(n) || 0);
+  if (n < 1024) return n + ' B';
+  if (n < MB) return (n / 1024).toFixed(1) + ' KB';
+  if (n < MB * 1024) return (n / MB).toFixed(1) + ' MB';
+  return (n / (MB * 1024)).toFixed(2) + ' GB';
+};
+const sizeOfVal = (v) => {
+  if (v == null) return 0;
+  if (typeof Blob !== 'undefined' && v instanceof Blob) return v.size || 0;
+  if (v instanceof ArrayBuffer) return v.byteLength || 0;
+  if (ArrayBuffer.isView?.(v)) return v.byteLength || 0;
+  if (typeof v === 'string') return new Blob([v]).size;
+  if (typeof v === 'object') {
+    if (v.blob instanceof Blob) return (v.blob.size || 0) + sizeOfVal({ ...v, blob: null });
+    try { return new Blob([JSON.stringify(v)]).size; } catch { return 0; }
+  }
+  return 0;
+};
+async function collectAppStats() {
+  const entries = await kv.entries();
+  let covers = 0, art = 0, other = 0, coverN = 0, artN = 0;
+  for (const [k, v] of entries) {
+    const sz = sizeOfVal(v);
+    if (typeof k === 'string' && k.startsWith('c:')) { covers += sz; coverN++; }
+    else if (typeof k === 'string' && k.startsWith('art:')) { art += sz; artN++; }
+    else other += sz;
+  }
+  const idbTotal = covers + art + other;
+
+  let lsBytes = 0;
+  let sessionBytes = 0;
+  let sessionOk = false;
+  const lsKeys = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k) continue;
+      const val = localStorage.getItem(k) || '';
+      const s = k.length + val.length;
+      // UTF-16 ≈ 2 bytes/char in localStorage
+      const bytes = s * 2;
+      lsBytes += bytes;
+      lsKeys.push(k);
+      if (k === 'tg_session') {
+        sessionBytes = bytes;
+        sessionOk = val.length > 0;
+      }
+    }
+  } catch (_) {}
+
+  const channels = Array.isArray(LIB) ? LIB.length : 0;
+  let comics = 0, telegramBytes = 0;
+  if (Array.isArray(LIB)) {
+    for (const ch of LIB) {
+      const files = (await kv.get('f:' + ch.id)) || [];
+      comics += files.length;
+      for (const f of files) telegramBytes += Number(f.size) || 0;
+    }
+  }
+
+  return {
+    idbTotal, covers, art, other, coverN, artN,
+    lsBytes, sessionBytes, sessionOk, lsKeyCount: lsKeys.length,
+    channels, comics, telegramBytes,
+  };
+}
 
 async function mapLimit(items, n, fn) {
   const out = new Array(items.length);
@@ -496,7 +589,77 @@ function modeBtn(after) {
   return b;
 }
 const hdrMode = modeBtn();
-actions.append(hdrMode);
+const menuBtn = el('button', 'btn menu-btn', '☰');
+menuBtn.setAttribute('aria-label', 'Menú');
+menuBtn.title = 'Menú';
+const menuPanel = el('div', 'app-menu');
+menuPanel.hidden = true;
+const menuInfoBtn = el('button', 'app-menu-item', 'Información');
+menuPanel.append(menuInfoBtn);
+actions.append(hdrMode, menuBtn);
+document.body.append(menuPanel);
+
+function closeAppMenu() { menuPanel.hidden = true; menuBtn.classList.remove('on'); }
+function toggleAppMenu() {
+  const open = menuPanel.hidden;
+  if (open) {
+    menuPanel.hidden = false;
+    menuBtn.classList.add('on');
+    // Anclar bajo el botón
+    const r = menuBtn.getBoundingClientRect();
+    menuPanel.style.top = Math.round(r.bottom + 6) + 'px';
+    menuPanel.style.right = Math.round(window.innerWidth - r.right) + 'px';
+  } else closeAppMenu();
+}
+menuBtn.onclick = (ev) => { ev.stopPropagation(); toggleAppMenu(); };
+document.addEventListener('click', (ev) => {
+  if (!menuPanel.hidden && !menuPanel.contains(ev.target) && ev.target !== menuBtn) closeAppMenu();
+});
+
+function showInfoFrame() {
+  closeAppMenu();
+  document.querySelector('.info-frame')?.remove();
+  const frame = el('div', 'info-frame');
+  const box = el('div', 'info-box');
+  const head = el('div', 'info-head');
+  head.append(el('span', '', 'Información'));
+  const close = el('button', 'btn info-close', '×');
+  close.setAttribute('aria-label', 'Cerrar');
+  close.onclick = () => frame.remove();
+  head.append(close);
+  const body = el('div', 'info-body');
+  body.append(el('div', 'info-loading', 'Calculando…'));
+  box.append(head, body);
+  frame.append(box);
+  frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+  document.body.append(frame);
+
+  const row = (label, value) => {
+    const r = el('div', 'info-row');
+    r.append(el('span', 'info-label', label), el('span', 'info-value', value));
+    return r;
+  };
+
+  collectAppStats().then((s) => {
+    body.replaceChildren();
+    body.append(el('div', 'info-sec', 'Caché (este dispositivo)'));
+    body.append(row('Caché total (IndexedDB)', formatBytes(s.idbTotal)));
+    body.append(row('Carátulas de cómics', `${formatBytes(s.covers)} · ${s.coverN} ítems`));
+    body.append(row('Editoriales y canales', `${formatBytes(s.art)} · ${s.artN} ítems`));
+    body.append(row('Otros datos en caché', formatBytes(s.other)));
+    body.append(el('div', 'info-sec', 'Sesión y preferencias'));
+    body.append(row('Sesión de Telegram', s.sessionOk ? `Guardada · ${formatBytes(s.sessionBytes)}` : 'No guardada'));
+    body.append(row('localStorage (prefs, progreso…)', `${formatBytes(s.lsBytes)} · ${s.lsKeyCount} claves`));
+    body.append(el('div', 'info-sec', 'Biblioteca'));
+    body.append(row('Canales', String(s.channels)));
+    body.append(row('Cómics (listados)', String(s.comics)));
+    body.append(row('Tamaño en Telegram', formatBytes(s.telegramBytes)));
+  }).catch((err) => {
+    body.replaceChildren(el('div', 'info-loading', 'No se pudo calcular: ' + (err?.message || err)));
+  });
+}
+menuInfoBtn.onclick = (ev) => { ev.stopPropagation(); showInfoFrame(); };
+
 let cleanup = null, LIB = [], synced = false;
 
 function go(title, render) { stack.push({ title, render }); history.pushState(null, ''); show(); }
