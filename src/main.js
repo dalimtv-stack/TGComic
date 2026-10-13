@@ -1019,9 +1019,29 @@ function reader(f, pages, zr, ctx) {
     const continuous = vert || horiz;
     let token = 0, observers = [];
     const rd = el('div'); rd.id = 'rd';
-    // Barra superior: solo título
+    // Barra superior: título + estado de modo
     const top = el('div', 'bar topbar');
-    top.append(el('span', 'ttl', stripExt(f.name)));
+    const modeName = { page: 'Página', vertical: 'Vertical', horizontal: 'Horizontal' };
+    const fitName = { screen: 'Pantalla', width: 'Ancho' };
+    const status = el('div', 'rd-status');
+    const updateStatus = () => {
+      const m = pref('mode', 'page');
+      const f = pref('fit', 'screen') === 'width' ? 'width' : 'screen';
+      status.replaceChildren();
+      const dot = () => { const s = el('span', 'rd-dot'); s.textContent = '●'; return s; };
+      const bit = (label) => {
+        const w = el('span', 'rd-status-bit');
+        w.append(document.createTextNode(label + ' '), dot());
+        return w;
+      };
+      status.append(bit('Modo: ' + (modeName[m] || m)));
+      if (m !== 'page') status.append(bit('Ajuste: ' + fitName[f]));
+      else status.append(bit('Ajuste: ' + fitName[f]));
+    };
+    updateStatus();
+    const titleCol = el('div', 'rd-titlecol');
+    titleCol.append(el('span', 'ttl', stripExt(f.name)), status);
+    top.append(titleCol);
     // Barra inferior: controles
     const bot = el('div', 'bar botbar');
     const back = el('button', 'btn', '‹');
@@ -1103,6 +1123,7 @@ function reader(f, pages, zr, ctx) {
         setPref('fit', pref('fit', 'screen') === 'screen' ? 'width' : 'screen');
         rd.className = rd.className.replace(/fit-\w+/, 'fit-' + pref('fit', 'screen'));
         fitLabel();
+        updateStatus();
         pokeUI();
       };
       fitLabel();
@@ -1181,7 +1202,8 @@ function reader(f, pages, zr, ctx) {
       observers._resize = onOrientPageD;
       turn(n);
     } else {
-      const fitMode = () => pref('fit', 'screen') === 'width' ? 'width' : 'screen';
+      const GAP = 8; // hueco uniforme siempre
+      const fitMode = () => (pref('fit', 'screen') === 'width' ? 'width' : 'screen');
       rd.className = (horiz ? 'horiz' : 'vert') + ' fit-' + fitMode();
       const fit = el('button', 'btn');
       const fitLabel = () => (fit.textContent = fitMode() === 'screen' ? '↔ Ancho' : '⤢ Pantalla');
@@ -1189,46 +1211,42 @@ function reader(f, pages, zr, ctx) {
       fit.onclick = () => {
         setPref('fit', fitMode() === 'screen' ? 'width' : 'screen');
         rd.className = (horiz ? 'horiz' : 'vert') + ' fit-' + fitMode();
-        GAP = gapOf();
         fitLabel();
+        updateStatus();
         pokeUI();
-        // Actualizar márgenes de slots
-        slots.forEach((s) => {
-          if (horiz) s.style.marginRight = GAP + 'px';
-          else s.style.marginBottom = GAP + 'px';
-        });
         onResize?.();
       };
       fitLabel();
       cluster.append(gridBtn, fit, cnt);
-      // En modo Pantalla no hace falta hueco extra entre páginas (ya ocupan el viewport)
-      const gapOf = () => (fitMode() === 'screen' ? 0 : 10);
-      let GAP = gapOf();
-      const estH = Math.round(Math.min(window.innerWidth, 900) * 1.42);
-      const estW = Math.round(window.innerHeight * 0.7);
-      const sizes = new Array(pages.length).fill(horiz ? estW : estH);
+
+      const vw = () => window.innerWidth;
+      const vh = () => window.innerHeight;
+      // Estimación inicial estable (evita saltos)
+      const estSize = () => {
+        if (horiz) return fitMode() === 'width' ? vw() : Math.round(Math.min(vw(), vh() * 0.75));
+        return fitMode() === 'width' ? Math.round(vw() * 1.4) : Math.min(vh(), Math.round(vw() * 1.4));
+      };
+      const sizes = new Array(pages.length).fill(estSize());
       const slots = pages.map((_, i) => {
         const d = el('div', 'slot');
         d.dataset.i = i;
         if (horiz) {
-          d.style.width = estW + 'px';
-          d.style.minWidth = estW + 'px';
-          d.style.marginRight = GAP + 'px';
+          d.style.flex = 'none';
+          d.style.width = sizes[i] + 'px';
+          d.style.minWidth = sizes[i] + 'px';
           d.style.height = '100%';
+          d.style.marginRight = GAP + 'px';
+          d.style.marginBottom = '0';
         } else {
-          d.style.height = estH + 'px';
-          d.style.minHeight = estH + 'px';
+          d.style.width = '100%';
+          d.style.height = sizes[i] + 'px';
+          d.style.minHeight = sizes[i] + 'px';
           d.style.marginBottom = GAP + 'px';
+          d.style.marginRight = '0';
         }
         return d;
       });
-      const topPad = el('div', horiz ? 'horiz-pad-start' : 'vert-pad-top');
-      const padSize = () => {
-        if (fitMode() === 'screen') return 0;
-        return horiz ? Math.round(window.innerWidth * 0.04) : Math.round(window.innerHeight * 0.12);
-      };
-      if (horiz) topPad.style.width = padSize() + 'px';
-      else topPad.style.height = padSize() + 'px';
+      // Sin padding inicial (causaba doble hueco)
       const foot = el('div', 'next-comic');
       if (hasNext) {
         const nb = el('button', 'btn next-btn', 'Siguiente número →');
@@ -1237,74 +1255,81 @@ function reader(f, pages, zr, ctx) {
       } else {
         foot.append(el('div', 'next-end', 'Fin'));
       }
-      rd.append(topPad, ...slots, foot, top, bot);
+      rd.append(...slots, foot, top, bot);
 
       const loaded = new Map();
       let syncLock = true;
       let scrollT = 0;
 
       const posOf = (i) => {
-        let y = topPad.offsetWidth || topPad.offsetHeight || padSize();
-        if (!horiz) y = topPad.offsetHeight || padSize();
-        else y = topPad.offsetWidth || padSize();
+        let y = 0;
         for (let k = 0; k < i; k++) y += sizes[k] + GAP;
         return y;
       };
-      const pageAt = (scrollMid) => {
-        let y = horiz ? (topPad.offsetWidth || padSize()) : (topPad.offsetHeight || padSize());
+      const pageAt = (mid) => {
+        let y = 0;
         for (let k = 0; k < pages.length; k++) {
           const h = sizes[k] + GAP;
-          if (y + h > scrollMid) return k;
+          if (y + h > mid) return k;
           y += h;
         }
         return pages.length - 1;
       };
 
+      /** Aplica estilos de imagen según eje + ajuste y devuelve tamaño en el eje de scroll */
+      const applyImg = (im, slot) => {
+        const screen = fitMode() === 'screen';
+        im.style.display = 'block';
+        im.style.margin = '0 auto';
+        im.style.objectFit = 'contain';
+        if (horiz) {
+          if (screen) {
+            // Cabe entera en el viewport
+            im.style.width = 'auto';
+            im.style.height = 'auto';
+            im.style.maxWidth = vw() + 'px';
+            im.style.maxHeight = vh() + 'px';
+          } else {
+            // Ancho = 100% del viewport
+            im.style.width = vw() + 'px';
+            im.style.maxWidth = vw() + 'px';
+            im.style.height = 'auto';
+            im.style.maxHeight = 'none';
+          }
+          slot.style.height = '100%';
+          slot.style.display = 'flex';
+          slot.style.alignItems = 'center';
+          slot.style.justifyContent = 'center';
+        } else {
+          if (screen) {
+            im.style.width = 'auto';
+            im.style.height = 'auto';
+            im.style.maxWidth = '100%';
+            im.style.maxHeight = vh() + 'px';
+          } else {
+            im.style.width = '100%';
+            im.style.maxWidth = '100%';
+            im.style.height = 'auto';
+            im.style.maxHeight = 'none';
+          }
+          slot.style.width = '100%';
+          slot.style.display = 'flex';
+          slot.style.justifyContent = 'center';
+          slot.style.alignItems = 'flex-start';
+        }
+      };
+
+      const measure = (im, slot) => {
+        if (horiz) return Math.max(1, Math.round(im.getBoundingClientRect().width) || im.offsetWidth || sizes[0]);
+        return Math.max(1, Math.round(im.getBoundingClientRect().height) || im.offsetHeight || sizes[0]);
+      };
+
       const place = (i, im) => {
         const slot = slots[i];
         const prev = sizes[i];
-        const screen = fitMode() === 'screen';
-        im.style.display = 'block';
         slot.replaceChildren(im);
-        if (horiz) {
-          if (screen) {
-            im.style.maxHeight = '100dvh';
-            im.style.maxWidth = '100vw';
-            im.style.height = 'auto';
-            im.style.width = 'auto';
-            im.style.objectFit = 'contain';
-            slot.style.height = '100%';
-            slot.style.width = 'auto';
-            slot.style.minWidth = '0';
-          } else {
-            im.style.height = '100%';
-            im.style.width = 'auto';
-            im.style.maxHeight = '100%';
-            slot.style.height = '100%';
-            slot.style.width = 'auto';
-            slot.style.minWidth = '0';
-          }
-        } else {
-          if (screen) {
-            im.style.maxHeight = '100dvh';
-            im.style.maxWidth = '100%';
-            im.style.width = 'auto';
-            im.style.height = 'auto';
-            im.style.objectFit = 'contain';
-            slot.style.height = 'auto';
-            slot.style.minHeight = '0';
-          } else {
-            im.style.width = '100%';
-            im.style.height = 'auto';
-            im.style.maxWidth = '100%';
-            slot.style.height = 'auto';
-            slot.style.minHeight = '0';
-          }
-        }
-        // Medir tamaño real tras layout
-        const h = horiz
-          ? Math.max(im.offsetWidth || 0, slot.offsetWidth || 0, 1)
-          : Math.max(im.offsetHeight || 0, slot.offsetHeight || 0, 1);
+        applyImg(im, slot);
+        const h = measure(im, slot);
         sizes[i] = h;
         if (horiz) {
           slot.style.width = h + 'px';
@@ -1328,6 +1353,7 @@ function reader(f, pages, zr, ctx) {
         try {
           const im = el('img');
           im.decoding = 'async';
+          im.draggable = false;
           im.src = await load(i);
           await im.decode().catch(() => {});
           if (!slots[i].isConnected) return;
@@ -1350,14 +1376,10 @@ function reader(f, pages, zr, ctx) {
         savePage(n);
         setCount();
         syncLock = true;
-        // Salto inmediato con alturas estimadas (sin cargar 0…n)
         jumpTo(i);
-        // Cargar solo alrededores; al medir la actual, reajustar una vez
         await ensure(i);
         jumpTo(i);
-        ensure(i - 1);
-        ensure(i + 1);
-        ensure(i + 2);
+        ensure(i - 1); ensure(i + 1); ensure(i + 2);
         requestAnimationFrame(() => {
           jumpTo(i);
           setTimeout(() => { syncLock = false; }, 150);
@@ -1401,60 +1423,43 @@ function reader(f, pages, zr, ctx) {
       }, { root: rd, rootMargin: horiz ? '0px 80%' : '80% 0px' });
       slots.forEach((s) => loadIO.observe(s));
       observers = [loadIO];
-      // guardar remove scroll en cleanup vía observers no sirve; monkey en return
       observers._scroll = onScroll;
 
       rd.onclick = (ev) => {
         if (ev.target.closest?.('.bar, .next-btn, .mosaic')) return;
         rd.classList.toggle('ui-off');
       };
+
       onResize = () => {
         resetMobileViewport();
-        const w = window.innerWidth;
-        const vh = window.innerHeight;
+        const w = vw(), h = vh();
         rd.style.width = w + 'px';
-        rd.style.height = vh + 'px';
-        if (horiz) topPad.style.width = padSize() + 'px';
-        else topPad.style.height = padSize() + 'px';
-        GAP = gapOf();
-        const newEst = horiz ? Math.round(vh * 0.7) : Math.round(Math.min(w, 900) * 1.42);
+        rd.style.height = h + 'px';
+        // Reaplicar a todas las cargadas
         for (let i = 0; i < pages.length; i++) {
           const im = slots[i].querySelector('img');
-          let h = newEst;
-          if (im && im.naturalWidth) {
+          if (im) place(i, im);
+          else {
+            const e = estSize();
+            sizes[i] = e;
             if (horiz) {
-              im.style.height = '100%';
-              im.style.width = 'auto';
-              im.style.maxHeight = '100%';
-              h = Math.round(vh * (im.naturalWidth / im.naturalHeight));
+              slots[i].style.width = e + 'px';
+              slots[i].style.minWidth = e + 'px';
+              slots[i].style.marginRight = GAP + 'px';
             } else {
-              im.style.width = '100%';
-              im.style.maxWidth = '100%';
-              im.style.height = 'auto';
-              h = Math.round(w * (im.naturalHeight / im.naturalWidth));
+              slots[i].style.height = e + 'px';
+              slots[i].style.minHeight = e + 'px';
+              slots[i].style.marginBottom = GAP + 'px';
             }
-          }
-          sizes[i] = h;
-          if (horiz) {
-            slots[i].style.width = h + 'px';
-            slots[i].style.minWidth = h + 'px';
-            slots[i].style.height = '100%';
-          } else {
-            slots[i].style.width = '100%';
-            slots[i].style.height = h + 'px';
-            slots[i].style.minHeight = h + 'px';
           }
         }
         requestAnimationFrame(() => {
           jumpTo(n);
-          setTimeout(() => jumpTo(n), 280);
+          setTimeout(() => jumpTo(n), 200);
         });
       };
       let resizeT = 0;
-      const onOrient = () => {
-        clearTimeout(resizeT);
-        resizeT = setTimeout(onResize, 80);
-      };
+      const onOrient = () => { clearTimeout(resizeT); resizeT = setTimeout(onResize, 80); };
       addEventListener('resize', onOrient);
       addEventListener('orientationchange', onOrient);
       if (window.visualViewport) {
@@ -1462,6 +1467,7 @@ function reader(f, pages, zr, ctx) {
         observers._vv = onOrient;
       }
       observers._resize = onOrient;
+
       goToPage(n);
     }
     setCount();
