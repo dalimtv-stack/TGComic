@@ -72,6 +72,32 @@ function setPagesTotal(chId, msgId, tot) {
     localStorage.removeItem(legacyPagesKey(msgId));
   } catch (_) {}
 }
+const pageFmtKey = (chId, msgId) => `pagefmt:${chId}:${msgId}`;
+function getPageFormat(chId, msgId) {
+  try { return localStorage.getItem(pageFmtKey(chId, msgId)) || ''; } catch { return ''; }
+}
+function setPageFormat(chId, msgId, fmt) {
+  try { if (fmt) localStorage.setItem(pageFmtKey(chId, msgId), fmt); } catch (_) {}
+}
+function detectPageFormats(pages) {
+  const set = new Set();
+  for (const p of pages || []) {
+    const n = String(p.filename || p.name || '').toLowerCase();
+    if (/\.jpe?g$/.test(n)) set.add('JPEG');
+    else if (/\.png$/.test(n)) set.add('PNG');
+    else if (/\.webp$/.test(n)) set.add('WebP');
+    else if (/\.gif$/.test(n)) set.add('GIF');
+    else if (/\.avif$/.test(n)) set.add('AVIF');
+    else if (p.blob?.type) {
+      const tp = p.blob.type;
+      if (tp.includes('jpeg')) set.add('JPEG');
+      else if (tp.includes('png')) set.add('PNG');
+      else if (tp.includes('webp')) set.add('WebP');
+      else if (tp.includes('gif')) set.add('GIF');
+    }
+  }
+  return [...set].join(' / ');
+}
 
 const sizeLabel = (f, ch) => {
   const mb = `${Math.round(f.size / MB)} MB`;
@@ -1087,47 +1113,56 @@ function bindLongPress(node, fn, ms = 480) {
 }
 
 function showComicInfo(ch, f, displayTitle) {
-  document.querySelector('.info-frame.comic-info')?.remove();
-  const parsed = parseComicName(f.name, ch?.name);
-  const series = parsed?.series || seriesBase(f.name, ch?.name) || '—';
-  // Mismo texto que debajo de la carátula
-  const title = (displayTitle && String(displayTitle).trim())
-    || comicDisplay(f.name, ch?.name)
-    || '—';
-  const fmt = /\.cbz$/i.test(f.name) ? 'CBZ (ZIP)' : /\.cbr$/i.test(f.name) ? 'CBR (RAR)' : '—';
-  const pages = ch ? getPagesTotal(ch.id, f.id) : 0;
-  const pagesLabel = pages > 0 ? String(pages) : '— (se conoce al abrir)';
-  const storedFmt = ch ? getPageFormat(ch.id, f.id) : '';
-  const pageFmt = storedFmt || (pages > 0 ? '—' : '— (se detecta al abrir)');
+  try {
+    document.querySelector('.info-frame.comic-info')?.remove();
+    const parsed = parseComicName(f?.name || '', ch?.name);
+    const series = parsed?.series || seriesBase(f?.name || '', ch?.name) || '—';
+    const title = (displayTitle && String(displayTitle).trim())
+      || comicDisplay(f?.name || '', ch?.name)
+      || '—';
+    const fname = f?.name || '';
+    const fmt = /\.cbz$/i.test(fname) ? 'CBZ (ZIP)' : /\.cbr$/i.test(fname) ? 'CBR (RAR)' : '—';
+    const pages = (ch && f) ? getPagesTotal(ch.id, f.id) : 0;
+    const pagesLabel = pages > 0 ? String(pages) : '— (se conoce al abrir)';
+    let pageFmt = '— (se detecta al abrir)';
+    try {
+      const storedFmt = (ch && f) ? getPageFormat(ch.id, f.id) : '';
+      if (storedFmt) pageFmt = storedFmt;
+      else if (pages > 0) pageFmt = '—';
+    } catch (_) {}
 
-  const frame = el('div', 'info-frame comic-info');
-  const box = el('div', 'info-box');
-  const head = el('div', 'info-head');
-  head.append(el('span', '', 'Información'));
-  const close = el('button', 'btn info-close', '×');
-  close.setAttribute('aria-label', 'Cerrar');
-  close.onclick = () => frame.remove();
-  head.append(close);
-  const body = el('div', 'info-body');
-  const row = (label, value) => {
-    const r = el('div', 'info-row');
-    r.append(el('span', 'info-label', label), el('span', 'info-value', value));
-    return r;
-  };
-  body.append(el('div', 'info-sec', 'Cómic'));
-  body.append(row('Título', title));
-  body.append(row('Serie', series));
-  body.append(row('Canal', ch?.name || '—'));
-  body.append(row('Editorial', ch?.group || '—'));
-  body.append(row('Nombre archivo', f.name || '—'));
-  body.append(row('Formato archivo', fmt));
-  body.append(row('Tamaño', formatBytes(f.size)));
-  body.append(row('Número de páginas', pagesLabel));
-  body.append(row('Formato páginas', pageFmt));
-  box.append(head, body);
-  frame.append(box);
-  frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
-  document.body.append(frame);
+    const frame = el('div', 'info-frame comic-info');
+    const box = el('div', 'info-box');
+    const head = el('div', 'info-head');
+    head.append(el('span', '', 'Información'));
+    const close = el('button', 'btn info-close', '×');
+    close.setAttribute('aria-label', 'Cerrar');
+    close.onclick = () => frame.remove();
+    head.append(close);
+    const body = el('div', 'info-body');
+    const row = (label, value) => {
+      const r = el('div', 'info-row');
+      r.append(el('span', 'info-label', label), el('span', 'info-value', String(value ?? '—')));
+      return r;
+    };
+    body.append(el('div', 'info-sec', 'Cómic'));
+    body.append(row('Título', title));
+    body.append(row('Serie', series));
+    body.append(row('Canal', ch?.name || '—'));
+    body.append(row('Editorial', ch?.group || '—'));
+    body.append(row('Nombre archivo', fname || '—'));
+    body.append(row('Formato archivo', fmt));
+    body.append(row('Tamaño', formatBytes(f?.size)));
+    body.append(row('Número de páginas', pagesLabel));
+    body.append(row('Formato páginas', pageFmt));
+    box.append(head, body);
+    frame.append(box);
+    frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+    document.body.append(frame);
+  } catch (err) {
+    console.error('showComicInfo', err);
+    alert('No se pudo mostrar la información: ' + (err?.message || err));
+  }
 }
 
 
