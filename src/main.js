@@ -1347,44 +1347,59 @@ function channelsView(g) {
 function filesView(ch) {
   go(ch.name, async (e) => {
     let cur = [];
-    const single = (f) => {
-      const label = comicDisplay(f.name, ch.name);
-      return {
-        label,
-        sub: sizeLabel(f, ch),
-        cover: () => comicCover(ch, f),
-        go: () => openComic(ch, f, cur),
-        longPress: () => sheet(label, [
-          ['Información', () => showComicInfo(ch, f, label)],
-        ]),
-      };
-    };
     const draw = (files) => {
       if (!alive(e)) return;
       cur = files;
       if (!files.length) return msg('No hay archivos CBZ/CBR en este canal.');
       const un = ungroupMap(ch), items = [], redraw = () => draw(cur);
-      for (const { label, files: fs } of groupSeries(files, ch.name)) {
-        if (fs.length === 1) items.push(single(fs[0]));
-        else if (un[label.toLowerCase()]) {
-          const mode = un[label.toLowerCase()];
+
+      const makeComicItem = (f, displayLabel, seriesLabel, groupState) => {
+        // groupState: null = sin serie (solo), 'grouped' | 'short' | 'full'
+        const opts = [
+          ['Información', () => showComicInfo(ch, f, displayLabel)],
+        ];
+        if (groupState === 'short' || groupState === 'full') {
+          opts.push(['Volver a agrupar la serie', () => setUngroupMode(ch, seriesLabel, null, redraw)]);
+        } else if (groupState === 'grouped') {
+          opts.push(['Desagrupar serie', () => setUngroupMode(ch, seriesLabel, 'short', redraw)]);
+          opts.push(['Desagrupar serie (con nombre)', () => setUngroupMode(ch, seriesLabel, 'full', redraw)]);
+        }
+        return {
+          label: displayLabel,
+          sub: sizeLabel(f, ch),
+          cover: () => comicCover(ch, f),
+          go: () => openComic(ch, f, cur),
+          longPress: () => sheet(displayLabel, opts),
+          // Título: mismo menú (compatibilidad)
+          menu: groupState ? () => sheet(seriesLabel || displayLabel, opts.filter((o) => o[0] !== 'Información')) : undefined,
+        };
+      };
+
+      for (const { label: seriesLabel, files: fs } of groupSeries(files, ch.name)) {
+        if (fs.length === 1) {
+          const f = fs[0];
+          items.push(makeComicItem(f, comicDisplay(f.name, ch.name), seriesLabel, null));
+        } else if (un[seriesLabel.toLowerCase()]) {
+          const mode = un[seriesLabel.toLowerCase()];
           fs.forEach((f) => {
-            const it = single(f);
-            if (mode === 'short') it.label = issueLabel(label, f, ch.name);
-            items.push({
-              ...it,
-              menu: () => sheet(label, [['Volver a agrupar la serie', () => setUngroupMode(ch, label, null, redraw)]]),
-            });
+            const displayLabel = mode === 'short'
+              ? issueLabel(seriesLabel, f, ch.name)
+              : comicDisplay(f.name, ch.name);
+            items.push(makeComicItem(f, displayLabel, seriesLabel, mode));
           });
         } else {
           items.push({
-            label,
+            label: seriesLabel,
             sub: `${fs.length} números`,
             cover: () => comicCover(ch, fs[0], fs.length, true),
-            go: () => seriesView(ch, label, fs),
-            menu: () => sheet(label, [
-              ['Desagrupar serie', () => setUngroupMode(ch, label, 'short', redraw)],
-              ['Desagrupar serie (con nombre)', () => setUngroupMode(ch, label, 'full', redraw)],
+            go: () => seriesView(ch, seriesLabel, fs),
+            longPress: () => sheet(seriesLabel, [
+              ['Desagrupar serie', () => setUngroupMode(ch, seriesLabel, 'short', redraw)],
+              ['Desagrupar serie (con nombre)', () => setUngroupMode(ch, seriesLabel, 'full', redraw)],
+            ]),
+            menu: () => sheet(seriesLabel, [
+              ['Desagrupar serie', () => setUngroupMode(ch, seriesLabel, 'short', redraw)],
+              ['Desagrupar serie (con nombre)', () => setUngroupMode(ch, seriesLabel, 'full', redraw)],
             ]),
           });
         }
@@ -1400,26 +1415,24 @@ function filesView(ch) {
   });
 }
 function seriesView(ch, s, files) {
-  go(s, () => grid(files.map((f) => ({
-    label: (() => {
-      const p = parseComicName(f.name, ch.name);
-      if (p && p.series.toLowerCase() === s.toLowerCase()) return issueDisplay(p);
-      return issueLabel(s, f, ch.name);
-    })(),
-    sub: sizeLabel(f, ch),
-    cover: () => comicCover(ch, f),
-    go: () => openComic(ch, f, files),
-    longPress: () => {
-      const label = (() => {
-        const p = parseComicName(f.name, ch.name);
-        if (p && p.series.toLowerCase() === s.toLowerCase()) return issueDisplay(p);
-        return issueLabel(s, f, ch.name);
-      })();
-      return sheet(label, [
-        ['Información', () => showComicInfo(ch, f, label)],
-      ]);
-    },
-  })), true));
+  go(s, () => grid(files.map((f) => {
+    const p = parseComicName(f.name, ch.name);
+    const displayLabel = (p && p.series.toLowerCase() === s.toLowerCase())
+      ? issueDisplay(p)
+      : issueLabel(s, f, ch.name);
+    const opts = [
+      ['Información', () => showComicInfo(ch, f, displayLabel)],
+      ['Desagrupar serie', () => setUngroupMode(ch, s, 'short', () => history.back())],
+      ['Desagrupar serie (con nombre)', () => setUngroupMode(ch, s, 'full', () => history.back())],
+    ];
+    return {
+      label: displayLabel,
+      sub: sizeLabel(f, ch),
+      cover: () => comicCover(ch, f),
+      go: () => openComic(ch, f, files),
+      longPress: () => sheet(displayLabel, opts),
+    };
+  }), true));
 }
 
 // ---------- Lector ----------
