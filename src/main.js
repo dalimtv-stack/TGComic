@@ -103,60 +103,63 @@ const NUM = /[\s._-]*(?:#|n[º°]\.?|no\.|vol\.?|cap\.?|issue|núm\.?|parte|part
 const FIRST_ISSUE = /^(.+?)[\s._-]+(?:#|n[º°]\.?|no\.?|vol\.?|cap\.?|issue|núm\.?)?\s*\d+(?:\.\d+)?(?:\b|$)/i;
 const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /** Quita (paréntesis) y [corchetes] del tramo info */
-const cleanInfo = (s) => (s || '').replace(/\s*[(\[][^)\]]*[)\]]/g, '').replace(/\s+/g, ' ').trim();
+const cleanInfo = (s) => (s || '').replace(/\s*\[[^\]]*\]/g, '').replace(/\s*\((?!\d+\s*de\s*\d+)[^)]*\)/gi, '').replace(/\s+/g, ' ').trim();
 /**
  * Formatos preferidos:
- * 1.  [channel] - [serie] #[n] - [info]
- * 1a. [channel] - [serie] #[n]
- * 2.  [serie] #[n] - [info]
- * 2a. [serie] #[n]
- * No se muestra [channel] en etiquetas. [info] sin corchetes/paréntesis.
+ * 1.  [channel] - [serie] #[n|Special|Especial|Extra] [- info]
+ * 2.  [serie] #[n|Special|Especial|Extra] [- info]
+ * No se muestra [channel]. [corchetes] ocultos.
  */
+// Marcador tras #: número o Special / Especial / Extra
+const ISSUE_TAG = '(?:\\d+(?:\\.\\d+)?|Special|Especial|Extra)';
 function parseComicName(name, channelName) {
-  // Quitar (paréntesis) y [corchetes] antes de parsear
+  // Quitar solo [corchetes]; (1 de 2) puede permanecer hasta cleanInfo
   const raw = stripExt(name).replace(/_/g, ' ')
-    .replace(/\s*[(\[][^)\]]*[)\]]/g, '')
+    .replace(/\s*\[[^\]]*\]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
   if (!raw) return null;
   const ch = (channelName || '').trim();
+  const finish = (series, tag, info) => {
+    series = (series || '').trim();
+    if (!series) return null;
+    let number = String(tag || '').trim();
+    const low = number.toLowerCase();
+    if (low === 'special') number = 'Special';
+    else if (low === 'especial') number = 'Especial';
+    else if (low === 'extra') number = 'Extra';
+    return { series, number, info: cleanInfo(info || ''), channel: ch || '' };
+  };
   if (ch) {
     const re1 = new RegExp(
-      `^${escRe(ch)}\\s*-\\s*(.+?)\\s*#\\s*(\\d+(?:\\.\\d+)?)(?:\\s*-\\s*(.+))?$`,
+      `^${escRe(ch)}\\s*-\\s*(.+?)\\s*#\\s*(${ISSUE_TAG})(?:\\s*-\\s*(.+))?$`,
       'i'
     );
     const m1 = raw.match(re1);
     if (m1) {
-      const series = m1[1].trim();
-      const number = m1[2];
-      const info = cleanInfo(m1[3] || '');
-      if (series.length >= 1) {
-        return { series, number, info, channel: ch };
-      }
+      const out = finish(m1[1], m1[2], m1[3]);
+      if (out) return out;
     }
   }
-  // Formato 2 / 2a: serie #n [- info]  (el # es obligatorio para no partir "Año 3")
-  const m2 = raw.match(/^(.+?)\s*#\s*(\d+(?:\.\d+)?)(?:\s*-\s*(.+))?$/);
+  const re2 = new RegExp(`^(.+?)\\s*#\\s*(${ISSUE_TAG})(?:\\s*-\\s*(.+))?$`, 'i');
+  const m2 = raw.match(re2);
   if (m2) {
     let series = m2[1].trim();
-    // Si empieza por "Canal - ", quitar canal cuando coincida
     if (ch) {
       const pre = new RegExp(`^${escRe(ch)}\\s*-\\s*`, 'i');
       series = series.replace(pre, '').trim() || series;
     }
-    const number = m2[2];
-    const info = cleanInfo(m2[3] || '');
-    if (series.length >= 1) return { series, number, info, channel: ch || '' };
+    const out = finish(series, m2[2], m2[3]);
+    if (out) return out;
   }
   return null;
 }
-/** Etiqueta visible de un número: "#01" o "#01 - info" (sin canal ni serie) */
+/** Etiqueta visible: "#01", "#Special", "#Extra - Batmito 1" */
 function issueDisplay(parsed) {
   if (!parsed) return '';
   const base = '#' + parsed.number;
   return parsed.info ? `${base} - ${parsed.info}` : base;
 }
-/** Etiqueta completa sin canal: "Serie #01 - info" */
 function comicDisplay(name, channelName) {
   const p = parseComicName(name, channelName);
   if (p) {
