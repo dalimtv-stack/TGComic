@@ -116,6 +116,7 @@ function parseComicName(name, channelName) {
   // Quitar [corchetes], @sitios y basura; dejar el patrón serie #n
   const raw = stripExt(name).replace(/_/g, ' ')
     .replace(/\s*\[[^\]]*\]/g, '')
+    .replace(/\s*\((?!\d+\s*de\s*\d+)[^)]*\)/gi, '')
     .replace(/\s*@\S+/g, '')
     .replace(/\s+/g, ' ')
     .trim();
@@ -1085,19 +1086,19 @@ function bindLongPress(node, fn, ms = 480) {
   }, true);
 }
 
-function showComicInfo(ch, f) {
+function showComicInfo(ch, f, displayTitle) {
   document.querySelector('.info-frame.comic-info')?.remove();
   const parsed = parseComicName(f.name, ch?.name);
   const series = parsed?.series || seriesBase(f.name, ch?.name) || '—';
-  const title = parsed
-    ? (parsed.info ? `${series} #${parsed.number} - ${parsed.info}` : `${series} #${parsed.number}`)
-    : comicDisplay(f.name, ch?.name);
-  const ext = (f.name.match(/\.cb[zr]$/i) || [])[0] || '';
-  const fmt = /\.cbz$/i.test(f.name) ? 'CBZ (ZIP)' : /\.cbr$/i.test(f.name) ? 'CBR (RAR)' : (ext || '—');
+  // Mismo texto que debajo de la carátula
+  const title = (displayTitle && String(displayTitle).trim())
+    || comicDisplay(f.name, ch?.name)
+    || '—';
+  const fmt = /\.cbz$/i.test(f.name) ? 'CBZ (ZIP)' : /\.cbr$/i.test(f.name) ? 'CBR (RAR)' : '—';
   const pages = ch ? getPagesTotal(ch.id, f.id) : 0;
   const pagesLabel = pages > 0 ? String(pages) : '— (se conoce al abrir)';
-  // Formato de páginas: no se indexa hasta abrir; orientación genérica
-  const pageFmt = pages > 0 ? 'Imágenes (JPEG/PNG/WebP/…)' : '— (se detecta al abrir)';
+  const storedFmt = ch ? getPageFormat(ch.id, f.id) : '';
+  const pageFmt = storedFmt || (pages > 0 ? '—' : '— (se detecta al abrir)');
 
   const frame = el('div', 'info-frame comic-info');
   const box = el('div', 'info-box');
@@ -1114,7 +1115,7 @@ function showComicInfo(ch, f) {
     return r;
   };
   body.append(el('div', 'info-sec', 'Cómic'));
-  body.append(row('Título', title || '—'));
+  body.append(row('Título', title));
   body.append(row('Serie', series));
   body.append(row('Canal', ch?.name || '—'));
   body.append(row('Editorial', ch?.group || '—'));
@@ -1128,6 +1129,7 @@ function showComicInfo(ch, f) {
   frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
   document.body.append(frame);
 }
+
 
 function grid(items, withSearch) {
   const g = el('div', 'grid'), nodes = [];
@@ -1310,16 +1312,18 @@ function channelsView(g) {
 function filesView(ch) {
   go(ch.name, async (e) => {
     let cur = [];
-    const comicMenu = (f) => () => sheet(comicDisplay(f.name, ch.name), [
-      ['Información', () => showComicInfo(ch, f)],
-    ]);
-    const single = (f) => ({
-      label: comicDisplay(f.name, ch.name),
-      sub: sizeLabel(f, ch),
-      cover: () => comicCover(ch, f),
-      go: () => openComic(ch, f, cur),
-      longPress: comicMenu(f),
-    });
+    const single = (f) => {
+      const label = comicDisplay(f.name, ch.name);
+      return {
+        label,
+        sub: sizeLabel(f, ch),
+        cover: () => comicCover(ch, f),
+        go: () => openComic(ch, f, cur),
+        longPress: () => sheet(label, [
+          ['Información', () => showComicInfo(ch, f, label)],
+        ]),
+      };
+    };
     const draw = (files) => {
       if (!alive(e)) return;
       cur = files;
@@ -1370,9 +1374,16 @@ function seriesView(ch, s, files) {
     sub: sizeLabel(f, ch),
     cover: () => comicCover(ch, f),
     go: () => openComic(ch, f, files),
-    longPress: () => sheet(comicDisplay(f.name, ch.name), [
-      ['Información', () => showComicInfo(ch, f)],
-    ]),
+    longPress: () => {
+      const label = (() => {
+        const p = parseComicName(f.name, ch.name);
+        if (p && p.series.toLowerCase() === s.toLowerCase()) return issueDisplay(p);
+        return issueLabel(s, f, ch.name);
+      })();
+      return sheet(label, [
+        ['Información', () => showComicInfo(ch, f, label)],
+      ]);
+    },
   })), true));
 }
 
@@ -1425,7 +1436,11 @@ function openComic(ch, f, queue, opts = {}) {
 function reader(f, pages, zr, ctx) {
   const chId = ctx?.ch?.id;
   const savePage = (i) => { if (chId != null) setPageIndex(chId, f.id, i); };
-  if (chId != null) setPagesTotal(chId, f.id, pages.length);
+  if (chId != null) {
+    setPagesTotal(chId, f.id, pages.length);
+    const fmt = detectPageFormats(pages);
+    if (fmt) setPageFormat(chId, f.id, fmt);
+  }
   let n = Math.min(chId != null ? getPageIndex(chId, f.id) : 0, pages.length - 1);
   const urls = new Map();
   const load = (i) => {
