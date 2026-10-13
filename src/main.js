@@ -1296,17 +1296,16 @@ function reader(f, pages, zr, ctx) {
             slot.style.alignItems = 'center';
             slot.style.justifyContent = 'center';
           } else {
-            // Ancho = viewport; si es más alta, scroll vertical dentro del slot
+            // Ancho = viewport; overflow-y se activa en place() solo si es más alta
             im.style.width = vw() + 'px';
             im.style.maxWidth = vw() + 'px';
             im.style.height = 'auto';
             im.style.maxHeight = 'none';
             slot.style.overflowX = 'hidden';
-            slot.style.overflowY = 'auto';
+            slot.style.overflowY = 'hidden';
             slot.style.alignItems = 'flex-start';
             slot.style.justifyContent = 'center';
             slot.style.webkitOverflowScrolling = 'touch';
-            slot.style.touchAction = 'pan-x pan-y';
           }
           slot.style.height = '100%';
           slot.style.display = 'flex';
@@ -1351,6 +1350,15 @@ function reader(f, pages, zr, ctx) {
           slot.style.width = h + 'px';
           slot.style.minWidth = h + 'px';
           slot.style.marginRight = GAP + 'px';
+          // Solo si la imagen es más alta que la pantalla → scroll vertical interno
+          if (fitMode() === 'width') {
+            const tall = (im.offsetHeight || 0) > vh() + 4;
+            slot.style.overflowY = tall ? 'auto' : 'hidden';
+            slot.dataset.tall = tall ? '1' : '0';
+          } else {
+            slot.style.overflowY = 'hidden';
+            slot.dataset.tall = '0';
+          }
         } else {
           slot.style.height = h + 'px';
           slot.style.minHeight = h + 'px';
@@ -1487,58 +1495,68 @@ function reader(f, pages, zr, ctx) {
       }
       observers._resize = onOrient;
 
-      // Navegación entre páginas en Horizontal (gesto + rueda)
+      // Horizontal: scroll nativo entre páginas.
+      // Solo si Ancho + página más alta que la pantalla: bloqueo de eje
+      // (vertical → scroll interno; horizontal → cambiar página).
       if (horiz) {
-        // Gesto horizontal → siguiente/anterior (el vertical lo maneja el slot con overflow-y)
-        let tX = null, tY = null, tSlot = null;
+        let axis = null, sx = 0, sy = 0, baseLeft = 0, baseTop = 0, activeSlot = null;
         const onTs = (e) => {
-          if (e.touches.length !== 1) { tX = null; return; }
-          tX = e.touches[0].clientX;
-          tY = e.touches[0].clientY;
-          tSlot = e.target.closest?.('.slot') || slots[n];
+          if (e.touches.length !== 1) { axis = null; return; }
+          axis = null;
+          sx = e.touches[0].clientX;
+          sy = e.touches[0].clientY;
+          baseLeft = rd.scrollLeft;
+          activeSlot = slots[n];
+          baseTop = activeSlot ? activeSlot.scrollTop : 0;
         };
-        const onTe = (e) => {
-          if (tX == null) return;
-          const dx = e.changedTouches[0].clientX - tX;
-          const dy = e.changedTouches[0].clientY - tY;
-          tX = null;
-          // Solo si el gesto es claramente horizontal
-          if (Math.abs(dx) < 55 || Math.abs(dx) < 1.4 * Math.abs(dy)) return;
-          // Si el slot puede hacer scroll vertical y el gesto fue más vertical, ya filtrado arriba
-          if (dx < 0) goToPage(n + 1);
-          else goToPage(n - 1);
+        const onTm = (e) => {
+          // Solo intervenir en Ancho cuando la página actual es alta
+          if (fitMode() !== 'width' || !activeSlot || activeSlot.dataset.tall !== '1') return;
+          if (e.touches.length !== 1) return;
+          const x = e.touches[0].clientX, y = e.touches[0].clientY;
+          const dx = x - sx, dy = y - sy;
+          if (!axis) {
+            if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+            axis = Math.abs(dx) > Math.abs(dy) * 1.15 ? 'x' : 'y';
+          }
+          if (axis === 'x') {
+            e.preventDefault();
+            rd.scrollLeft = baseLeft - dx;
+          } else if (axis === 'y') {
+            e.preventDefault();
+            activeSlot.scrollTop = baseTop - dy;
+          }
+        };
+        const onTe = () => {
+          if (axis === 'x') {
+            // Encajar en la página más cercana según scrollLeft
+            const mid = rd.scrollLeft + rd.clientWidth * 0.35;
+            const idx = pageAt(mid);
+            if (idx !== n) goToPage(idx);
+            else jumpTo(n);
+          }
+          axis = null;
+          activeSlot = null;
         };
         rd.addEventListener('touchstart', onTs, { passive: true });
+        rd.addEventListener('touchmove', onTm, { passive: false });
         rd.addEventListener('touchend', onTe, { passive: true });
+        rd.addEventListener('touchcancel', onTe, { passive: true });
         observers._touchStart = onTs;
+        observers._touchMove = onTm;
         observers._touchEnd = onTe;
 
+        // PC: rueda vertical solo si la página es alta; al borde, siguiente/anterior
         const onWheelH = (e) => {
-          if (fitMode() !== 'width') {
-            if (Math.abs(e.deltaY) > 8 || Math.abs(e.deltaX) > 8) {
-              e.preventDefault();
-              const dir = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-              if (dir > 10) goToPage(n + 1);
-              else if (dir < -10) goToPage(n - 1);
-            }
-            return;
-          }
+          if (fitMode() !== 'width') return; // nativo / sin saltos artificiales
           const slot = slots[n];
-          if (!slot) return;
-          // Rueda horizontal o shift+rueda → cambiar página
-          if (Math.abs(e.deltaX) > 10 && Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
-            e.preventDefault();
-            if (e.deltaX > 0) goToPage(n + 1);
-            else goToPage(n - 1);
-            return;
-          }
+          if (!slot || slot.dataset.tall !== '1') return;
           const canY = slot.scrollHeight > slot.clientHeight + 2;
-          if (canY) {
-            const atTop = slot.scrollTop <= 0;
-            const atBot = slot.scrollTop + slot.clientHeight >= slot.scrollHeight - 2;
-            if ((e.deltaY < 0 && !atTop) || (e.deltaY > 0 && !atBot)) return;
-          }
-          if (Math.abs(e.deltaY) > 10) {
+          if (!canY) return;
+          const atTop = slot.scrollTop <= 0;
+          const atBot = slot.scrollTop + slot.clientHeight >= slot.scrollHeight - 2;
+          if ((e.deltaY < 0 && !atTop) || (e.deltaY > 0 && !atBot)) return; // scroll interno nativo
+          if (Math.abs(e.deltaY) > 12) {
             e.preventDefault();
             if (e.deltaY > 0) goToPage(n + 1);
             else goToPage(n - 1);
@@ -1557,7 +1575,11 @@ function reader(f, pages, zr, ctx) {
       if (observers._scroll) rd.removeEventListener('scroll', observers._scroll);
       if (observers._wheel) rd.removeEventListener('wheel', observers._wheel);
       if (observers._touchStart) rd.removeEventListener('touchstart', observers._touchStart);
-      if (observers._touchEnd) rd.removeEventListener('touchend', observers._touchEnd);
+      if (observers._touchMove) rd.removeEventListener('touchmove', observers._touchMove);
+      if (observers._touchEnd) {
+        rd.removeEventListener('touchend', observers._touchEnd);
+        rd.removeEventListener('touchcancel', observers._touchEnd);
+      }
       if (observers._resize) {
         removeEventListener('resize', observers._resize);
         removeEventListener('orientationchange', observers._resize);
