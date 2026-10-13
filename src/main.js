@@ -98,31 +98,95 @@ const readProgress = (chId, msgId) => {
 
 // Nombre limpio: sin extensión, guiones bajos, etiquetas [..] (..) ni marcas @sitio
 const clean = (n) => stripExt(n).replace(/_/g, ' ').replace(/\s*[(\[][^)\]]*[)\]]/g, '').replace(/\s*@\S+/g, '').replace(/\s+/g, ' ').trim();
-// Número al final: "#13", "Nº 5", "Vol. 2", "01 de 12"...
+// Número al final (legado)
 const NUM = /[\s._-]*(?:#|n[º°]\.?|no\.|vol\.?|cap\.?|issue|núm\.?|parte|part|tomo)?\s*\d+(?:\.\d+)?(?:\s*(?:de|of)\s*\d+)?\s*$/i;
-// Primer número de episodio en el nombre (permite "Serie #01 - Batman #575")
 const FIRST_ISSUE = /^(.+?)[\s._-]+(?:#|n[º°]\.?|no\.?|vol\.?|cap\.?|issue|núm\.?)?\s*\d+(?:\.\d+)?(?:\b|$)/i;
-/** Base de serie a partir del nombre del archivo */
-function seriesBase(name) {
+const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** Quita (paréntesis) y [corchetes] del tramo info */
+const cleanInfo = (s) => (s || '').replace(/\s*[(\[][^)\]]*[)\]]/g, '').replace(/\s+/g, ' ').trim();
+/**
+ * Formatos preferidos:
+ * 1.  [channel] - [serie] #[n] - [info]
+ * 1a. [channel] - [serie] #[n]
+ * 2.  [serie] #[n] - [info]
+ * 2a. [serie] #[n]
+ * No se muestra [channel] en etiquetas. [info] sin corchetes/paréntesis.
+ */
+function parseComicName(name, channelName) {
+  // Quitar (paréntesis) y [corchetes] antes de parsear
+  const raw = stripExt(name).replace(/_/g, ' ')
+    .replace(/\s*[(\[][^)\]]*[)\]]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!raw) return null;
+  const ch = (channelName || '').trim();
+  if (ch) {
+    const re1 = new RegExp(
+      `^${escRe(ch)}\\s*-\\s*(.+?)\\s*#\\s*(\\d+(?:\\.\\d+)?)(?:\\s*-\\s*(.+))?$`,
+      'i'
+    );
+    const m1 = raw.match(re1);
+    if (m1) {
+      const series = m1[1].trim();
+      const number = m1[2];
+      const info = cleanInfo(m1[3] || '');
+      if (series.length >= 1) {
+        return { series, number, info, channel: ch };
+      }
+    }
+  }
+  // Formato 2 / 2a: serie #n [- info]  (el # es obligatorio para no partir "Año 3")
+  const m2 = raw.match(/^(.+?)\s*#\s*(\d+(?:\.\d+)?)(?:\s*-\s*(.+))?$/);
+  if (m2) {
+    let series = m2[1].trim();
+    // Si empieza por "Canal - ", quitar canal cuando coincida
+    if (ch) {
+      const pre = new RegExp(`^${escRe(ch)}\\s*-\\s*`, 'i');
+      series = series.replace(pre, '').trim() || series;
+    }
+    const number = m2[2];
+    const info = cleanInfo(m2[3] || '');
+    if (series.length >= 1) return { series, number, info, channel: ch || '' };
+  }
+  return null;
+}
+/** Etiqueta visible de un número: "#01" o "#01 - info" (sin canal ni serie) */
+function issueDisplay(parsed) {
+  if (!parsed) return '';
+  const base = '#' + parsed.number;
+  return parsed.info ? `${base} - ${parsed.info}` : base;
+}
+/** Etiqueta completa sin canal: "Serie #01 - info" */
+function comicDisplay(name, channelName) {
+  const p = parseComicName(name, channelName);
+  if (p) {
+    const iss = issueDisplay(p);
+    return p.series ? `${p.series} ${iss}` : iss;
+  }
+  return clean(name);
+}
+/** Base de serie (legado si no hay formato nuevo) */
+function seriesBase(name, channelName) {
+  const p = parseComicName(name, channelName);
+  if (p?.series) return p.series;
   const c = clean(name);
   if (!c) return '';
-  // 1) Texto antes del primer "#01" / "Nº 2" / etc. → "La Sombra del Murcielago #01 - Batman #575"
   const m = c.match(FIRST_ISSUE);
   if (m) {
     const base = m[1].replace(/[\s._-]+$/, '').trim();
-    // Evitar bases demasiado cortas o solo números
     if (base.length >= 3 && !/^\d+$/.test(base)) return base;
   }
-  // 2) Quitar solo el número final → "Batman - The Long Halloween #01"
   const b = c.replace(NUM, '').replace(/[\s._-]+$/, '').trim();
   if (b && b !== c && b.length >= 3) return b;
   return '';
 }
 // Agrupa por serie; los especiales sin número que empiezan igual se unen
-function groupSeries(files) {
+function groupSeries(files, channelName) {
   const by = new Map(), loose = [];
   for (const f of files) {
-    const c = clean(f.name), b = seriesBase(f.name);
+    const p = parseComicName(f.name, channelName);
+    const b = p?.series || seriesBase(f.name, channelName);
+    const c = p ? comicDisplay(f.name, channelName) : clean(f.name);
     if (b) {
       const k = b.toLowerCase();
       (by.get(k) || by.set(k, { label: b, files: [] }).get(k)).files.push(f);
@@ -140,7 +204,10 @@ function groupSeries(files) {
     if (g) g.files.push(f); else rest.push({ label: c, files: [f] });
   }
   return [...groups, ...rest]
-    .map((g) => ({ label: g.label, files: g.files.sort((x, y) => natural(clean(x.name), clean(y.name))) }))
+    .map((g) => ({
+      label: g.label,
+      files: g.files.sort((x, y) => natural(comicDisplay(x.name, channelName), comicDisplay(y.name, channelName))),
+    }))
     .sort((x, y) => natural(x.label, y.label));
 }
 const pagesOf = (entries) => entries.filter((e) => !e.directory && /\.(jpe?g|png|webp|gif|avif)$/i.test(e.filename)).sort((a, b) => natural(a.filename, b.filename));
@@ -705,7 +772,9 @@ function setUngroupMode(ch, label, mode, after) {
   after?.();
 }
 /** Etiqueta de número sin el nombre de la serie */
-function issueLabel(series, f) {
+function issueLabel(series, f, channelName) {
+  const p = parseComicName(f.name, channelName);
+  if (p && p.series.toLowerCase() === series.toLowerCase()) return issueDisplay(p);
   const c = clean(f.name);
   let r = c.toLowerCase().startsWith(series.toLowerCase()) ? c.slice(series.length) : c;
   r = r.replace(/^[\s._-]+/, '');
@@ -820,19 +889,19 @@ function channelsView(g) {
 function filesView(ch) {
   go(ch.name, async (e) => {
     let cur = [];
-    const single = (f) => ({ label: clean(f.name), sub: sizeLabel(f, ch), cover: () => comicCover(ch, f), go: () => openComic(ch, f, cur) });
+    const single = (f) => ({ label: comicDisplay(f.name, ch.name), sub: sizeLabel(f, ch), cover: () => comicCover(ch, f), go: () => openComic(ch, f, cur) });
     const draw = (files) => {
       if (!alive(e)) return;
       cur = files;
       if (!files.length) return msg('No hay archivos CBZ/CBR en este canal.');
       const un = ungroupMap(ch), items = [], redraw = () => draw(cur);
-      for (const { label, files: fs } of groupSeries(files)) {
+      for (const { label, files: fs } of groupSeries(files, ch.name)) {
         if (fs.length === 1) items.push(single(fs[0]));
         else if (un[label.toLowerCase()]) {
           const mode = un[label.toLowerCase()];
           fs.forEach((f) => {
             const it = single(f);
-            if (mode === 'short') it.label = issueLabel(label, f);
+            if (mode === 'short') it.label = issueLabel(label, f, ch.name);
             items.push({
               ...it,
               menu: () => sheet(label, [['Volver a agrupar la serie', () => setUngroupMode(ch, label, null, redraw)]]),
@@ -864,11 +933,9 @@ function filesView(ch) {
 function seriesView(ch, s, files) {
   go(s, () => grid(files.map((f) => ({
     label: (() => {
-      const c = clean(f.name);
-      let r = c.startsWith(s) ? c.slice(s.length) : c;
-      r = r.replace(/^[\s._-]+/, '');
-      if (/^\d/.test(r)) r = '#' + r;
-      return r || c;
+      const p = parseComicName(f.name, ch.name);
+      if (p && p.series.toLowerCase() === s.toLowerCase()) return issueDisplay(p);
+      return issueLabel(s, f, ch.name);
     })(),
     sub: sizeLabel(f, ch), cover: () => comicCover(ch, f), go: () => openComic(ch, f, files),
   })), true));
@@ -879,7 +946,7 @@ async function resolveQueue(ch, f) {
   try {
     let files = (await kv.get('f:' + ch.id)) || [];
     if (!files.length) files = await fetchFiles(ch);
-    for (const { files: fs } of groupSeries(files)) {
+    for (const { files: fs } of groupSeries(files, ch.name)) {
       if (fs.some((x) => x.id === f.id)) return fs.length > 1 ? fs : files;
     }
     return files;
@@ -1122,13 +1189,21 @@ function reader(f, pages, zr, ctx) {
       fit.onclick = () => {
         setPref('fit', fitMode() === 'screen' ? 'width' : 'screen');
         rd.className = (horiz ? 'horiz' : 'vert') + ' fit-' + fitMode();
+        GAP = gapOf();
         fitLabel();
         pokeUI();
+        // Actualizar márgenes de slots
+        slots.forEach((s) => {
+          if (horiz) s.style.marginRight = GAP + 'px';
+          else s.style.marginBottom = GAP + 'px';
+        });
         onResize?.();
       };
       fitLabel();
       cluster.append(gridBtn, fit, cnt);
-      const GAP = 10;
+      // En modo Pantalla no hace falta hueco extra entre páginas (ya ocupan el viewport)
+      const gapOf = () => (fitMode() === 'screen' ? 0 : 10);
+      let GAP = gapOf();
       const estH = Math.round(Math.min(window.innerWidth, 900) * 1.42);
       const estW = Math.round(window.innerHeight * 0.7);
       const sizes = new Array(pages.length).fill(horiz ? estW : estH);
@@ -1148,8 +1223,12 @@ function reader(f, pages, zr, ctx) {
         return d;
       });
       const topPad = el('div', horiz ? 'horiz-pad-start' : 'vert-pad-top');
-      if (horiz) topPad.style.width = Math.round(window.innerWidth * 0.08) + 'px';
-      else topPad.style.height = Math.round(window.innerHeight * 0.2) + 'px';
+      const padSize = () => {
+        if (fitMode() === 'screen') return 0;
+        return horiz ? Math.round(window.innerWidth * 0.04) : Math.round(window.innerHeight * 0.12);
+      };
+      if (horiz) topPad.style.width = padSize() + 'px';
+      else topPad.style.height = padSize() + 'px';
       const foot = el('div', 'next-comic');
       if (hasNext) {
         const nb = el('button', 'btn next-btn', 'Siguiente número →');
@@ -1165,16 +1244,14 @@ function reader(f, pages, zr, ctx) {
       let scrollT = 0;
 
       const posOf = (i) => {
-        let y = horiz
-          ? (topPad.offsetWidth || Math.round(window.innerWidth * 0.08))
-          : (topPad.offsetHeight || Math.round(window.innerHeight * 0.2));
+        let y = topPad.offsetWidth || topPad.offsetHeight || padSize();
+        if (!horiz) y = topPad.offsetHeight || padSize();
+        else y = topPad.offsetWidth || padSize();
         for (let k = 0; k < i; k++) y += sizes[k] + GAP;
         return y;
       };
       const pageAt = (scrollMid) => {
-        let y = horiz
-          ? (topPad.offsetWidth || Math.round(window.innerWidth * 0.08))
-          : (topPad.offsetHeight || Math.round(window.innerHeight * 0.2));
+        let y = horiz ? (topPad.offsetWidth || padSize()) : (topPad.offsetHeight || padSize());
         for (let k = 0; k < pages.length; k++) {
           const h = sizes[k] + GAP;
           if (y + h > scrollMid) return k;
@@ -1186,32 +1263,57 @@ function reader(f, pages, zr, ctx) {
       const place = (i, im) => {
         const slot = slots[i];
         const prev = sizes[i];
+        const screen = fitMode() === 'screen';
         im.style.display = 'block';
-        if (horiz) {
-          im.style.height = '100%';
-          im.style.width = 'auto';
-          im.style.maxHeight = '100%';
-          slot.style.width = 'auto';
-          slot.style.minWidth = '0';
-          slot.style.height = '100%';
-        } else {
-          im.style.width = '100%';
-          im.style.height = 'auto';
-          im.style.maxWidth = '100%';
-          slot.style.height = 'auto';
-          slot.style.minHeight = '0';
-        }
         slot.replaceChildren(im);
+        if (horiz) {
+          if (screen) {
+            im.style.maxHeight = '100dvh';
+            im.style.maxWidth = '100vw';
+            im.style.height = 'auto';
+            im.style.width = 'auto';
+            im.style.objectFit = 'contain';
+            slot.style.height = '100%';
+            slot.style.width = 'auto';
+            slot.style.minWidth = '0';
+          } else {
+            im.style.height = '100%';
+            im.style.width = 'auto';
+            im.style.maxHeight = '100%';
+            slot.style.height = '100%';
+            slot.style.width = 'auto';
+            slot.style.minWidth = '0';
+          }
+        } else {
+          if (screen) {
+            im.style.maxHeight = '100dvh';
+            im.style.maxWidth = '100%';
+            im.style.width = 'auto';
+            im.style.height = 'auto';
+            im.style.objectFit = 'contain';
+            slot.style.height = 'auto';
+            slot.style.minHeight = '0';
+          } else {
+            im.style.width = '100%';
+            im.style.height = 'auto';
+            im.style.maxWidth = '100%';
+            slot.style.height = 'auto';
+            slot.style.minHeight = '0';
+          }
+        }
+        // Medir tamaño real tras layout
         const h = horiz
-          ? Math.max(slot.offsetWidth, im.offsetWidth, 1)
-          : Math.max(slot.offsetHeight, im.offsetHeight, 1);
+          ? Math.max(im.offsetWidth || 0, slot.offsetWidth || 0, 1)
+          : Math.max(im.offsetHeight || 0, slot.offsetHeight || 0, 1);
         sizes[i] = h;
         if (horiz) {
           slot.style.width = h + 'px';
           slot.style.minWidth = h + 'px';
+          slot.style.marginRight = GAP + 'px';
         } else {
           slot.style.height = h + 'px';
           slot.style.minHeight = h + 'px';
+          slot.style.marginBottom = GAP + 'px';
         }
         const delta = h - prev;
         if (!syncLock && delta) {
@@ -1312,8 +1414,9 @@ function reader(f, pages, zr, ctx) {
         const vh = window.innerHeight;
         rd.style.width = w + 'px';
         rd.style.height = vh + 'px';
-        if (horiz) topPad.style.width = Math.round(w * 0.08) + 'px';
-        else topPad.style.height = Math.round(vh * 0.2) + 'px';
+        if (horiz) topPad.style.width = padSize() + 'px';
+        else topPad.style.height = padSize() + 'px';
+        GAP = gapOf();
         const newEst = horiz ? Math.round(vh * 0.7) : Math.round(Math.min(w, 900) * 1.42);
         for (let i = 0; i < pages.length; i++) {
           const im = slots[i].querySelector('img');
