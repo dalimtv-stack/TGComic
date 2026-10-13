@@ -29,8 +29,9 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 /* Home */
 .sec-title{margin:.85rem .9rem .35rem;font-size:.78rem;font-weight:650;letter-spacing:.06em;text-transform:uppercase;color:var(--mut)}
 .sec-sep{height:1px;margin:1.1rem 1.25rem .4rem;background:linear-gradient(90deg,transparent,#ffffff18 20%,#ffffff18 80%,transparent)}
-.continue{padding:.15rem .75rem .35rem}
-.continue-row{display:flex;align-items:stretch;gap:.85rem;width:100%;margin:0;padding:.55rem .65rem;border:0;border-radius:14px;background:var(--card);color:inherit;font:inherit;text-align:left;cursor:pointer}
+.continue{padding:.15rem 0 .35rem}
+.continue .sec-title{padding-left:.9rem;padding-right:.9rem}
+.continue-row{display:flex;align-items:stretch;gap:.85rem;width:100%;margin:0;padding:.55rem .65rem;border:0;border-radius:14px;background:var(--card);color:inherit;font:inherit;text-align:left;cursor:pointer;box-sizing:border-box}
 .continue-row:active{opacity:.85}
 .continue-cover{flex:none;width:56px;height:84px;border-radius:8px;background:#121316;overflow:hidden;display:grid;place-items:center;font-size:1.35rem;font-weight:700;color:var(--mut);box-shadow:0 3px 10px #0006}
 .continue-cover img{width:100%;height:100%;object-fit:cover;display:block}
@@ -300,12 +301,21 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 
 /* Seguir leyendo deslizable */
 .continue-track{
-  display:flex;gap:.65rem;overflow-x:auto;-webkit-overflow-scrolling:touch;
-  scroll-snap-type:x mandatory;padding:0 .15rem .25rem;
-  scrollbar-width:none
+  display:flex;flex-direction:row;flex-wrap:nowrap;gap:.65rem;
+  overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;
+  scroll-snap-type:x mandatory;
+  padding:0 .75rem .35rem;
+  scrollbar-width:none;touch-action:pan-x;
 }
 .continue-track::-webkit-scrollbar{display:none}
 .continue-slide{
-  flex:0 0 min(88%,320px);scroll-snap-align:start;max-width:320px
+  flex:0 0 82%;
+  width:82%;
+  max-width:340px;
+  min-width:260px;
+  scroll-snap-align:start;
+}
+@media (min-width:600px){
+  .continue-slide{flex-basis:320px;width:320px}
 }
 .app-menu-item.menu-check.on{color:var(--acc)}

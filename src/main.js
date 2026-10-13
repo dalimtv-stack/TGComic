@@ -191,13 +191,16 @@ const setLastRead = (ch, f) => {
 };
 
 const readProgress = (chId, msgId) => {
+  const marked = (() => { try { return localStorage.getItem(readFlagKey(chId, msgId)) === '1'; } catch { return false; } })();
   const cur = getPageIndex(chId, msgId);
   const tot = getPagesTotal(chId, msgId);
-  if (!tot || tot < 1) return null;
-  if (cur <= 0 && localStorage.getItem(readFlagKey(chId, msgId)) !== '1') return null;
-  if (localStorage.getItem(readFlagKey(chId, msgId)) === '1') {
-    return { cur: tot, tot, pct: 100 };
+  // Marcado leído a mano: siempre 100% (aunque no se conozcan páginas)
+  if (marked) {
+    const t = tot > 0 ? tot : 1;
+    return { cur: t, tot: t, pct: 100 };
   }
+  if (!tot || tot < 1) return null;
+  if (cur <= 0) return null;
   return { cur: cur + 1, tot, pct: Math.min(100, Math.round(((cur + 1) / tot) * 100)) };
 };
 
@@ -1001,6 +1004,14 @@ function comicCover(ch, f, badge, series) {
     d.append(bar);
     const pb = el('span', 'prog-badge', prog.pct >= 95 ? '✓' : prog.pct + '%');
     d.append(pb);
+  } else if (!series && isComicRead(ch.id, f.id)) {
+    // Fallback visual si isComicRead y aún no hay progreso calculable
+    const bar = el('div', 'prog');
+    const fill = el('div', 'prog-fill');
+    fill.style.width = '100%';
+    bar.append(fill);
+    d.append(bar);
+    d.append(el('span', 'prog-badge', '✓'));
   }
   d._load = async () => {
     const b = await getCover(ch, f);
@@ -2319,17 +2330,36 @@ function groupsView() {
 function channelsView(g) {
   go(groupDisplayName(g), async (e) => {
     const chs = LIB.filter((c) => c.group === g);
+    let searchIndex = null;
+
+    const buildIndex = async () => {
+      // Mismo formato que el buscador general, acotado a esta editorial
+      return buildSearchIndex({
+        LIB: chs,
+        getFiles: async (ch) => (await kv.get('f:' + ch.id)) || [],
+        groupDisplayName,
+        channelDisplayName,
+        seriesDisplayName,
+        groupSeries,
+        comicDisplay,
+        comicDisplayName,
+        openSeries: (ch, seriesLabel, fs) => seriesView(ch, seriesLabel, fs),
+        openComic: (ch, f) => openComic(ch, f),
+        openGroup: () => {},
+        openChannel: (ch) => filesView(ch),
+      });
+    };
+
     const build = async () => {
-      const items = [];
+      if (!alive(e)) return;
+      const gridItems = [];
       for (const ch of chs) {
         const files = (await kv.get('f:' + ch.id)) || [];
         const n = files.length;
         const label = channelDisplayName(ch);
-        const names = (files || []).map((f) => f.name || '').join(' ');
-        items.push({
+        gridItems.push({
           label,
           sub: n ? (n === 1 ? '1 cómic' : `${n} cómics`) : '',
-          searchText: (label + ' ' + (ch.name || '') + ' ' + names).toLowerCase(),
           cover: () => channelCoverNode(ch),
           go: () => filesView(ch),
           longPress: () => sheet(label, [
@@ -2338,16 +2368,127 @@ function channelsView(g) {
           ]),
         });
       }
-      items.sort((a, b) => natural(a.label, b.label));
-      if (alive(e)) grid(items, true, 'Buscar en esta editorial…');
+      gridItems.sort((a, b) => natural(a.label, b.label));
+
+      // UI: buscador estilo home + grid de canales (o lista de resultados)
+      const nodes = [];
+      const searchWrap = el('div', 'home-search-wrap');
+      const s = el('input');
+      s.type = 'search';
+      s.placeholder = 'Buscar canal, serie o cómic en esta editorial…';
+      s.autocomplete = 'off';
+      s.value = channelsView._q?.[g] || '';
+      const clearBtn = el('button', 'search-clear', '×');
+      clearBtn.type = 'button';
+      clearBtn.hidden = !s.value;
+      clearBtn.setAttribute('aria-label', 'Cerrar búsqueda');
+      searchWrap.append(s, clearBtn);
+      nodes.push(searchWrap);
+
+      const resultsHost = el('div', 'home-search-results');
+      resultsHost.hidden = true;
+      nodes.push(resultsHost);
+
+      const gridHost = el('div', 'grid');
+      nodes.push(gridHost);
+
+      const paintGrid = () => {
+        gridHost.hidden = false;
+        resultsHost.hidden = true;
+        gridHost.replaceChildren(...gridItems.map((i) => {
+          const c = el('div', 'card'), hit = el('button', 'hit'), name = el('div', 'name'), t = el('b', '', i.label);
+          hit.append(i.cover());
+          hit.onclick = i.go;
+          if (i.longPress) bindLongPress(hit, i.longPress);
+          t.onclick = i.go;
+          if (i.longPress) bindLongPress(t, i.longPress);
+          name.append(t);
+          c.append(hit, name);
+          if (i.sub) c.append(el('small', '', i.sub));
+          return c;
+        }));
+      };
+
+      const showResults = (list, q) => {
+        resultsHost.replaceChildren();
+        if (!q) {
+          paintGrid();
+          return;
+        }
+        gridHost.hidden = true;
+        resultsHost.hidden = false;
+        if (!list.length) {
+          resultsHost.append(el('p', 'home-search-empty', 'Sin resultados para «' + q + '»'));
+          return;
+        }
+        // No mostrar filas de tipo "group" (es la editorial actual)
+        const filtered = list.filter((x) => x.type !== 'group');
+        resultsHost.append(el('div', 'home-search-meta', filtered.length + (filtered.length === 1 ? ' resultado' : ' resultados')));
+        const listEl = el('div', 'home-search-list');
+        for (const item of filtered.slice(0, 100)) {
+          const btn = el('button', 'home-search-row');
+          btn.type = 'button';
+          btn.append(
+            el('span', 'home-search-badge type-' + (item.type || ''), item.typeLabel || ''),
+            (() => {
+              const text = el('div', 'home-search-text');
+              text.append(el('b', '', item.label));
+              if (item.sub) text.append(el('small', '', item.sub));
+              return text;
+            })()
+          );
+          btn.onclick = () => item.go?.();
+          listEl.append(btn);
+        }
+        resultsHost.append(listEl);
+      };
+
+      let timer = null;
+      const runSearch = () => {
+        const q = s.value.trim();
+        if (!channelsView._q) channelsView._q = {};
+        channelsView._q[g] = s.value;
+        clearBtn.hidden = !s.value;
+        clearTimeout(timer);
+        if (!q) {
+          showResults([], '');
+          return;
+        }
+        resultsHost.hidden = false;
+        gridHost.hidden = true;
+        resultsHost.replaceChildren(el('p', 'home-search-empty', 'Buscando…'));
+        timer = setTimeout(async () => {
+          if (!searchIndex) searchIndex = await buildIndex();
+          let hits = filterSearchIndex(searchIndex, q);
+          if (pref('showUnreadOnly', '0') === '1') {
+            hits = hits.filter((h) => {
+              if (h.type === 'comic' && h.ch && h.f) return !isComicRead(h.ch.id, h.f.id);
+              return true;
+            });
+          }
+          if ((channelsView._q?.[g] || '').trim() !== q) return;
+          showResults(hits, q);
+        }, 180);
+      };
+      clearBtn.onclick = () => { s.value = ''; runSearch(); s.focus(); };
+      s.oninput = runSearch;
+
+      app.replaceChildren(...nodes);
+      if (s.value.trim()) runSearch();
+      else paintGrid();
+      window.scrollTo(0, 0);
+      lastScrollY = 0;
     };
+
     await build();
-    // refrescar listados en segundo plano para rellenar conteos
     mapLimit(chs, 3, async (ch) => {
       try {
         const fresh = await fetchFiles(ch);
         const cached = await kv.get('f:' + ch.id);
-        if (JSON.stringify(fresh) !== JSON.stringify(cached)) await build();
+        if (JSON.stringify(fresh) !== JSON.stringify(cached)) {
+          searchIndex = null;
+          await build();
+        }
       } catch (_) {}
     });
   });
@@ -2374,6 +2515,13 @@ function filesView(ch) {
         ];
         if (seriesLabel && groupState) {
           opts.push(['Editar serie', () => showEditSeries(ch, seriesLabel, seriesFiles || [], redraw)]);
+        }
+        // Serie desagrupada o agrupada: poder marcar toda la serie desde un número
+        if (seriesLabel && seriesFiles && seriesFiles.length > 1) {
+          const anyUnread = seriesFiles.some((x) => !isComicRead(ch.id, x.id));
+          opts.push(anyUnread
+            ? ['Marcar serie como leída', () => markSeriesRead(ch, seriesFiles, redraw)]
+            : ['Marcar serie como no leída', () => markSeriesUnread(ch, seriesFiles, redraw)]);
         }
         if (groupState === 'short' || groupState === 'full') {
           opts.push(['Volver a agrupar la serie', () => setUngroupMode(ch, seriesLabel, null, redraw)]);
