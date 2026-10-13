@@ -158,3 +158,13 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 .edit-actions{display:flex;gap:.5rem;justify-content:flex-end}
 .edit-actions .btn{flex:1;height:48px}
 .edit-save{background:var(--acc)!important;color:#1a1408!important;font-weight:700}
+
+/* Selector de portada de serie */
+.cover-pick-box{width:min(480px,100%);max-height:min(90vh,720px)}
+.cover-pick-hint{margin:.25rem 0 .75rem;color:var(--mut);font-size:.88rem;line-height:1.35}
+.cover-pick-device{width:100%;height:48px;margin-bottom:.75rem;background:#2a2b30}
+.cover-pick-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.55rem;padding-bottom:.5rem}
+.cover-pick-cell{border:0;background:transparent;color:inherit;font:inherit;padding:0;cursor:pointer;text-align:center}
+.cover-pick-thumb{aspect-ratio:2/3;border-radius:10px;background:#141518;overflow:hidden;display:grid;place-items:center;margin-bottom:.3rem}
+.cover-pick-thumb img{width:100%;height:100%;object-fit:cover}
+.cover-pick-lab{display:block;font-size:.72rem;color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
