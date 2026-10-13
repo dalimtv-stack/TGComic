@@ -1554,6 +1554,302 @@ async function getGithubChannelArtBlob(ch) {
   } catch (_) {}
   return null;
 }
+
+/** Editoriales (groups): nombre y portada */
+const gnKey = 'groupNames';
+function groupRenameMap() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(gnKey) || '{}');
+    return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  } catch { return {}; }
+}
+function groupDisplayName(name) {
+  const n = String(name || '');
+  const m = groupRenameMap();
+  return m[n.toLowerCase()] || n || '—';
+}
+function setGroupDisplayName(originalName, newName, after) {
+  const m = groupRenameMap();
+  const k = String(originalName || '').toLowerCase();
+  const n = String(newName || '').trim();
+  if (!k) return after?.();
+  if (!n || n.toLowerCase() === k || n === originalName) delete m[k];
+  else m[k] = n;
+  try { localStorage.setItem(gnKey, JSON.stringify(m)); } catch (_) {}
+  after?.();
+}
+const groupCoverKey = (name) => `gc:${artNorm(String(name || ''))}`;
+async function clearGroupCover(name) {
+  try { await kv.del(groupCoverKey(name)); } catch (_) {}
+}
+async function setGroupCoverBlob(name, blob) {
+  if (!blob) return;
+  try {
+    const opt = await optimizeImageBlob(blob, 384, 0.75);
+    await kv.set(groupCoverKey(name), opt || blob);
+  } catch (e) {
+    try { await kv.set(groupCoverKey(name), blob); } catch (_) {}
+  }
+}
+async function getGithubGroupArtBlob(name) {
+  const key = `art:groups:${artNorm((name || '').normalize('NFC').trim())}`;
+  try {
+    const cached = await kv.get(key);
+    if (cached?.blob instanceof Blob) return cached.blob;
+    const nfc = (name || '').normalize('NFC').trim();
+    const nfd = (name || '').normalize('NFD').trim();
+    const exts = ['jpg', 'jpeg', 'png', 'webp', 'avif', 'gif', 'JPG', 'JPEG', 'PNG', 'WEBP'];
+    const seen = new Set();
+    const candidates = [];
+    const add = (u) => { if (u && !seen.has(u)) { seen.add(u); candidates.push(u); } };
+    for (const n of [nfc, nfd, name]) {
+      if (!n) continue;
+      add(ART.groups[artNorm(n)]);
+      add(ART.groups[n.normalize('NFD').trim().toLowerCase()]);
+      for (const e of exts) add(`/groups/${encodeURIComponent(n)}.${e}`);
+    }
+    for (const url of candidates) {
+      try {
+        const res = await fetch(url, { cache: 'no-cache' });
+        if (!res.ok) continue;
+        const blob = await res.blob();
+        if (!blob.size) continue;
+        const opt = await optimizeImageBlob(blob, 384, 0.75);
+        const meta = { blob: opt || blob, url, optimized: true };
+        await kv.set(key, meta);
+        return meta.blob;
+      } catch (_) {}
+    }
+  } catch (_) {}
+  return null;
+}
+function groupCoverNode(originalName) {
+  const host = el('div', 'cover square');
+  const letter = el('span', '', (groupDisplayName(originalName) || '?').slice(0, 1).toUpperCase());
+  host.append(letter);
+  host._load = async () => {
+    try {
+      const custom = await kv.get(groupCoverKey(originalName));
+      if (custom instanceof Blob) {
+        const img = new Image();
+        img.onload = () => { host.replaceChildren(img); };
+        img.src = URL.createObjectURL(custom);
+        return;
+      }
+    } catch (_) {}
+    const artNode = art('groups', originalName);
+    if (host.parentNode) {
+      host.replaceWith(artNode);
+      artNode._load?.();
+    } else {
+      host.replaceChildren();
+      host.append(artNode);
+      artNode._load?.();
+    }
+  };
+  io.observe(host);
+  return host;
+}
+async function showGroupInfo(originalName) {
+  try {
+    document.querySelector('.info-frame.group-info')?.remove();
+    const display = groupDisplayName(originalName);
+    const chs = LIB.filter((c) => c.group === originalName);
+    let comics = 0, bytes = 0;
+    for (const ch of chs) {
+      const files = (await kv.get('f:' + ch.id)) || [];
+      comics += files.length;
+      for (const f of files) bytes += Number(f.size) || 0;
+    }
+    const frame = el('div', 'info-frame group-info');
+    const box = el('div', 'info-box');
+    const head = el('div', 'info-head');
+    head.append(el('span', '', 'Información'));
+    const close = el('button', 'btn info-close', '×');
+    close.onclick = () => frame.remove();
+    head.append(close);
+    const body = el('div', 'info-body');
+    const row = (label, value) => {
+      const r = el('div', 'info-row');
+      r.append(el('span', 'info-label', label), el('span', 'info-value', String(value ?? '—')));
+      return r;
+    };
+    body.append(el('div', 'info-sec', 'Editorial'));
+    body.append(row('Nombre', display));
+    if (display !== originalName) body.append(row('Nombre original', originalName));
+    body.append(row('Canales', String(chs.length)));
+    body.append(row('Cómics (listados)', String(comics)));
+    body.append(row('Tamaño total', formatBytes(bytes)));
+    box.append(head, body);
+    frame.append(box);
+    frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+    document.body.append(frame);
+  } catch (err) {
+    console.error(err);
+    alert('No se pudo mostrar la información de la editorial');
+  }
+}
+function showEditGroup(originalName, after) {
+  sheet(groupDisplayName(originalName), [
+    ['Editar nombre de la editorial', () => showEditGroupName(originalName, after)],
+    ['Seleccionar portada de la editorial', () => showGroupCoverPicker(originalName, after)],
+  ]);
+}
+function showEditGroupName(originalName, after) {
+  document.querySelector('.info-frame.edit-group')?.remove();
+  const current = groupDisplayName(originalName);
+  const frame = el('div', 'info-frame edit-group');
+  const box = el('div', 'info-box');
+  const head = el('div', 'info-head');
+  head.append(el('span', '', 'Editar nombre'));
+  const close = el('button', 'btn info-close', '×');
+  close.onclick = () => frame.remove();
+  head.append(close);
+  const body = el('div', 'info-body');
+  body.append(el('div', 'info-sec', 'Nombre de la editorial'));
+  const input = el('input', 'edit-input');
+  input.type = 'text';
+  input.value = current;
+  input.autocomplete = 'off';
+  body.append(input);
+  const actions = el('div', 'edit-actions');
+  const cancel = el('button', 'btn', 'Cancelar');
+  cancel.onclick = () => frame.remove();
+  const save = el('button', 'btn edit-save', 'Guardar');
+  save.onclick = () => {
+    setGroupDisplayName(originalName, input.value, () => {
+      frame.remove();
+      after?.();
+    });
+  };
+  actions.append(cancel, save);
+  body.append(actions);
+  box.append(head, body);
+  frame.append(box);
+  frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+  document.body.append(frame);
+  setTimeout(() => { input.focus(); input.select(); }, 50);
+}
+async function showGroupCoverPicker(originalName, after) {
+  document.querySelector('.info-frame.cover-pick')?.remove();
+  const title = groupDisplayName(originalName);
+  const frame = el('div', 'info-frame cover-pick');
+  const box = el('div', 'info-box cover-pick-box');
+  const head = el('div', 'info-head');
+  head.append(el('span', '', 'Portada de la editorial'));
+  const close = el('button', 'btn info-close', '×');
+  close.onclick = () => frame.remove();
+  head.append(close);
+  const body = el('div', 'info-body');
+  body.append(el('div', 'info-sec', title));
+  body.append(el('p', 'cover-pick-hint', 'GitHub, un canal, un cómic o una imagen del dispositivo.'));
+
+  const pickFile = el('button', 'btn cover-pick-device', '📁  Desde fotos o archivos');
+  const fileInput = el('input');
+  fileInput.type = 'file';
+  fileInput.accept = 'image/*';
+  fileInput.hidden = true;
+  pickFile.onclick = () => fileInput.click();
+  fileInput.onchange = async () => {
+    const file = fileInput.files?.[0];
+    if (!file) return;
+    try {
+      await setGroupCoverBlob(originalName, file);
+      frame.remove();
+      after?.();
+    } catch (e) {
+      alert('No se pudo usar la imagen: ' + (e?.message || e));
+    }
+  };
+  body.append(pickFile, fileInput);
+
+  const addCell = (parent, label, loadThumb, onPick) => {
+    const cell = el('button', 'cover-pick-cell');
+    cell.type = 'button';
+    const thumb = el('div', 'cover-pick-thumb');
+    const lab = el('span', 'cover-pick-lab', label);
+    cell.append(thumb, lab);
+    cell.onclick = onPick;
+    parent.append(cell);
+    Promise.resolve().then(loadThumb).then((b) => {
+      if (!b || !thumb.isConnected) return;
+      const img = new Image();
+      img.onload = () => { thumb.replaceChildren(img); };
+      img.src = URL.createObjectURL(b);
+    }).catch(() => {});
+  };
+
+  const grid0 = el('div', 'cover-pick-grid');
+  body.append(el('div', 'info-sec', 'Opciones'));
+  body.append(grid0);
+  addCell(grid0, 'GitHub / predeterminada', () => getGithubGroupArtBlob(originalName), async () => {
+    await clearGroupCover(originalName);
+    frame.remove();
+    after?.();
+  });
+
+  const chs = LIB.filter((c) => c.group === originalName);
+  if (chs.length) {
+    body.append(el('div', 'info-sec', 'Canales'));
+    const gridCh = el('div', 'cover-pick-grid');
+    body.append(gridCh);
+    for (const ch of chs) {
+      addCell(gridCh, channelDisplayName(ch), async () => {
+        try {
+          const custom = await kv.get(channelCoverKey(ch));
+          if (custom instanceof Blob) return custom;
+        } catch (_) {}
+        return getGithubChannelArtBlob(ch);
+      }, async () => {
+        let b = null;
+        try {
+          const custom = await kv.get(channelCoverKey(ch));
+          if (custom instanceof Blob) b = custom;
+        } catch (_) {}
+        if (!b) b = await getGithubChannelArtBlob(ch);
+        if (!b) {
+          const files = (await kv.get('f:' + ch.id)) || [];
+          if (files[0]) b = await getCover(ch, files[0]);
+        }
+        if (!b) {
+          alert('Este canal aún no tiene portada en caché.');
+          return;
+        }
+        await setGroupCoverBlob(originalName, b);
+        frame.remove();
+        after?.();
+      });
+    }
+
+    body.append(el('div', 'info-sec', 'Cómics'));
+    const gridComics = el('div', 'cover-pick-grid');
+    body.append(gridComics);
+    let any = false;
+    for (const ch of chs) {
+      const files = (await kv.get('f:' + ch.id)) || [];
+      for (const f of files) {
+        any = true;
+        addCell(gridComics, comicDisplay(f.name, ch.name), () => getCover(ch, f), async () => {
+          const b = await getCover(ch, f);
+          if (!b) {
+            alert('Este cómic aún no tiene portada en caché. Ábrelo una vez e inténtalo de nuevo.');
+            return;
+          }
+          await setGroupCoverBlob(originalName, b);
+          frame.remove();
+          after?.();
+        });
+      }
+    }
+    if (!any) gridComics.append(el('div', 'info-loading', 'No hay cómics listados.'));
+  }
+
+  box.append(head, body);
+  frame.append(box);
+  frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+  document.body.append(frame);
+}
+
 async function showChannelInfo(ch) {
   try {
     document.querySelector('.info-frame.channel-info')?.remove();
@@ -1755,12 +2051,14 @@ function cardNode(i) {
   const c = el('div', 'card'), hit = el('button', 'hit'), name = el('div', 'name'), t = el('b', '', i.label);
   hit.append(i.cover());
   hit.onclick = i.go;
+  if (i.longPress) bindLongPress(hit, i.longPress);
   if (i.menu) {
     t.classList.add('has-menu');
     t.onclick = (ev) => { ev.stopPropagation(); i.menu(); };
     t.title = 'Opciones';
     t.setAttribute('role', 'button');
   } else t.onclick = i.go;
+  if (i.longPress) bindLongPress(t, i.longPress);
   name.append(t);
   c.append(hit, name);
   if (i.sub) c.append(el('small', '', i.sub));
@@ -1805,19 +2103,26 @@ function groupsView() {
     nodes.push(sec);
     nodes.push(el('div', 'sec-sep'));
   }
-  const gs = [...new Set(LIB.map((c) => c.group))].sort(natural);
+  const gs = [...new Set(LIB.map((c) => c.group))];
+  gs.sort((a, b) => natural(groupDisplayName(a), groupDisplayName(b)));
   const fold = el('details', 'pubs-fold');
   if (pref('pubsOpen', '0') === '1') fold.open = true;
   const sum = el('summary', '', 'Editoriales');
   fold.append(sum);
   const g = el('div', 'grid grid-pubs');
+  const redrawPubs = () => groupsView();
   for (const name of gs) {
     const n = LIB.filter((c) => c.group === name).length;
+    const label = groupDisplayName(name);
     g.append(cardNode({
-      label: name,
+      label,
       sub: n === 1 ? '1 canal' : `${n} canales`,
-      cover: () => art('groups', name),
+      cover: () => groupCoverNode(name),
       go: () => channelsView(name),
+      longPress: () => sheet(label, [
+        ['Información', () => showGroupInfo(name)],
+        ['Editar', () => showEditGroup(name, redrawPubs)],
+      ]),
     }));
   }
   fold.append(g);
@@ -1828,7 +2133,7 @@ function groupsView() {
   lastScrollY = 0;
 }
 function channelsView(g) {
-  go(g, async (e) => {
+  go(groupDisplayName(g), async (e) => {
     const chs = LIB.filter((c) => c.group === g);
     const build = async () => {
       const items = [];
