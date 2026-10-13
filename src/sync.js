@@ -1,7 +1,8 @@
 /**
- * Sincronización multi-dispositivo vía Supabase (opción A).
- * Usuario + contraseña → id = SHA-256(usuario), payload cifrado AES-GCM.
- * No incluye tg_session ni cachés de portadas.
+ * Sincronización multi-dispositivo vía Supabase.
+ * Usuario + contraseña → id = SHA-256(usuario), payload AES-GCM.
+ * Subida exige verificador de contraseña en servidor (no se puede sobrescribir sin ella).
+ * Sync principal: al cargar la app (antes de la biblioteca).
  */
 
 const SUPABASE_URL = (import.meta.env.VITE_SUPABASE_URL || '').replace(/\/$/, '');
@@ -9,7 +10,7 @@ const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 const SCHEMA = 1;
 const LS_USER = 'sync:username';
 const LS_PASS = 'sync:password';
-const LS_META = 'sync:meta'; // { updatedAt }
+const LS_META = 'sync:meta';
 
 const SYNC_PREFIXES = [
   'pref:',
@@ -43,10 +44,18 @@ async function sha256Hex(text) {
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+/** Verificador enviado al servidor (no es la contraseña en claro). */
+async function passwordVerifier(username, password) {
+  return sha256Hex('tgcomic-verifier:' + normalizeUser(username) + ':' + password);
+}
+
+async function userRowId(username) {
+  return sha256Hex('tgcomic-user:' + normalizeUser(username));
+}
+
 async function deriveKey(username, password) {
   const enc = new TextEncoder();
   const base = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
-  // Salt estable por usuario (no se guarda en servidor)
   const salt = enc.encode('tgcomic-sync-v1:' + normalizeUser(username));
   return crypto.subtle.deriveKey(
     { name: 'PBKDF2', salt, iterations: 120000, hash: 'SHA-256' },
@@ -106,7 +115,11 @@ async function rpc(name, body) {
   });
   if (!res.ok) {
     const t = await res.text().catch(() => '');
-    throw new Error('Supabase ' + res.status + (t ? ': ' + t.slice(0, 120) : ''));
+    const low = (t || '').toLowerCase();
+    if (low.includes('invalid password') || low.includes('verifier')) {
+      throw new Error('Contraseña incorrecta: no se pueden sobrescribir los datos remotos');
+    }
+    throw new Error('Supabase ' + res.status + (t ? ': ' + t.slice(0, 160) : ''));
   }
   const ct = res.headers.get('content-type') || '';
   if (ct.includes('application/json')) return res.json();
@@ -119,37 +132,30 @@ async function getRemote(id) {
   return rows[0];
 }
 
-async function upsertRemote(id, payload) {
+async function upsertRemote(id, payload, verifier) {
   await rpc('upsert_comic_sync', {
     p_id: id,
     p_payload: payload,
     p_schema_version: SCHEMA,
+    p_verifier: verifier,
   });
 }
 
-/** Snapshot local (solo datos de usuario, sin Telegram ni portadas) */
 export function collectSnapshot() {
-  const data = {
-    v: SCHEMA,
-    prefs: {},
-    kv: {},
-    keys: {},
-  };
+  const data = { v: SCHEMA, keys: {} };
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
       if (!k) continue;
       if (k === 'tg_session' || k.startsWith('sync:')) continue;
-      const syncKey = SYNC_KEYS.includes(k) || SYNC_PREFIXES.some((p) => k.startsWith(p));
-      if (!syncKey) continue;
-      // No subir progreso legado ambiguo si hay forma canal+msg; se suben todos page:/pages:
+      const ok = SYNC_KEYS.includes(k) || SYNC_PREFIXES.some((p) => k.startsWith(p));
+      if (!ok) continue;
       data.keys[k] = localStorage.getItem(k);
     }
   } catch (_) {}
   return data;
 }
 
-/** Aplica snapshot remoto: fusiona (remoto gana en conflicto de clave) */
 export function applySnapshot(snap) {
   if (!snap || typeof snap !== 'object') return;
   const keys = snap.keys && typeof snap.keys === 'object' ? snap.keys : {};
@@ -185,37 +191,37 @@ export function logout() {
   localStorage.removeItem(LS_META);
 }
 
-/**
- * Crear cuenta nueva. Falla si el usuario ya tiene fila en Supabase.
- */
+function setMeta(updatedAt) {
+  try {
+    localStorage.setItem(LS_META, JSON.stringify({ updatedAt: updatedAt || new Date().toISOString() }));
+  } catch (_) {}
+}
+
+/** Crear cuenta. Si el usuario ya existe → error. */
 export async function register(username, password) {
   if (!configured()) throw new Error('Sincronización no configurada en el servidor');
   const u = normalizeUser(username);
   if (u.length < 3) throw new Error('El usuario debe tener al menos 3 caracteres');
   if (String(password || '').length < 6) throw new Error('La contraseña debe tener al menos 6 caracteres');
-  const id = await sha256Hex('tgcomic-user:' + u);
+  const id = await userRowId(u);
   const existing = await getRemote(id);
   if (existing && existing.payload) {
     throw new Error('Ese usuario ya existe. Elige otro o inicia sesión.');
   }
-  const snap = collectSnapshot();
-  const payload = await encryptPayload(u, password, snap);
-  await upsertRemote(id, payload);
+  const verifier = await passwordVerifier(u, password);
+  const payload = await encryptPayload(u, password, collectSnapshot());
+  await upsertRemote(id, payload, verifier);
   saveSession(u, password);
-  try {
-    localStorage.setItem(LS_META, JSON.stringify({ updatedAt: new Date().toISOString() }));
-  } catch (_) {}
+  setMeta();
   return { username: u };
 }
 
-/**
- * Iniciar sesión en cuenta existente y fusionar datos remotos.
- */
+/** Entrar: exige fila existente + contraseña que descifre. */
 export async function login(username, password) {
   if (!configured()) throw new Error('Sincronización no configurada en el servidor');
   const u = normalizeUser(username);
   if (!u || !password) throw new Error('Usuario y contraseña obligatorios');
-  const id = await sha256Hex('tgcomic-user:' + u);
+  const id = await userRowId(u);
   const row = await getRemote(id);
   if (!row || !row.payload) {
     throw new Error('Usuario no encontrado. Crea una cuenta primero.');
@@ -223,44 +229,56 @@ export async function login(username, password) {
   const snap = await decryptPayload(u, password, row.payload);
   applySnapshot(snap);
   saveSession(u, password);
+  setMeta(row.updated_at);
+  // Tras login, subir estado fusionado (local + remoto) con verificador correcto
   try {
-    localStorage.setItem(LS_META, JSON.stringify({ updatedAt: row.updated_at || new Date().toISOString() }));
-  } catch (_) {}
+    const verifier = await passwordVerifier(u, password);
+    const payload = await encryptPayload(u, password, collectSnapshot());
+    await upsertRemote(id, payload, verifier);
+    setMeta();
+  } catch (e) {
+    console.warn('[sync] post-login push', e);
+  }
   return { username: u, updatedAt: row.updated_at };
 }
 
-/** Sube el estado local cifrado (requiere sesión). */
+/**
+ * Subir solo si la contraseña es la correcta.
+ * 1) Si hay datos remotos, deben descifrarse con esta contraseña.
+ * 2) El servidor exige el mismo verificador que al crear la cuenta.
+ */
 export async function push() {
   const u = localStorage.getItem(LS_USER);
   const p = localStorage.getItem(LS_PASS);
   if (!u || !p) return false;
-  const id = await sha256Hex('tgcomic-user:' + u);
+  const id = await userRowId(u);
+  const row = await getRemote(id);
+  if (row?.payload) {
+    // Prueba de contraseña en cliente antes de tocar el servidor
+    await decryptPayload(u, p, row.payload);
+  }
+  const verifier = await passwordVerifier(u, p);
   const payload = await encryptPayload(u, p, collectSnapshot());
-  await upsertRemote(id, payload);
-  try {
-    localStorage.setItem(LS_META, JSON.stringify({ updatedAt: new Date().toISOString() }));
-  } catch (_) {}
+  await upsertRemote(id, payload, verifier);
+  setMeta();
   return true;
 }
 
-/** Baja y fusiona desde la nube. */
 export async function pull() {
   const u = localStorage.getItem(LS_USER);
   const p = localStorage.getItem(LS_PASS);
   if (!u || !p) return false;
-  const id = await sha256Hex('tgcomic-user:' + u);
+  const id = await userRowId(u);
   const row = await getRemote(id);
   if (!row?.payload) return false;
   const snap = await decryptPayload(u, p, row.payload);
   applySnapshot(snap);
-  try {
-    localStorage.setItem(LS_META, JSON.stringify({ updatedAt: row.updated_at || new Date().toISOString() }));
-  } catch (_) {}
+  setMeta(row.updated_at);
   return true;
 }
 
 let pushTimer = null;
-/** Debounce tras cambios locales */
+/** Debounce: sube tras cada cambio local (progreso, títulos, prefs…). */
 export function schedulePush(ms = 1500) {
   if (!isLoggedIn()) return;
   clearTimeout(pushTimer);
@@ -269,14 +287,64 @@ export function schedulePush(ms = 1500) {
   }, ms);
 }
 
-/** Arranque: si hay sesión, intentar pull en segundo plano */
-export function startBackgroundSync() {
-  if (!configured() || !isLoggedIn()) return;
-  pull().catch((e) => console.warn('[sync] pull', e));
+function showBootOverlay(text) {
+  let ov = document.getElementById('sync-boot');
+  if (!ov) {
+    ov = el('div', 'sync-boot');
+    ov.id = 'sync-boot';
+    const box = el('div', 'sync-boot-box');
+    box.append(el('div', 'sync-boot-title', 'Sincronizando'));
+    const bar = el('div', 'sync-boot-bar');
+    bar.append(el('div', 'sync-boot-bar-fill'));
+    box.append(bar);
+    const msg = el('p', 'sync-boot-msg', text || 'Descargando datos…');
+    msg.id = 'sync-boot-msg';
+    box.append(msg);
+    ov.append(box);
+    document.body.append(ov);
+  } else {
+    const msg = document.getElementById('sync-boot-msg');
+    if (msg) msg.textContent = text || 'Descargando datos…';
+  }
+  return ov;
+}
+
+function hideBootOverlay() {
+  document.getElementById('sync-boot')?.remove();
 }
 
 /**
- * UI: marco de sincronización (crear / entrar / estado).
+ * Llamar al arranque ANTES de mostrar la biblioteca / seguir leyendo.
+ * Si hay sesión: pull (+ push del estado fusionado). Si no, no hace nada.
+ */
+export async function syncOnStartup() {
+  if (!configured() || !isLoggedIn()) return { synced: false };
+  showBootOverlay('Descargando datos de la nube…');
+  try {
+    await pull();
+    showBootOverlay('Guardando estado…');
+    // Sube el merge local+remoto solo con contraseña correcta
+    await push();
+    showBootOverlay('Listo');
+    return { synced: true };
+  } catch (e) {
+    console.warn('[sync] startup', e);
+    showBootOverlay(e.message || 'Error de sincronización');
+    // No bloquear la app eternamente
+    await new Promise((r) => setTimeout(r, 1200));
+    return { synced: false, error: e };
+  } finally {
+    hideBootOverlay();
+  }
+}
+
+/** @deprecated usar syncOnStartup */
+export function startBackgroundSync() {
+  /* no-op */
+}
+
+/**
+ * UI: crear / entrar / estado.
  * @param {{ onAfterAuth?: () => void }} opts
  */
 export function showSyncFrame(opts = {}) {
@@ -311,6 +379,7 @@ export function showSyncFrame(opts = {}) {
       r2.append(el('span', 'info-label', 'Última sync'), el('span', 'info-value', String(meta)));
       body.append(r2);
     }
+    body.append(el('p', 'cover-pick-hint', 'Al abrir la app se bajan los datos; cada cambio local se sube solo. Aquí puedes forzar subida o bajada.'));
     body.append(status);
     const actions = el('div', 'edit-actions sync-actions');
     const btnPull = el('button', 'btn', 'Bajar ahora');
@@ -318,7 +387,7 @@ export function showSyncFrame(opts = {}) {
       setStatus('Bajando…');
       try {
         await pull();
-        setStatus('Datos actualizados desde la nube');
+        setStatus('Actualizado desde la nube');
         opts.onAfterAuth?.();
       } catch (e) {
         setStatus(e.message || String(e), true);
@@ -342,83 +411,62 @@ export function showSyncFrame(opts = {}) {
     };
     actions.append(btnPull, btnPush, btnOut);
     body.append(actions);
-    body.append(el('p', 'cover-pick-hint', 'Cerrar sesión solo afecta a este dispositivo. Tus datos en la nube se conservan.'));
   };
 
   const formFields = (mode) => {
-    // mode: 'login' | 'register'
     body.replaceChildren();
     body.append(el('div', 'info-sec', mode === 'register' ? 'Crear cuenta' : 'Iniciar sesión'));
     if (!configured()) {
-      body.append(el('p', 'sync-status sync-err', 'Faltan VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY en el servidor.'));
+      body.append(el('p', 'sync-status sync-err', 'Faltan VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY.'));
       return;
     }
     body.append(el('p', 'cover-pick-hint',
       mode === 'register'
-        ? 'Elige un usuario único y una contraseña. Si el usuario ya existe, no se podrá crear.'
-        : 'Usa el mismo usuario y contraseña en todos tus dispositivos.'
+        ? 'Usuario único. Si ya existe, no se podrá crear. La contraseña protege tus datos en la nube.'
+        : 'Mismo usuario y contraseña en todos los dispositivos.'
     ));
-
-    const labU = el('label', 'sync-label', 'Usuario');
     const inputU = el('input', 'edit-input');
     inputU.type = 'text';
     inputU.autocomplete = 'username';
-    inputU.placeholder = 'mín. 3 caracteres';
-    const labP = el('label', 'sync-label', 'Contraseña');
+    inputU.placeholder = 'Usuario (mín. 3)';
     const inputP = el('input', 'edit-input');
     inputP.type = 'password';
     inputP.autocomplete = mode === 'register' ? 'new-password' : 'current-password';
-    inputP.placeholder = 'mín. 6 caracteres';
-    body.append(labU, inputU, labP, inputP);
-
+    inputP.placeholder = 'Contraseña (mín. 6)';
+    body.append(el('label', 'sync-label', 'Usuario'), inputU);
+    body.append(el('label', 'sync-label', 'Contraseña'), inputP);
+    let inputP2 = null;
     if (mode === 'register') {
-      const labP2 = el('label', 'sync-label', 'Repetir contraseña');
-      const inputP2 = el('input', 'edit-input');
+      inputP2 = el('input', 'edit-input');
       inputP2.type = 'password';
       inputP2.autocomplete = 'new-password';
-      body.append(labP2, inputP2);
-      body.append(status);
-      const actions = el('div', 'edit-actions sync-actions');
-      const back = el('button', 'btn', 'Volver');
-      back.onclick = () => renderLoggedOut();
-      const go = el('button', 'btn edit-save', 'Crear cuenta');
-      go.onclick = async () => {
-        setStatus('Creando…');
-        if (inputP.value !== inputP2.value) {
-          setStatus('Las contraseñas no coinciden', true);
-          return;
-        }
-        try {
+      inputP2.placeholder = 'Repetir contraseña';
+      body.append(el('label', 'sync-label', 'Repetir contraseña'), inputP2);
+    }
+    body.append(status);
+    const actions = el('div', 'edit-actions sync-actions');
+    const back = el('button', 'btn', 'Volver');
+    back.onclick = () => renderLoggedOut();
+    const go = el('button', 'btn edit-save', mode === 'register' ? 'Crear cuenta' : 'Entrar');
+    go.onclick = async () => {
+      setStatus(mode === 'register' ? 'Creando…' : 'Entrando…');
+      try {
+        if (mode === 'register') {
+          if (inputP.value !== inputP2.value) throw new Error('Las contraseñas no coinciden');
           await register(inputU.value, inputP.value);
-          setStatus('Cuenta creada y sincronizada');
-          opts.onAfterAuth?.();
-          renderLoggedIn();
-        } catch (e) {
-          setStatus(e.message || String(e), true);
-        }
-      };
-      actions.append(back, go);
-      body.append(actions);
-    } else {
-      body.append(status);
-      const actions = el('div', 'edit-actions sync-actions');
-      const back = el('button', 'btn', 'Volver');
-      back.onclick = () => renderLoggedOut();
-      const go = el('button', 'btn edit-save', 'Entrar');
-      go.onclick = async () => {
-        setStatus('Entrando…');
-        try {
+          setStatus('Cuenta creada');
+        } else {
           await login(inputU.value, inputP.value);
           setStatus('Sesión iniciada');
-          opts.onAfterAuth?.();
-          renderLoggedIn();
-        } catch (e) {
-          setStatus(e.message || String(e), true);
         }
-      };
-      actions.append(back, go);
-      body.append(actions);
-    }
+        opts.onAfterAuth?.();
+        renderLoggedIn();
+      } catch (e) {
+        setStatus(e.message || String(e), true);
+      }
+    };
+    actions.append(back, go);
+    body.append(actions);
     setTimeout(() => inputU.focus(), 50);
   };
 
@@ -426,10 +474,10 @@ export function showSyncFrame(opts = {}) {
     body.replaceChildren();
     body.append(el('div', 'info-sec', 'Cuenta de sincronización'));
     body.append(el('p', 'cover-pick-hint',
-      'Sincroniza progreso, títulos y nombres de serie entre dispositivos. No se sube la sesión de Telegram.'
+      'Al abrir la app se actualiza el progreso (p. ej. Seguir leyendo). Cada cambio se sube automáticamente. No se sube la sesión de Telegram.'
     ));
     if (!configured()) {
-      body.append(el('p', 'sync-status sync-err', 'Supabase no está configurado (variables VITE_ en Vercel).'));
+      body.append(el('p', 'sync-status sync-err', 'Supabase no configurado (variables VITE_ en Vercel).'));
     }
     body.append(status);
     const actions = el('div', 'edit-actions sync-actions');

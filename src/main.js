@@ -3160,10 +3160,11 @@ async function migrateCacheImages() {
 
 (async () => {
   if (!apiId || !apiHash) return msg('Faltan VITE_API_ID y VITE_API_HASH.');
+  // Sync antes de biblioteca / seguir leyendo
+  try { await sync.syncOnStartup(); } catch (_) {}
   LIB = (await kv.get('lib')) || [];
   stack.push({ title: 'Cómics', render: groupsView });
   show();
-  try { sync.startBackgroundSync(); } catch (_) {}
   // Optimizar caché antigua en segundo plano (WebP + menos resolución)
   migrateCacheImages();
   ready = connect();
