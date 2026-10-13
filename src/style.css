@@ -143,3 +143,11 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 .info-label{color:var(--mut)}
 .info-value{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
 .info-loading{padding:1.5rem .5rem;text-align:center;color:var(--mut)}
+
+/* Toggles configuración visor */
+.cfg-group{display:flex;flex-direction:column;gap:.45rem;margin:.25rem 0 1rem}
+.cfg-toggle{display:flex;align-items:center;justify-content:space-between;width:100%;border:0;border-radius:12px;background:#141518;color:var(--fg);font:inherit;font-weight:600;padding:.85rem 1rem;cursor:pointer;text-align:left}
+.cfg-toggle::after{content:'';width:1.15rem;height:1.15rem;border-radius:50%;background:#3a3b40;box-shadow:inset 0 0 0 2px #ffffff18;flex:none;margin-left:1rem}
+.cfg-toggle.on{background:#1a2e22}
+.cfg-toggle.on::after{background:#3ddc84;box-shadow:0 0 0 2px #3ddc8433}
+.cfg-toggle:active{opacity:.85}
