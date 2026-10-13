@@ -1222,8 +1222,8 @@ function reader(f, pages, zr, ctx) {
       fitLabel();
       cluster.append(gridBtn, fit, cnt);
 
-      const vw = () => window.innerWidth;
-      const vh = () => window.innerHeight;
+      const vw = () => Math.round(window.visualViewport?.width || window.innerWidth);
+      const vh = () => Math.round(window.visualViewport?.height || window.innerHeight);
       // Estimación inicial estable (evita saltos)
       const estSize = () => {
         if (horiz) return fitMode() === 'width' ? vw() : Math.round(Math.min(vw(), vh() * 0.75));
@@ -1296,20 +1296,25 @@ function reader(f, pages, zr, ctx) {
             slot.style.alignItems = 'center';
             slot.style.justifyContent = 'center';
           } else {
-            // Ancho = viewport; overflow-y se activa en place() solo si es más alta
-            im.style.width = vw() + 'px';
-            im.style.maxWidth = vw() + 'px';
+            // Ancho = viewport; si es más alta, scroll vertical desde arriba (sin comprimir)
+            im.style.width = '100%';
+            im.style.maxWidth = '100%';
             im.style.height = 'auto';
             im.style.maxHeight = 'none';
+            im.style.flex = 'none';
+            im.style.flexShrink = '0';
+            im.style.alignSelf = 'flex-start';
             slot.style.overflowX = 'hidden';
-            slot.style.overflowY = 'hidden';
+            slot.style.overflowY = 'auto';
             slot.style.alignItems = 'flex-start';
-            slot.style.justifyContent = 'center';
+            slot.style.justifyContent = 'flex-start';
             slot.style.webkitOverflowScrolling = 'touch';
+            slot.scrollTop = 0;
           }
           slot.style.height = '100%';
-          slot.style.display = 'flex';
-          slot.style.flexDirection = 'column';
+          slot.style.maxHeight = '100%';
+          slot.style.display = 'block'; // no flex: evita que la img se encoja y recorte
+
         } else {
           if (screen) {
             im.style.width = 'auto';
@@ -1350,10 +1355,14 @@ function reader(f, pages, zr, ctx) {
           slot.style.width = h + 'px';
           slot.style.minWidth = h + 'px';
           slot.style.marginRight = GAP + 'px';
-          // Solo si la imagen es más alta que la pantalla → scroll vertical interno
           if (fitMode() === 'width') {
-            const tall = (im.offsetHeight || 0) > vh() + 4;
-            slot.style.overflowY = tall ? 'auto' : 'hidden';
+            // block layout: altura natural de la imagen
+            const imgH = im.offsetHeight || im.naturalHeight || 0;
+            const viewH = (window.visualViewport?.height || vh());
+            const tall = imgH > viewH + 4;
+            slot.style.overflowY = 'auto';
+            slot.style.display = 'block';
+            slot.scrollTop = 0;
             slot.dataset.tall = tall ? '1' : '0';
           } else {
             slot.style.overflowY = 'hidden';
@@ -1553,14 +1562,12 @@ function reader(f, pages, zr, ctx) {
         };
         const onTe = () => {
           if (axis === 'x') {
-            // Página bajo el centro + inercia ligera del dedo
-            let idx = pageAt(rd.scrollLeft + rd.clientWidth * 0.5);
             const w = Math.max(1, sizes[n] || rd.clientWidth);
             const offset = rd.scrollLeft - posOf(n);
-            // Si arrastró > 18% del ancho o soltó con velocidad, avanzar/retroceder
-            if (offset > w * 0.18 || velX < -0.35) idx = Math.min(pages.length - 1, n + 1);
-            else if (offset < -w * 0.18 || velX > 0.35) idx = Math.max(0, n - 1);
-            else idx = n;
+            let idx = n;
+            // Más recorrido o velocidad clara → cambia; si no, vuelve a la actual (suave)
+            if (offset > w * 0.28 || velX < -0.55) idx = Math.min(pages.length - 1, n + 1);
+            else if (offset < -w * 0.28 || velX > 0.55) idx = Math.max(0, n - 1);
             snapTo(idx);
           }
           axis = null;
