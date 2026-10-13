@@ -1519,6 +1519,8 @@ function filesView(ch) {
           });
         }
       }
+      // Orden alfabético por el nombre visible (incluye series renombradas)
+      items.sort((a, b) => natural(a.label, b.label));
       grid(items, true);
     };
     const cached = await kv.get('f:' + ch.id);
