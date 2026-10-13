@@ -240,3 +240,10 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
   }
   .cover-pick-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
 }
+
+/* Sincronización */
+.sync-label{display:block;font-size:.85rem;color:var(--mut);margin:.5rem 0 .2rem}
+.sync-status{min-height:1.25em;margin:.5rem 0;font-size:.9rem;color:var(--mut)}
+.sync-status.sync-err{color:#f66}
+.sync-actions{flex-wrap:wrap;gap:.5rem}
+.sync-actions .btn{flex:1;min-width:7rem}

@@ -5,6 +5,7 @@ import bigInt from 'big-integer';
 import * as zip from '@zip.js/zip.js';
 import { createExtractorFromData } from 'node-unrar-js';
 import rarWasm from 'node-unrar-js/esm/js/unrar.wasm?url';
+import * as sync from './sync.js';
 
 const apiId = Number(import.meta.env.VITE_API_ID);
 const apiHash = import.meta.env.VITE_API_HASH;
@@ -14,7 +15,7 @@ zip.configure({ useWebWorkers: false });
 const SEP = '::', TSEP = ':', POST = SEP + 'tgstorage', LIBRARY = 'comics', MB = 1024 * 1024;
 const natural = (a, b) => a.localeCompare(b, undefined, { numeric: true });
 const pref = (k, d) => localStorage.getItem('pref:' + k) || d;
-const setPref = (k, v) => localStorage.setItem('pref:' + k, v);
+const setPref = (k, v) => { localStorage.setItem('pref:' + k, v); try { sync.schedulePush(); } catch (_) {} };
 /** Evita el zoom atascado de iOS al girar el dispositivo */
 function resetMobileViewport() {
   const meta = document.querySelector('meta[name="viewport"]');
@@ -54,6 +55,7 @@ function setPageIndex(chId, msgId, n) {
     // Limpiar legado de este mensaje tras escribir la clave nueva
     localStorage.removeItem(legacyPageKey(msgId));
   } catch (_) {}
+  try { sync.schedulePush(); } catch (_) {}
 }
 function getPagesTotal(chId, msgId) {
   const k = pagesKey(chId, msgId);
@@ -113,6 +115,7 @@ const setLastRead = (ch, f) => {
       f: { id: f.id, name: f.name, size: f.size },
     }));
   } catch (_) {}
+  try { sync.schedulePush(); } catch (_) {}
 };
 const readProgress = (chId, msgId) => {
   const cur = getPageIndex(chId, msgId);
@@ -727,7 +730,8 @@ const menuPanel = el('div', 'app-menu');
 menuPanel.hidden = true;
 const menuInfoBtn = el('button', 'app-menu-item', 'Información');
 const menuCfgBtn = el('button', 'app-menu-item', 'Configuración Visor');
-menuPanel.append(menuInfoBtn, menuCfgBtn);
+const menuSyncBtn = el('button', 'app-menu-item', 'Sincronización');
+menuPanel.append(menuInfoBtn, menuCfgBtn, menuSyncBtn);
 actions.append(menuBtn);
 document.body.append(menuPanel);
 
@@ -860,6 +864,19 @@ function showViewerConfig() {
   document.body.append(frame);
 }
 menuCfgBtn.onclick = (ev) => { ev.stopPropagation(); showViewerConfig(); };
+menuSyncBtn.onclick = (ev) => {
+  ev.stopPropagation();
+  closeAppMenu();
+  sync.showSyncFrame({
+    onAfterAuth: () => {
+      // Refrescar vista actual si estamos en biblioteca
+      try {
+        const e = stack[stack.length - 1];
+        if (e && !e._isComic) e.render(e);
+      } catch (_) {}
+    },
+  });
+};
 
 let cleanup = null, LIB = [], synced = false;
 
@@ -1259,6 +1276,7 @@ function setUngroupMode(ch, label, mode, after) {
   if (!mode) delete m[k];
   else m[k] = mode;
   try { localStorage.setItem(ugKey(ch), JSON.stringify(m)); } catch (_) {}
+  try { sync.schedulePush(); } catch (_) {}
   after?.();
 }
 /** Renombres de serie por canal (clave = nombre original en minúsculas) */
@@ -1281,6 +1299,7 @@ function setSeriesDisplayName(ch, originalLabel, newName, after) {
   if (!n || n.toLowerCase() === k) delete m[k];
   else m[k] = n;
   try { localStorage.setItem(snKey(ch), JSON.stringify(m)); } catch (_) {}
+  try { sync.schedulePush(); } catch (_) {}
   after?.();
 }
 /** Renombres de título de cómic por canal (clave = file.id) */
@@ -1306,6 +1325,7 @@ function setComicDisplayName(ch, f, newName, after) {
   if (!n) delete m[k];
   else m[k] = n;
   try { localStorage.setItem(comicNameKey(ch), JSON.stringify(m)); } catch (_) {}
+  try { sync.schedulePush(); } catch (_) {}
   after?.();
 }
 function showEditComicTitle(ch, f, currentLabel, after) {
@@ -1564,6 +1584,7 @@ function setChannelDisplayName(ch, newName, after) {
   if (!n || n === ch.name) delete m[id];
   else m[id] = n;
   try { localStorage.setItem(cnKey, JSON.stringify(m)); } catch (_) {}
+  try { sync.schedulePush(); } catch (_) {}
   after?.();
 }
 const channelCoverKey = (ch) => `cc:${ch.id}`;
@@ -1673,6 +1694,7 @@ function setGroupDisplayName(originalName, newName, after) {
   if (!n || n.toLowerCase() === k || n === originalName) delete m[k];
   else m[k] = n;
   try { localStorage.setItem(gnKey, JSON.stringify(m)); } catch (_) {}
+  try { sync.schedulePush(); } catch (_) {}
   after?.();
 }
 const groupCoverKey = (name) => `gc:${artNorm(String(name || ''))}`;
@@ -3141,6 +3163,7 @@ async function migrateCacheImages() {
   LIB = (await kv.get('lib')) || [];
   stack.push({ title: 'Cómics', render: groupsView });
   show();
+  try { sync.startBackgroundSync(); } catch (_) {}
   // Optimizar caché antigua en segundo plano (WebP + menos resolución)
   migrateCacheImages();
   ready = connect();
