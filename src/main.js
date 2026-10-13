@@ -534,14 +534,56 @@ async function getCover(ch, f) {
   if (!b) b = await enqueue(() => makeCover(ch, f, key));
   return b && b !== 'none' ? b : null;
 }
-async function thumbFromBlob(blob) {
+/** ¿El canvas puede exportar WebP? (se comprueba una vez) */
+let _webpOk = null;
+async function supportsWebP() {
+  if (_webpOk != null) return _webpOk;
+  _webpOk = await new Promise((res) => {
+    try {
+      const c = document.createElement('canvas');
+      c.width = 1; c.height = 1;
+      c.toBlob((b) => res(!!(b && b.type === 'image/webp')), 'image/webp', 0.8);
+    } catch { res(false); }
+  });
+  return _webpOk;
+}
+/**
+ * Redimensiona y comprime una imagen para caché.
+ * maxEdge: lado mayor máximo en px. quality: 0–1.
+ */
+async function optimizeImageBlob(blob, maxEdge = 320, quality = 0.72) {
+  if (!blob || !blob.size) return null;
+  // Si ya es pequeña y WebP, no tocar
+  if (blob.type === 'image/webp' && blob.size < 40 * 1024 && maxEdge >= 320) {
+    try {
+      const bmp = await createImageBitmap(blob);
+      const ok = Math.max(bmp.width, bmp.height) <= maxEdge + 8;
+      bmp.close?.();
+      if (ok) return blob;
+    } catch (_) {}
+  }
   const bmp = await createImageBitmap(blob);
-  const w = 320, h = Math.round((bmp.height * w) / bmp.width);
-  const cv = el('canvas'); cv.width = w; cv.height = h;
+  const scale = Math.min(1, maxEdge / Math.max(bmp.width, bmp.height));
+  const w = Math.max(1, Math.round(bmp.width * scale));
+  const h = Math.max(1, Math.round(bmp.height * scale));
+  const cv = el('canvas');
+  cv.width = w; cv.height = h;
   cv.getContext('2d').drawImage(bmp, 0, 0, w, h);
   bmp.close?.();
-  return new Promise((r) => cv.toBlob(r, 'image/jpeg', 0.8));
+  const webp = await supportsWebP();
+  const type = webp ? 'image/webp' : 'image/jpeg';
+  const out = await new Promise((r) => cv.toBlob(r, type, quality));
+  // Si WebP salió mayor que el original, o falló, probar JPEG
+  if (!out || (out.size >= blob.size && blob.size < 80 * 1024)) {
+    if (type === 'image/webp') {
+      const jpg = await new Promise((r) => cv.toBlob(r, 'image/jpeg', quality));
+      return jpg && jpg.size < blob.size ? jpg : (jpg || out || blob);
+    }
+    return out && out.size < blob.size ? out : blob;
+  }
+  return out;
 }
+const thumbFromBlob = (blob) => optimizeImageBlob(blob, 280, 0.72);
 async function saveCoverBlob(ch, f, blob) {
   if (!blob) return;
   const key = `c:${ch.id}:${f.id}`;
@@ -843,14 +885,16 @@ function art(kind, name, ch) {
         if (!res.ok) continue;
         const blob = await res.blob();
         if (!blob.size) continue;
+        const opt = await optimizeImageBlob(blob, 384, 0.75);
         const meta = {
-          blob,
+          blob: opt || blob,
           url,
           etag: res.headers.get('ETag') || '',
           modified: res.headers.get('Last-Modified') || '',
+          optimized: true,
         };
         await kv.set(key, meta);
-        if (d.isConnected) showBlob(blob);
+        if (d.isConnected) showBlob(meta.blob);
         return true;
       } catch {
         continue;
@@ -888,7 +932,10 @@ function art(kind, name, ch) {
       const fresh = await fetchArtBlob(cached.url, cached);
       if (fresh?.unchanged) return;
       if (fresh?.blob) {
+        const opt = await optimizeImageBlob(fresh.blob, 384, 0.75);
+        fresh.blob = opt || fresh.blob;
         fresh.url = cached.url;
+        fresh.optimized = true;
         await kv.set(key, fresh);
         if (d.isConnected) showBlob(fresh.blob);
         return;
@@ -1876,11 +1923,46 @@ function reader(f, pages, zr, ctx) {
 }
 
 // ---------- Inicio ----------
+async function migrateCacheImages() {
+  // Evitar correr en cada carga de la misma sesión de pestaña
+  if (sessionStorage.getItem('cacheOptDone') === '1') return;
+  try {
+    const entries = await kv.entries();
+    let n = 0;
+    for (const [k, v] of entries) {
+      if (typeof k !== 'string') continue;
+      try {
+        if (k.startsWith('c:') && v instanceof Blob && v.type !== 'image/webp') {
+          const out = await optimizeImageBlob(v, 280, 0.72);
+          if (out && out.size < v.size) {
+            await kv.set(k, out);
+            n++;
+          }
+        } else if (k.startsWith('art:') && v && v.blob instanceof Blob && !v.optimized) {
+          const out = await optimizeImageBlob(v.blob, 384, 0.75);
+          if (out) {
+            await kv.set(k, { ...v, blob: out, optimized: true });
+            n++;
+          }
+        }
+      } catch (_) {}
+      // Ceder el hilo cada pocas imágenes
+      if (n && n % 4 === 0) await new Promise((r) => setTimeout(r, 0));
+    }
+    sessionStorage.setItem('cacheOptDone', '1');
+    if (n) console.info('[caché] optimizadas', n, 'imágenes');
+  } catch (e) {
+    console.warn('[caché] migración', e);
+  }
+}
+
 (async () => {
   if (!apiId || !apiHash) return msg('Faltan VITE_API_ID y VITE_API_HASH.');
   LIB = (await kv.get('lib')) || [];
   stack.push({ title: 'Cómics', render: groupsView });
   show();
+  // Optimizar caché antigua en segundo plano (WebP + menos resolución)
+  migrateCacheImages();
   ready = connect();
   ready.catch((e) => msg('Error de conexión: ' + e.message));
   ready.then(refreshLibrary).then((lib) => {
