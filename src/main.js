@@ -1490,43 +1490,69 @@ async function setChannelCoverBlob(ch, blob) {
   }
 }
 function channelCoverNode(ch) {
-  const d = el('div', 'cover'), ltr = el('span', '', (channelDisplayName(ch) || '?').slice(0, 1).toUpperCase());
-  d.append(ltr);
-  d._load = async () => {
-    // 1) Portada personalizada
+  // Si hay portada personalizada se muestra; si no, el mismo flujo que antes (GitHub / cómic)
+  const host = el('div', 'cover');
+  const letter = el('span', '', (channelDisplayName(ch) || '?').slice(0, 1).toUpperCase());
+  host.append(letter);
+  host._load = async () => {
     try {
       const custom = await kv.get(channelCoverKey(ch));
       if (custom instanceof Blob) {
         const img = new Image();
-        img.onload = () => { ltr.remove(); d.prepend(img); };
+        img.onload = () => { host.replaceChildren(img); };
         img.src = URL.createObjectURL(custom);
         return;
       }
     } catch (_) {}
-    // 2) Arte GitHub / fallback cómic (nodo art reutilizable)
+    // Sin personalizada → comportamiento original (GitHub + fallback)
     const artNode = art('channels', ch.name, ch);
-    // Sustituir contenido cuando art cargue: observar el nodo art
-    d.replaceChildren(artNode);
-    // art() returns a cover div - use it fully
+    if (host.parentNode) {
+      host.replaceWith(artNode);
+      artNode._load?.();
+    } else {
+      host.replaceChildren();
+      host.append(artNode);
+      artNode._load?.();
+    }
   };
-  // Carga diferida: si hay custom, mostrarla; si no, delegar en art()
-  d._load = async () => {
-    try {
-      const custom = await kv.get(channelCoverKey(ch));
-      if (custom instanceof Blob) {
-        const img = new Image();
-        img.onload = () => { try { ltr.remove(); } catch (_) {} d.replaceChildren(img); };
-        img.src = URL.createObjectURL(custom);
-        return;
-      }
-    } catch (_) {}
-    const artNode = art('channels', ch.name, ch);
-    d.replaceChildren(artNode);
-    // Disparar carga del art
-    artNode._load?.();
-  };
-  io.observe(d);
-  return d;
+  io.observe(host);
+  return host;
+}
+async function clearChannelCover(ch) {
+  try { await kv.del(channelCoverKey(ch)); } catch (_) {}
+}
+async function getGithubChannelArtBlob(ch) {
+  const key = `art:channels:${artNorm((ch.name || '').normalize('NFC').trim())}`;
+  try {
+    const cached = await kv.get(key);
+    if (cached?.blob instanceof Blob && !cached.fromComic) return cached.blob;
+    // Intentar cargar desde candidatos de ART
+    const nfc = (ch.name || '').normalize('NFC').trim();
+    const nfd = (ch.name || '').normalize('NFD').trim();
+    const exts = ['jpg', 'jpeg', 'png', 'webp', 'avif', 'gif', 'JPG', 'JPEG', 'PNG', 'WEBP'];
+    const seen = new Set();
+    const candidates = [];
+    const add = (u) => { if (u && !seen.has(u)) { seen.add(u); candidates.push(u); } };
+    for (const n of [nfc, nfd, ch.name]) {
+      if (!n) continue;
+      add(ART.channels[artNorm(n)]);
+      add(ART.channels[n.normalize('NFD').trim().toLowerCase()]);
+      for (const e of exts) add(`/channels/${encodeURIComponent(n)}.${e}`);
+    }
+    for (const url of candidates) {
+      try {
+        const res = await fetch(url, { cache: 'no-cache' });
+        if (!res.ok) continue;
+        const blob = await res.blob();
+        if (!blob.size) continue;
+        const opt = await optimizeImageBlob(blob, 384, 0.75);
+        const meta = { blob: opt || blob, url, optimized: true };
+        await kv.set(key, meta);
+        return meta.blob;
+      } catch (_) {}
+    }
+  } catch (_) {}
+  return null;
 }
 async function showChannelInfo(ch) {
   try {
@@ -1623,7 +1649,7 @@ function showChannelCoverPicker(ch, files, after) {
   head.append(close);
   const body = el('div', 'info-body');
   body.append(el('div', 'info-sec', title));
-  body.append(el('p', 'cover-pick-hint', 'Elige la portada de un cómic/serie del canal o una imagen del dispositivo.'));
+  body.append(el('p', 'cover-pick-hint', 'Elige GitHub, un cómic del canal o una imagen del dispositivo.'));
 
   const pickFile = el('button', 'btn cover-pick-device', '📁  Desde fotos o archivos');
   const fileInput = el('input');
@@ -1645,50 +1671,61 @@ function showChannelCoverPicker(ch, files, after) {
   body.append(pickFile, fileInput);
 
   const grid = el('div', 'cover-pick-grid');
-  body.append(el('div', 'info-sec', 'Cómics y series'));
+  body.append(el('div', 'info-sec', 'Opciones'));
   body.append(grid);
 
-  const useBlob = async (blob) => {
-    if (!blob) {
-      alert('Esta entrada aún no tiene portada en caché. Ábrela una vez e inténtalo de nuevo.');
-      return;
-    }
-    await setChannelCoverBlob(ch, blob);
-    frame.remove();
-    after?.();
+  const addCell = (label, loadThumb, onPick) => {
+    const cell = el('button', 'cover-pick-cell');
+    cell.type = 'button';
+    const thumb = el('div', 'cover-pick-thumb');
+    const lab = el('span', 'cover-pick-lab', label);
+    cell.append(thumb, lab);
+    cell.onclick = onPick;
+    grid.append(cell);
+    Promise.resolve().then(loadThumb).then((b) => {
+      if (!b || !thumb.isConnected) return;
+      const img = new Image();
+      img.onload = () => { thumb.replaceChildren(img); };
+      img.src = URL.createObjectURL(b);
+    }).catch(() => {});
+    return cell;
   };
 
+  // 1) Portada GitHub (quita la personalizada y restaura el flujo original)
+  addCell('GitHub / predeterminada', () => getGithubChannelArtBlob(ch), async () => {
+    await clearChannelCover(ch);
+    // Si hay blob de GitHub, opcionalmente no hace falta guardarlo: art() lo carga solo
+    frame.remove();
+    after?.();
+  });
+
+  // 2) Todos los cómics del canal (también los de series desagrupadas)
   const list = Array.isArray(files) ? files : [];
   if (!list.length) {
     grid.append(el('div', 'info-loading', 'No hay cómics en este canal.'));
   } else {
-    // Agrupar: una celda por serie (portada de serie o primer cómic) + sueltos
-    let groups = [];
-    try { groups = groupSeries(list, ch.name); } catch (_) {
-      groups = list.map((f) => ({ label: comicDisplay(f.name, ch.name), files: [f] }));
-    }
-    for (const g of groups) {
+    body.append(el('div', 'info-sec', 'Cómics del canal'));
+    const gridComics = el('div', 'cover-pick-grid');
+    body.append(gridComics);
+    for (const f of list) {
       const cell = el('button', 'cover-pick-cell');
       cell.type = 'button';
       const thumb = el('div', 'cover-pick-thumb');
-      const lab = el('span', 'cover-pick-lab',
-        g.files.length > 1
-          ? seriesDisplayName(ch, g.label)
-          : (comicDisplay(g.files[0].name, ch.name))
-      );
+      const lab = el('span', 'cover-pick-lab', comicDisplay(f.name, ch.name));
       cell.append(thumb, lab);
-      const f0 = g.files[0];
       cell.onclick = async () => {
-        let b = null;
-        if (g.files.length > 1) b = await getSeriesCoverBlob(ch, g.label, g.files);
-        if (!b) b = await getCover(ch, f0);
-        await useBlob(b);
+        const b = await getCover(ch, f);
+        if (!b) {
+          alert('Este cómic aún no tiene portada en caché. Ábrelo una vez e inténtalo de nuevo.');
+          return;
+        }
+        await setChannelCoverBlob(ch, b);
+        frame.remove();
+        after?.();
       };
-      grid.append(cell);
+      gridComics.append(cell);
       (async () => {
-        let b = null;
-        if (g.files.length > 1) b = await getSeriesCoverBlob(ch, g.label, g.files);
-        if (!b) b = await getCover(ch, f0);
+        const b = await getCover(ch, f);
         if (!b || !thumb.isConnected) return;
         const img = new Image();
         img.onload = () => { thumb.replaceChildren(img); };
