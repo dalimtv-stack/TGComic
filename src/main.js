@@ -6,6 +6,7 @@ import * as zip from '@zip.js/zip.js';
 import { createExtractorFromData } from 'node-unrar-js';
 import rarWasm from 'node-unrar-js/esm/js/unrar.wasm?url';
 import * as sync from './sync.js';
+import { buildSearchIndex, filterSearchIndex } from './search.js';
 
 const apiId = Number(import.meta.env.VITE_API_ID);
 const apiHash = import.meta.env.VITE_API_HASH;
@@ -2185,71 +2186,182 @@ function cardNode(i) {
 }
 function groupsView() {
   if (!LIB.length) return msg(synced ? 'No se encontraron canales ...::Comics::tgstorage.' : 'Conectando…');
-  const nodes = [];
-  const last = getLastRead();
-  if (last?.ch?.id && last?.f?.id) {
-    const sec = el('section', 'continue');
-    sec.append(el('div', 'sec-title', 'Seguir leyendo'));
-    const ch = last.ch, f = last.f;
-    const prog = readProgress(ch.id, f.id);
-    const row = el('button', 'continue-row');
-    row.type = 'button';
-    row.onclick = () => openComic(ch, f);
-    // Portada pequeña
-    const thumb = el('div', 'continue-cover');
-    const letter = el('span', '', stripExt(f.name).slice(0, 1).toUpperCase());
-    thumb.append(letter);
-    getCover(ch, f).then((b) => {
-      if (!b || !thumb.isConnected) return;
-      const img = new Image();
-      img.onload = () => { letter.remove(); thumb.prepend(img); };
-      img.src = URL.createObjectURL(b);
-    }).catch(() => {});
-    // Texto a la derecha
-    const meta = el('div', 'continue-meta');
-    meta.append(el('b', '', comicDisplayName(ch, f, comicDisplay(f.name, ch.name) || clean(f.name))));
-    meta.append(el('small', '', sizeLabel(f, ch)));
-    if (prog) {
-      const bar = el('div', 'continue-prog');
-      const fill = el('div', 'continue-prog-fill');
-      fill.style.width = prog.pct + '%';
-      bar.append(fill);
-      const lab = el('span', 'continue-prog-label', prog.pct >= 95 ? '✓ Completado' : `${prog.cur} / ${prog.tot} · ${prog.pct}%`);
-      meta.append(bar, lab);
+
+  let searchIndex = null;
+  let searchIndexPromise = null;
+  const ensureIndex = () => {
+    if (searchIndex) return Promise.resolve(searchIndex);
+    if (searchIndexPromise) return searchIndexPromise;
+    searchIndexPromise = buildSearchIndex({
+      LIB,
+      getFiles: async (ch) => (await kv.get('f:' + ch.id)) || [],
+      groupDisplayName,
+      channelDisplayName,
+      seriesDisplayName,
+      groupSeries,
+      comicDisplay,
+      comicDisplayName,
+      openSeries: (ch, seriesLabel, fs) => seriesView(ch, seriesLabel, fs),
+      openComic: (ch, f) => openComic(ch, f),
+      openGroup: (g) => channelsView(g),
+      openChannel: (ch) => filesView(ch),
+    }).then((idx) => {
+      searchIndex = idx;
+      return idx;
+    }).catch((e) => {
+      console.warn('[search]', e);
+      searchIndexPromise = null;
+      return [];
+    });
+    return searchIndexPromise;
+  };
+
+  const paintHome = () => {
+    const nodes = [];
+    // Buscador general
+    const searchWrap = el('div', 'home-search-wrap');
+    const s = el('input');
+    s.id = 'home-search';
+    s.type = 'search';
+    s.placeholder = 'Buscar editorial, canal, serie o cómic…';
+    s.autocomplete = 'off';
+    s.value = groupsView._q || '';
+    searchWrap.append(s);
+    nodes.push(searchWrap);
+
+    const resultsHost = el('div', 'home-search-results');
+    resultsHost.hidden = true;
+    nodes.push(resultsHost);
+
+    const homeBody = el('div', 'home-body');
+    nodes.push(homeBody);
+
+    const fillHomeBody = () => {
+      homeBody.replaceChildren();
+      const last = getLastRead();
+      if (last?.ch?.id && last?.f?.id) {
+        const sec = el('section', 'continue');
+        sec.append(el('div', 'sec-title', 'Seguir leyendo'));
+        const ch = last.ch, f = last.f;
+        const prog = readProgress(ch.id, f.id);
+        const row = el('button', 'continue-row');
+        row.type = 'button';
+        row.onclick = () => openComic(ch, f);
+        const thumb = el('div', 'continue-cover');
+        const letter = el('span', '', stripExt(f.name).slice(0, 1).toUpperCase());
+        thumb.append(letter);
+        getCover(ch, f).then((b) => {
+          if (!b || !thumb.isConnected) return;
+          const img = new Image();
+          img.onload = () => { letter.remove(); thumb.prepend(img); };
+          img.src = URL.createObjectURL(b);
+        }).catch(() => {});
+        const meta = el('div', 'continue-meta');
+        meta.append(el('b', '', comicDisplayName(ch, f, comicDisplay(f.name, ch.name) || clean(f.name))));
+        meta.append(el('small', '', sizeLabel(f, ch)));
+        if (prog) {
+          const bar = el('div', 'continue-prog');
+          const fill = el('div', 'continue-prog-fill');
+          fill.style.width = prog.pct + '%';
+          bar.append(fill);
+          const lab = el('span', 'continue-prog-label', prog.pct >= 95 ? '✓ Completado' : `${prog.cur} / ${prog.tot} · ${prog.pct}%`);
+          meta.append(bar, lab);
+        }
+        row.append(thumb, meta);
+        sec.append(row);
+        homeBody.append(sec);
+        homeBody.append(el('div', 'sec-sep'));
+      }
+      const gs = [...new Set(LIB.map((c) => c.group))];
+      gs.sort((a, b) => natural(groupDisplayName(a), groupDisplayName(b)));
+      const fold = el('details', 'pubs-fold');
+      if (pref('pubsOpen', '0') === '1') fold.open = true;
+      const sum = el('summary', '', 'Editoriales');
+      fold.append(sum);
+      const g = el('div', 'grid grid-pubs');
+      const redrawPubs = () => groupsView();
+      for (const name of gs) {
+        const n = LIB.filter((c) => c.group === name).length;
+        const label = groupDisplayName(name);
+        g.append(cardNode({
+          label,
+          sub: n === 1 ? '1 canal' : `${n} canales`,
+          cover: () => groupCoverNode(name),
+          go: () => channelsView(name),
+          longPress: () => sheet(label, [
+            ['Información', () => showGroupInfo(name)],
+            ['Editar', () => showEditGroup(name, redrawPubs)],
+          ]),
+        }));
+      }
+      fold.append(g);
+      fold.addEventListener('toggle', () => setPref('pubsOpen', fold.open ? '1' : '0'));
+      homeBody.append(fold);
+    };
+
+    const showResults = (list, q) => {
+      resultsHost.replaceChildren();
+      if (!q) {
+        resultsHost.hidden = true;
+        homeBody.hidden = false;
+        return;
+      }
+      homeBody.hidden = true;
+      resultsHost.hidden = false;
+      if (!list.length) {
+        resultsHost.append(el('p', 'home-search-empty', 'Sin resultados para «' + q + '»'));
+        return;
+      }
+      const meta = el('div', 'home-search-meta', list.length + (list.length === 1 ? ' resultado' : ' resultados'));
+      resultsHost.append(meta);
+      const listEl = el('div', 'home-search-list');
+      for (const item of list.slice(0, 80)) {
+        const btn = el('button', 'home-search-row');
+        btn.type = 'button';
+        const badge = el('span', 'home-search-badge type-' + (item.type || ''), item.typeLabel || '');
+        const text = el('div', 'home-search-text');
+        text.append(el('b', '', item.label));
+        if (item.sub) text.append(el('small', '', item.sub));
+        btn.append(badge, text);
+        btn.onclick = () => item.go?.();
+        listEl.append(btn);
+      }
+      if (list.length > 80) {
+        listEl.append(el('p', 'home-search-empty', 'Mostrando 80 de ' + list.length + '… Afina la búsqueda.'));
+      }
+      resultsHost.append(listEl);
+    };
+
+    let timer = null;
+    s.oninput = () => {
+      const q = s.value.trim();
+      groupsView._q = s.value;
+      clearTimeout(timer);
+      if (!q) {
+        showResults([], '');
+        return;
+      }
+      resultsHost.hidden = false;
+      homeBody.hidden = true;
+      resultsHost.replaceChildren(el('p', 'home-search-empty', 'Buscando…'));
+      timer = setTimeout(async () => {
+        const idx = await ensureIndex();
+        const hits = filterSearchIndex(idx, q);
+        if ((groupsView._q || '').trim() !== q) return;
+        showResults(hits, q);
+      }, 180);
+    };
+
+    app.replaceChildren(...nodes);
+    fillHomeBody();
+    if ((groupsView._q || '').trim()) {
+      s.dispatchEvent(new Event('input'));
     }
-    row.append(thumb, meta);
-    sec.append(row);
-    nodes.push(sec);
-    nodes.push(el('div', 'sec-sep'));
-  }
-  const gs = [...new Set(LIB.map((c) => c.group))];
-  gs.sort((a, b) => natural(groupDisplayName(a), groupDisplayName(b)));
-  const fold = el('details', 'pubs-fold');
-  if (pref('pubsOpen', '0') === '1') fold.open = true;
-  const sum = el('summary', '', 'Editoriales');
-  fold.append(sum);
-  const g = el('div', 'grid grid-pubs');
-  const redrawPubs = () => groupsView();
-  for (const name of gs) {
-    const n = LIB.filter((c) => c.group === name).length;
-    const label = groupDisplayName(name);
-    g.append(cardNode({
-      label,
-      sub: n === 1 ? '1 canal' : `${n} canales`,
-      cover: () => groupCoverNode(name),
-      go: () => channelsView(name),
-      longPress: () => sheet(label, [
-        ['Información', () => showGroupInfo(name)],
-        ['Editar', () => showEditGroup(name, redrawPubs)],
-      ]),
-    }));
-  }
-  fold.append(g);
-  fold.addEventListener('toggle', () => setPref('pubsOpen', fold.open ? '1' : '0'));
-  nodes.push(fold);
-  app.replaceChildren(...nodes);
-  window.scrollTo(0, 0);
-  lastScrollY = 0;
+    window.scrollTo(0, 0);
+    lastScrollY = 0;
+  };
+
+  paintHome();
 }
 function channelsView(g) {
   go(groupDisplayName(g), async (e) => {
