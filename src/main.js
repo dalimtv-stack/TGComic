@@ -1277,10 +1277,10 @@ function setSeriesDisplayName(ch, originalLabel, newName, after) {
   after?.();
 }
 /** Renombres de título de cómic por canal (clave = file.id) */
-const cnKey = (ch) => 'comicName:' + ch.id;
+const comicNameKey = (ch) => 'comicName:' + ch.id;
 function comicRenameMap(ch) {
   try {
-    const raw = JSON.parse(localStorage.getItem(cnKey(ch)) || '{}');
+    const raw = JSON.parse(localStorage.getItem(comicNameKey(ch)) || '{}');
     return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
   } catch { return {}; }
 }
@@ -1298,7 +1298,7 @@ function setComicDisplayName(ch, f, newName, after) {
   const n = String(newName || '').trim();
   if (!n) delete m[k];
   else m[k] = n;
-  try { localStorage.setItem(cnKey(ch), JSON.stringify(m)); } catch (_) {}
+  try { localStorage.setItem(comicNameKey(ch), JSON.stringify(m)); } catch (_) {}
   after?.();
 }
 function showEditComicTitle(ch, f, currentLabel, after) {
