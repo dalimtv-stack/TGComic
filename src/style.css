@@ -125,3 +125,21 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 .sheet .box{width:100%;max-width:480px;background:var(--card);border-radius:18px 18px 0 0;padding:1rem 1rem calc(var(--sab) + 1rem);display:grid;gap:.6rem}
 .sheet .sh-title{text-align:center;color:var(--mut);font-size:.9rem}
 .sheet .btn{background:#2a2b30;height:50px}
+
+/* Menú app (fuera del visor) */
+#actions{display:flex;align-items:center;gap:.35rem}
+.menu-btn.on{background:#2a2b30}
+.app-menu{position:fixed;z-index:40;min-width:180px;padding:.35rem;border-radius:14px;background:#1b1c20f2;-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);box-shadow:0 10px 30px #000a;border:1px solid #ffffff10}
+.app-menu-item{display:block;width:100%;text-align:left;border:0;background:transparent;color:var(--fg);font:inherit;padding:.75rem 1rem;border-radius:10px;cursor:pointer}
+.app-menu-item:active,.app-menu-item:hover{background:#ffffff10}
+.info-frame{position:fixed;inset:0;z-index:60;background:#000a;display:flex;align-items:center;justify-content:center;padding:1rem;padding-top:calc(var(--sat) + 1rem);padding-bottom:calc(var(--sab) + 1rem)}
+.info-box{width:min(420px,100%);max-height:100%;overflow:auto;background:var(--card);border-radius:16px;box-shadow:0 12px 40px #000c}
+.info-head{display:flex;align-items:center;justify-content:space-between;padding:.85rem 1rem;border-bottom:1px solid #ffffff10;font-weight:650;position:sticky;top:0;background:var(--card)}
+.info-close{min-width:40px;height:40px;font-size:1.4rem;padding:0;background:#2a2b30}
+.info-body{padding:.5rem 1rem 1.1rem}
+.info-sec{margin:1rem 0 .4rem;font-size:.75rem;font-weight:700;color:var(--acc);text-transform:uppercase;letter-spacing:.04em}
+.info-sec:first-child{margin-top:.35rem}
+.info-row{display:flex;justify-content:space-between;gap:1rem;padding:.45rem 0;border-bottom:1px solid #ffffff08;font-size:.92rem}
+.info-label{color:var(--mut)}
+.info-value{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+.info-loading{padding:1.5rem .5rem;text-align:center;color:var(--mut)}
