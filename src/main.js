@@ -124,9 +124,9 @@ const readProgress = (chId, msgId) => {
 
 // Nombre limpio: sin extensión, guiones bajos, etiquetas [..] (..) ni marcas @sitio
 const clean = (n) => stripExt(n).replace(/_/g, ' ').replace(/\s*[(\[][^)\]]*[)\]]/g, '').replace(/\s*@\S+/g, '').replace(/\s+/g, ' ').trim();
-// Número al final (legado)
-const NUM = /[\s._-]*(?:#|n[º°]\.?|no\.|vol\.?|cap\.?|issue|núm\.?|parte|part|tomo)?\s*\d+(?:\.\d+)?(?:\s*(?:de|of)\s*\d+)?\s*$/i;
-const FIRST_ISSUE = /^(.+?)[\s._-]+(?:#|n[º°]\.?|no\.?|vol\.?|cap\.?|issue|núm\.?)?\s*\d+(?:\.\d+)?(?:\b|$)/i;
+// Número al final (legado); admite sufijo de letra (07b, 1a)
+const NUM = /[\s._-]*(?:#|n[º°]\.?|no\.|vol\.?|cap\.?|issue|núm\.?|parte|part|tomo)?\s*\d+(?:\.\d+)?[a-zA-Z]?(?:\s*(?:de|of)\s*\d+)?\s*$/i;
+const FIRST_ISSUE = /^(.+?)[\s._-]+(?:#|n[º°]\.?|no\.?|vol\.?|cap\.?|issue|núm\.?)?\s*\d+(?:\.\d+)?[a-zA-Z]?(?:\b|$)/i;
 const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /** Quita (paréntesis) y [corchetes] del tramo info */
 const cleanInfo = (s) => (s || '').replace(/\s*\[[^\]]*\]/g, '').replace(/\s*\((?!\d+\s*de\s*\d+)[^)]*\)/gi, '').replace(/\s+/g, ' ').trim();
@@ -134,10 +134,11 @@ const cleanInfo = (s) => (s || '').replace(/\s*\[[^\]]*\]/g, '').replace(/\s*\((
  * Formatos preferidos:
  * 1.  [channel] - [serie] #[n|Special|Especial|Extra] [- info]
  * 2.  [serie] #[n|Special|Especial|Extra] [- info]
+ * 3.  [serie] [n|nX] [- info]   (sin #, p.ej. "Fabulas 07b - título")
  * No se muestra [channel]. [corchetes] ocultos.
  */
-// Marcador tras #: número o Special / Especial / Extra
-const ISSUE_TAG = '(?:\\d+(?:\\.\\d+)?|Special|Especial|Extra)';
+// Marcador: número (con opcional decimal y letra: 07b, 1a), o Special / Especial / Extra
+const ISSUE_TAG = '(?:\\d+(?:\\.\\d+)?[a-zA-Z]?|Special|Especial|Extra)';
 function parseComicName(name, channelName) {
   // Quitar [corchetes], @sitios y basura; dejar el patrón serie #n
   const raw = stripExt(name).replace(/_/g, ' ')
@@ -209,6 +210,28 @@ function parseComicName(name, channelName) {
     }
     const out = finish(stripCh(m2[1]), m2[2], info);
     if (out) return out;
+  }
+  // Sin #: Canal - serie 07b [- info]
+  if (ch) {
+    const re3 = new RegExp(
+      `^${escRe(ch)}\\s*-\\s*(.+?)\\s+(${ISSUE_TAG})(?:\\s*-\\s*(.+))?\\s*$`,
+      'i'
+    );
+    const m3 = raw.match(re3);
+    if (m3) {
+      const out = finish(m3[1], m3[2], m3[3] || '');
+      if (out) return out;
+    }
+  }
+  // Sin #: Serie 07b [- info]  (p.ej. "Fabulas 07b - 1001 Noches…")
+  const re4 = new RegExp(`^(.+?)\\s+(${ISSUE_TAG})(?:\\s*-\\s*(.+))?\\s*$`, 'i');
+  const m4 = raw.match(re4);
+  if (m4) {
+    const ser = stripCh(m4[1]);
+    if (ser && ser.length >= 2 && !/^\d+$/.test(ser)) {
+      const out = finish(ser, m4[2], m4[3] || '');
+      if (out) return out;
+    }
   }
   return null;
 }
@@ -1118,8 +1141,9 @@ function showComicInfo(ch, f, displayTitle) {
     const parsed = parseComicName(f?.name || '', ch?.name);
     let series = parsed?.series || seriesBase(f?.name || '', ch?.name) || '—';
     if (series !== '—' && ch) series = seriesDisplayName(ch, series);
+    const parsedTitle = comicDisplay(f?.name || '', ch?.name) || '—';
     const title = (displayTitle && String(displayTitle).trim())
-      || comicDisplay(f?.name || '', ch?.name)
+      || (ch && f ? comicDisplayName(ch, f, parsedTitle) : parsedTitle)
       || '—';
     const fname = f?.name || '';
     const fmt = /\.cbz$/i.test(fname) ? 'CBZ (ZIP)' : /\.cbr$/i.test(fname) ? 'CBR (RAR)' : '—';
@@ -1251,6 +1275,72 @@ function setSeriesDisplayName(ch, originalLabel, newName, after) {
   else m[k] = n;
   try { localStorage.setItem(snKey(ch), JSON.stringify(m)); } catch (_) {}
   after?.();
+}
+/** Renombres de título de cómic por canal (clave = file.id) */
+const cnKey = (ch) => 'comicName:' + ch.id;
+function comicRenameMap(ch) {
+  try {
+    const raw = JSON.parse(localStorage.getItem(cnKey(ch)) || '{}');
+    return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  } catch { return {}; }
+}
+function comicDisplayName(ch, f, fallback) {
+  if (!ch || !f) return fallback || '';
+  const m = comicRenameMap(ch);
+  const custom = m[String(f.id)];
+  if (custom != null && String(custom).trim()) return String(custom).trim();
+  return fallback || '';
+}
+function setComicDisplayName(ch, f, newName, after) {
+  if (!ch || !f?.id) return after?.();
+  const m = comicRenameMap(ch);
+  const k = String(f.id);
+  const n = String(newName || '').trim();
+  if (!n) delete m[k];
+  else m[k] = n;
+  try { localStorage.setItem(cnKey(ch), JSON.stringify(m)); } catch (_) {}
+  after?.();
+}
+function showEditComicTitle(ch, f, currentLabel, after) {
+  document.querySelector('.info-frame.edit-comic')?.remove();
+  const fallback = comicDisplay(f?.name || '', ch?.name) || clean(f?.name || '') || '';
+  const current = comicDisplayName(ch, f, currentLabel || fallback);
+  const frame = el('div', 'info-frame edit-comic');
+  const box = el('div', 'info-box');
+  const head = el('div', 'info-head');
+  head.append(el('span', '', 'Editar título'));
+  const close = el('button', 'btn info-close', '×');
+  close.onclick = () => frame.remove();
+  head.append(close);
+  const body = el('div', 'info-body');
+  body.append(el('div', 'info-sec', 'Título del cómic'));
+  const input = el('input', 'edit-input');
+  input.type = 'text';
+  input.value = current;
+  input.autocomplete = 'off';
+  body.append(input);
+  const hint = el('p', 'cover-pick-hint', 'Deja vacío y guarda para restaurar el título original.');
+  body.append(hint);
+  const actions = el('div', 'edit-actions');
+  const cancel = el('button', 'btn', 'Cancelar');
+  cancel.onclick = () => frame.remove();
+  const save = el('button', 'btn edit-save', 'Guardar');
+  save.onclick = () => {
+    const v = input.value.trim();
+    // Vacío → borrar personalización; si coincide con el original parseado, también
+    const toSave = (!v || v === fallback) ? '' : v;
+    setComicDisplayName(ch, f, toSave, () => {
+      frame.remove();
+      after?.();
+    });
+  };
+  actions.append(cancel, save);
+  body.append(actions);
+  box.append(head, body);
+  frame.append(box);
+  frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+  document.body.append(frame);
+  setTimeout(() => { input.focus(); input.select(); }, 50);
 }
 function showSeriesInfo(ch, seriesLabel, files) {
   try {
@@ -2088,7 +2178,7 @@ function groupsView() {
     }).catch(() => {});
     // Texto a la derecha
     const meta = el('div', 'continue-meta');
-    meta.append(el('b', '', clean(f.name)));
+    meta.append(el('b', '', comicDisplayName(ch, f, comicDisplay(f.name, ch.name) || clean(f.name))));
     meta.append(el('small', '', sizeLabel(f, ch)));
     if (prog) {
       const bar = el('div', 'continue-prog');
@@ -2177,11 +2267,13 @@ function filesView(ch) {
 
       const makeComicItem = (f, displayLabel, seriesLabel, groupState, seriesFiles) => {
         // groupState: null = sin serie, 'grouped' | 'short' | 'full'
+        const label = comicDisplayName(ch, f, displayLabel);
         const opts = [
-          ['Información', () => showComicInfo(ch, f, displayLabel)],
+          ['Información', () => showComicInfo(ch, f, label)],
+          ['Editar título', () => showEditComicTitle(ch, f, label, redraw)],
         ];
         if (seriesLabel && groupState) {
-          opts.push(['Editar', () => showEditSeries(ch, seriesLabel, seriesFiles || [], redraw)]);
+          opts.push(['Editar serie', () => showEditSeries(ch, seriesLabel, seriesFiles || [], redraw)]);
         }
         if (groupState === 'short' || groupState === 'full') {
           opts.push(['Volver a agrupar la serie', () => setUngroupMode(ch, seriesLabel, null, redraw)]);
@@ -2190,11 +2282,11 @@ function filesView(ch) {
           opts.push(['Desagrupar serie (con nombre)', () => setUngroupMode(ch, seriesLabel, 'full', redraw)]);
         }
         return {
-          label: displayLabel,
+          label,
           sub: sizeLabel(f, ch),
           cover: () => comicCover(ch, f),
           go: () => openComic(ch, f, cur),
-          longPress: () => sheet(displayLabel, opts),
+          longPress: () => sheet(label, opts),
           menu: groupState ? () => sheet(seriesDisplayName(ch, seriesLabel), opts.filter((o) => o[0] !== 'Información')) : undefined,
         };
       };
@@ -2213,12 +2305,13 @@ function filesView(ch) {
             hasSeriesName ? soloSeries : null,
             hasSeriesName ? 'grouped' : null
           ));
-          // Un solo número: no desagrupar; si hasSeriesName solo Editar+Info
+          // Un solo número: no desagrupar; si hasSeriesName Editar título + Editar serie + Info
           if (hasSeriesName) {
             const it = items[items.length - 1];
             it.longPress = () => sheet(it.label, [
               ['Información', () => showComicInfo(ch, f, it.label)],
-              ['Editar', () => showEditSeries(ch, soloSeries, fs, redraw)],
+              ['Editar título', () => showEditComicTitle(ch, f, it.label, redraw)],
+              ['Editar serie', () => showEditSeries(ch, soloSeries, fs, redraw)],
             ]);
             it.menu = undefined;
           }
@@ -2261,27 +2354,37 @@ function filesView(ch) {
 }
 function seriesView(ch, s, files) {
   const title = seriesDisplayName(ch, s);
-  go(title, () => grid(files.map((f) => {
-    const p = parseComicName(f.name, ch.name);
-    const displayLabel = (p && p.series.toLowerCase() === s.toLowerCase())
-      ? issueDisplay(p)
-      : issueLabel(s, f, ch.name);
-    const opts = [
-      ['Información', () => showComicInfo(ch, f, displayLabel)],
-      ['Editar', () => showEditSeries(ch, s, files, () => {
-        titleEl.textContent = seriesDisplayName(ch, s);
-      })],
-      ['Desagrupar serie', () => setUngroupMode(ch, s, 'short', () => history.back())],
-      ['Desagrupar serie (con nombre)', () => setUngroupMode(ch, s, 'full', () => history.back())],
-    ];
-    return {
-      label: displayLabel,
-      sub: sizeLabel(f, ch),
-      cover: () => comicCover(ch, f),
-      go: () => openComic(ch, f, files),
-      longPress: () => sheet(displayLabel, opts),
+  go(title, () => {
+    const redraw = () => {
+      // Re-render series view with updated labels
+      const items = files.map((f) => {
+        const p = parseComicName(f.name, ch.name);
+        const baseLabel = (p && p.series.toLowerCase() === s.toLowerCase())
+          ? issueDisplay(p)
+          : issueLabel(s, f, ch.name);
+        const displayLabel = comicDisplayName(ch, f, baseLabel);
+        const opts = [
+          ['Información', () => showComicInfo(ch, f, displayLabel)],
+          ['Editar título', () => showEditComicTitle(ch, f, displayLabel, redraw)],
+          ['Editar serie', () => showEditSeries(ch, s, files, () => {
+            titleEl.textContent = seriesDisplayName(ch, s);
+            redraw();
+          })],
+          ['Desagrupar serie', () => setUngroupMode(ch, s, 'short', () => history.back())],
+          ['Desagrupar serie (con nombre)', () => setUngroupMode(ch, s, 'full', () => history.back())],
+        ];
+        return {
+          label: displayLabel,
+          sub: sizeLabel(f, ch),
+          cover: () => comicCover(ch, f),
+          go: () => openComic(ch, f, files),
+          longPress: () => sheet(displayLabel, opts),
+        };
+      });
+      grid(items, true);
     };
-  }), true));
+    redraw();
+  });
 }
 
 // ---------- Lector ----------
@@ -2319,14 +2422,15 @@ function openComic(ch, f, queue, opts = {}) {
       if (alive(e)) msg('Error: ' + err.message);
     }
   };
+  const comicTitle = comicDisplayName(ch, f, comicDisplay(f.name, ch.name) || stripExt(f.name));
   if (opts.replace && stack.length) {
     cleanup?.(); cleanup = null;
     stack.pop();
-    stack.push({ title: stripExt(f.name), render: start, _isComic: true });
+    stack.push({ title: comicTitle, render: start, _isComic: true });
     try { history.replaceState(null, ''); } catch (_) {}
     show();
   } else {
-    go(stripExt(f.name), start);
+    go(comicTitle, start);
   }
 }
 
@@ -2387,7 +2491,10 @@ function reader(f, pages, zr, ctx) {
     };
     updateStatus();
     const titleCol = el('div', 'rd-titlecol');
-    titleCol.append(el('span', 'ttl', stripExt(f.name)), status);
+    const rdTitle = (ctx?.ch)
+      ? comicDisplayName(ctx.ch, f, comicDisplay(f.name, ctx.ch.name) || stripExt(f.name))
+      : stripExt(f.name);
+    titleCol.append(el('span', 'ttl', rdTitle), status);
     top.append(titleCol);
     // Barra inferior: controles
     const bot = el('div', 'bar botbar');
