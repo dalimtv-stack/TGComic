@@ -1288,13 +1288,57 @@ function showSeriesInfo(ch, seriesLabel, files) {
     alert('No se pudo mostrar la información');
   }
 }
-function showEditSeries(ch, seriesLabel, after) {
+const seriesCoverKey = (ch, label) => `sc:${ch.id}:${String(label || '').toLowerCase()}`;
+async function getSeriesCoverBlob(ch, seriesLabel, files) {
+  try {
+    const b = await kv.get(seriesCoverKey(ch, seriesLabel));
+    if (b instanceof Blob) return b;
+  } catch (_) {}
+  if (files?.[0]) return getCover(ch, files[0]);
+  return null;
+}
+async function setSeriesCoverBlob(ch, seriesLabel, blob) {
+  if (!blob) return;
+  try {
+    const opt = await optimizeImageBlob(blob, 320, 0.75);
+    await kv.set(seriesCoverKey(ch, seriesLabel), opt || blob);
+  } catch (e) {
+    console.warn('series cover', e);
+    try { await kv.set(seriesCoverKey(ch, seriesLabel), blob); } catch (_) {}
+  }
+}
+function seriesCoverNode(ch, seriesLabel, files, badge) {
+  const d = el('div', 'cover'), ltr = el('span', '', (seriesDisplayName(ch, seriesLabel) || seriesLabel || '?').slice(0, 1).toUpperCase());
+  d.append(ltr);
+  if (badge != null && badge !== '') {
+    d.append(el('span', 'badge series', String(badge)));
+  }
+  d._load = async () => {
+    const b = await getSeriesCoverBlob(ch, seriesLabel, files);
+    if (!b) return;
+    const img = new Image();
+    img.onload = () => { ltr.remove(); d.prepend(img); };
+    img.src = URL.createObjectURL(b);
+  };
+  io.observe(d);
+  return d;
+}
+/** Submenú Editar serie */
+function showEditSeries(ch, seriesLabel, files, after) {
+  const title = seriesDisplayName(ch, seriesLabel);
+  const list = Array.isArray(files) ? files : [];
+  sheet(title, [
+    ['Editar nombre de la serie', () => showEditSeriesName(ch, seriesLabel, after)],
+    ['Seleccionar portada de la serie', () => showSeriesCoverPicker(ch, seriesLabel, list, after)],
+  ]);
+}
+function showEditSeriesName(ch, seriesLabel, after) {
   document.querySelector('.info-frame.edit-series')?.remove();
   const current = seriesDisplayName(ch, seriesLabel);
   const frame = el('div', 'info-frame edit-series');
   const box = el('div', 'info-box');
   const head = el('div', 'info-head');
-  head.append(el('span', '', 'Editar serie'));
+  head.append(el('span', '', 'Editar nombre'));
   const close = el('button', 'btn info-close', '×');
   close.onclick = () => frame.remove();
   head.append(close);
@@ -1322,6 +1366,85 @@ function showEditSeries(ch, seriesLabel, after) {
   frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
   document.body.append(frame);
   setTimeout(() => { input.focus(); input.select(); }, 50);
+}
+function showSeriesCoverPicker(ch, seriesLabel, files, after) {
+  document.querySelector('.info-frame.cover-pick')?.remove();
+  const title = seriesDisplayName(ch, seriesLabel);
+  const frame = el('div', 'info-frame cover-pick');
+  const box = el('div', 'info-box cover-pick-box');
+  const head = el('div', 'info-head');
+  head.append(el('span', '', 'Portada de la serie'));
+  const close = el('button', 'btn info-close', '×');
+  close.onclick = () => frame.remove();
+  head.append(close);
+  const body = el('div', 'info-body');
+  body.append(el('div', 'info-sec', title));
+  body.append(el('p', 'cover-pick-hint', 'Elige la portada de un número de la serie o una imagen del dispositivo.'));
+
+  const pickFile = el('button', 'btn cover-pick-device', '📁  Desde fotos o archivos');
+  const fileInput = el('input');
+  fileInput.type = 'file';
+  fileInput.accept = 'image/*';
+  fileInput.hidden = true;
+  pickFile.onclick = () => fileInput.click();
+  fileInput.onchange = async () => {
+    const file = fileInput.files?.[0];
+    if (!file) return;
+    try {
+      await setSeriesCoverBlob(ch, seriesLabel, file);
+      frame.remove();
+      after?.();
+    } catch (e) {
+      alert('No se pudo usar la imagen: ' + (e?.message || e));
+    }
+  };
+  body.append(pickFile, fileInput);
+
+  const grid = el('div', 'cover-pick-grid');
+  body.append(el('div', 'info-sec', 'Números de la serie'));
+  body.append(grid);
+
+  const useCover = async (f) => {
+    try {
+      const b = await getCover(ch, f);
+      if (!b) {
+        alert('Este cómic aún no tiene portada en caché. Ábrelo una vez e inténtalo de nuevo.');
+        return;
+      }
+      await setSeriesCoverBlob(ch, seriesLabel, b);
+      frame.remove();
+      after?.();
+    } catch (e) {
+      alert('No se pudo asignar la portada: ' + (e?.message || e));
+    }
+  };
+
+  const list = Array.isArray(files) ? files : [];
+  if (!list.length) {
+    grid.append(el('div', 'info-loading', 'No hay cómics en esta serie.'));
+  } else {
+    for (const f of list) {
+      const cell = el('button', 'cover-pick-cell');
+      cell.type = 'button';
+      const thumb = el('div', 'cover-pick-thumb');
+      const lab = el('span', 'cover-pick-lab', issueLabel(seriesLabel, f, ch.name) || comicDisplay(f.name, ch.name));
+      cell.append(thumb, lab);
+      cell.onclick = () => useCover(f);
+      grid.append(cell);
+      (async () => {
+        const b = await getCover(ch, f);
+        if (!b || !thumb.isConnected) return;
+        const img = new Image();
+        img.onload = () => { thumb.replaceChildren(img); };
+        img.src = URL.createObjectURL(b);
+      })();
+    }
+  }
+
+  box.append(head, body);
+  frame.append(box);
+  frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+  document.body.append(frame);
 }
 /** Etiqueta de número sin el nombre de la serie */
 function issueLabel(series, f, channelName) {
@@ -1447,13 +1570,13 @@ function filesView(ch) {
       if (!files.length) return msg('No hay archivos CBZ/CBR en este canal.');
       const un = ungroupMap(ch), items = [], redraw = () => draw(cur);
 
-      const makeComicItem = (f, displayLabel, seriesLabel, groupState) => {
+      const makeComicItem = (f, displayLabel, seriesLabel, groupState, seriesFiles) => {
         // groupState: null = sin serie, 'grouped' | 'short' | 'full'
         const opts = [
           ['Información', () => showComicInfo(ch, f, displayLabel)],
         ];
         if (seriesLabel && groupState) {
-          opts.push(['Editar', () => showEditSeries(ch, seriesLabel, redraw)]);
+          opts.push(['Editar', () => showEditSeries(ch, seriesLabel, seriesFiles || [], redraw)]);
         }
         if (groupState === 'short' || groupState === 'full') {
           opts.push(['Volver a agrupar la serie', () => setUngroupMode(ch, seriesLabel, null, redraw)]);
@@ -1490,7 +1613,7 @@ function filesView(ch) {
             const it = items[items.length - 1];
             it.longPress = () => sheet(it.label, [
               ['Información', () => showComicInfo(ch, f, it.label)],
-              ['Editar', () => showEditSeries(ch, soloSeries, redraw)],
+              ['Editar', () => showEditSeries(ch, soloSeries, fs, redraw)],
             ]);
             it.menu = undefined;
           }
@@ -1500,19 +1623,19 @@ function filesView(ch) {
             const displayLabel = mode === 'short'
               ? issueLabel(seriesLabel, f, ch.name)
               : comicDisplay(f.name, ch.name);
-            items.push(makeComicItem(f, displayLabel, seriesLabel, mode));
+            items.push(makeComicItem(f, displayLabel, seriesLabel, mode, fs));
           });
         } else {
           const seriesOpts = [
             ['Información', () => showSeriesInfo(ch, seriesLabel, fs)],
-            ['Editar', () => showEditSeries(ch, seriesLabel, redraw)],
+            ['Editar', () => showEditSeries(ch, seriesLabel, fs, redraw)],
             ['Desagrupar serie', () => setUngroupMode(ch, seriesLabel, 'short', redraw)],
             ['Desagrupar serie (con nombre)', () => setUngroupMode(ch, seriesLabel, 'full', redraw)],
           ];
           items.push({
             label: seriesShown,
             sub: `${fs.length} números`,
-            cover: () => comicCover(ch, fs[0], fs.length, true),
+            cover: () => seriesCoverNode(ch, seriesLabel, fs, fs.length),
             go: () => seriesView(ch, seriesLabel, fs),
             longPress: () => sheet(seriesShown, seriesOpts),
             menu: () => sheet(seriesShown, seriesOpts),
@@ -1540,8 +1663,7 @@ function seriesView(ch, s, files) {
       : issueLabel(s, f, ch.name);
     const opts = [
       ['Información', () => showComicInfo(ch, f, displayLabel)],
-      ['Editar', () => showEditSeries(ch, s, () => {
-        // Actualizar título de la vista
+      ['Editar', () => showEditSeries(ch, s, files, () => {
         titleEl.textContent = seriesDisplayName(ch, s);
       })],
       ['Desagrupar serie', () => setUngroupMode(ch, s, 'short', () => history.back())],
