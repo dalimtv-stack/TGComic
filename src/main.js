@@ -1024,45 +1024,64 @@ function comicCover(ch, f, badge, series) {
   io.observe(d);
   return d;
 }
-/** Pulsación larga (móvil/tablet) sin menú del sistema ni click */
+/** Pulsación larga: el menú se abre AL SOLTAR (si no, el touchend cierra el sheet) */
 function bindLongPress(node, fn, ms = 480) {
   if (!fn || !node) return;
-  let timer = null, sx = 0, sy = 0, fired = false;
+  let timer = null, sx = 0, sy = 0, armed = false, opened = false;
   const clear = () => { if (timer) { clearTimeout(timer); timer = null; } };
   const onStart = (e) => {
     const pt = e.touches ? e.touches[0] : e;
     sx = pt.clientX; sy = pt.clientY;
-    fired = false;
+    armed = false;
+    opened = false;
     clear();
     timer = setTimeout(() => {
-      fired = true;
+      armed = true;
       try { navigator.vibrate?.(12); } catch (_) {}
-      fn(e);
+      // Feedback visual opcional en la tarjeta
+      node.classList.add('long-press');
     }, ms);
   };
   const onMove = (e) => {
     const pt = e.touches ? e.touches[0] : e;
-    if (Math.abs(pt.clientX - sx) > 12 || Math.abs(pt.clientY - sy) > 12) clear();
+    if (Math.abs(pt.clientX - sx) > 12 || Math.abs(pt.clientY - sy) > 12) {
+      clear();
+      armed = false;
+      node.classList.remove('long-press');
+    }
   };
   const onEnd = (e) => {
     clear();
-    if (fired) {
+    node.classList.remove('long-press');
+    if (armed && !opened) {
+      opened = true;
       e.preventDefault();
       e.stopPropagation();
+      // Abrir en el siguiente tick para no chocar con el touchend
+      setTimeout(() => fn(e), 10);
     }
   };
   node.addEventListener('touchstart', onStart, { passive: true });
   node.addEventListener('touchmove', onMove, { passive: true });
   node.addEventListener('touchend', onEnd, { passive: false });
-  node.addEventListener('touchcancel', clear, { passive: true });
-  // Bloquear menú del SO (guardar imagen, etc.) y usar el nuestro
+  node.addEventListener('touchcancel', () => {
+    clear();
+    armed = false;
+    node.classList.remove('long-press');
+  }, { passive: true });
+  // Escritorio: clic derecho
   node.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     e.stopPropagation();
     fn(e);
   }, true);
   node.addEventListener('click', (e) => {
-    if (fired) { e.preventDefault(); e.stopPropagation(); fired = false; }
+    if (opened || armed) {
+      e.preventDefault();
+      e.stopPropagation();
+      opened = false;
+      armed = false;
+    }
   }, true);
 }
 
