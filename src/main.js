@@ -1116,7 +1116,8 @@ function showComicInfo(ch, f, displayTitle) {
   try {
     document.querySelector('.info-frame.comic-info')?.remove();
     const parsed = parseComicName(f?.name || '', ch?.name);
-    const series = parsed?.series || seriesBase(f?.name || '', ch?.name) || '—';
+    let series = parsed?.series || seriesBase(f?.name || '', ch?.name) || '—';
+    if (series !== '—' && ch) series = seriesDisplayName(ch, series);
     const title = (displayTitle && String(displayTitle).trim())
       || comicDisplay(f?.name || '', ch?.name)
       || '—';
@@ -1228,6 +1229,99 @@ function setUngroupMode(ch, label, mode, after) {
   else m[k] = mode;
   try { localStorage.setItem(ugKey(ch), JSON.stringify(m)); } catch (_) {}
   after?.();
+}
+/** Renombres de serie por canal (clave = nombre original en minúsculas) */
+const snKey = (ch) => 'seriesName:' + ch.id;
+function seriesRenameMap(ch) {
+  try {
+    const raw = JSON.parse(localStorage.getItem(snKey(ch)) || '{}');
+    return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  } catch { return {}; }
+}
+function seriesDisplayName(ch, originalLabel) {
+  const m = seriesRenameMap(ch);
+  return m[String(originalLabel || '').toLowerCase()] || originalLabel;
+}
+function setSeriesDisplayName(ch, originalLabel, newName, after) {
+  const m = seriesRenameMap(ch);
+  const k = String(originalLabel || '').toLowerCase();
+  const n = String(newName || '').trim();
+  if (!k) return after?.();
+  if (!n || n.toLowerCase() === k) delete m[k];
+  else m[k] = n;
+  try { localStorage.setItem(snKey(ch), JSON.stringify(m)); } catch (_) {}
+  after?.();
+}
+function showSeriesInfo(ch, seriesLabel, files) {
+  try {
+    document.querySelector('.info-frame.series-info')?.remove();
+    const display = seriesDisplayName(ch, seriesLabel);
+    const n = files?.length || 0;
+    let bytes = 0;
+    for (const f of files || []) bytes += Number(f.size) || 0;
+    const frame = el('div', 'info-frame series-info');
+    const box = el('div', 'info-box');
+    const head = el('div', 'info-head');
+    head.append(el('span', '', 'Información'));
+    const close = el('button', 'btn info-close', '×');
+    close.onclick = () => frame.remove();
+    head.append(close);
+    const body = el('div', 'info-body');
+    const row = (label, value) => {
+      const r = el('div', 'info-row');
+      r.append(el('span', 'info-label', label), el('span', 'info-value', String(value ?? '—')));
+      return r;
+    };
+    body.append(el('div', 'info-sec', 'Serie'));
+    body.append(row('Nombre', display));
+    if (display !== seriesLabel) body.append(row('Nombre original', seriesLabel));
+    body.append(row('Canal', ch?.name || '—'));
+    body.append(row('Editorial', ch?.group || '—'));
+    body.append(row('Números', String(n)));
+    body.append(row('Tamaño total', formatBytes(bytes)));
+    box.append(head, body);
+    frame.append(box);
+    frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+    document.body.append(frame);
+  } catch (err) {
+    console.error(err);
+    alert('No se pudo mostrar la información');
+  }
+}
+function showEditSeries(ch, seriesLabel, after) {
+  document.querySelector('.info-frame.edit-series')?.remove();
+  const current = seriesDisplayName(ch, seriesLabel);
+  const frame = el('div', 'info-frame edit-series');
+  const box = el('div', 'info-box');
+  const head = el('div', 'info-head');
+  head.append(el('span', '', 'Editar serie'));
+  const close = el('button', 'btn info-close', '×');
+  close.onclick = () => frame.remove();
+  head.append(close);
+  const body = el('div', 'info-body');
+  body.append(el('div', 'info-sec', 'Nombre de la serie'));
+  const input = el('input', 'edit-input');
+  input.type = 'text';
+  input.value = current;
+  input.autocomplete = 'off';
+  body.append(input);
+  const actions = el('div', 'edit-actions');
+  const cancel = el('button', 'btn', 'Cancelar');
+  cancel.onclick = () => frame.remove();
+  const save = el('button', 'btn edit-save', 'Guardar');
+  save.onclick = () => {
+    setSeriesDisplayName(ch, seriesLabel, input.value, () => {
+      frame.remove();
+      after?.();
+    });
+  };
+  actions.append(cancel, save);
+  body.append(actions);
+  box.append(head, body);
+  frame.append(box);
+  frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+  document.body.append(frame);
+  setTimeout(() => { input.focus(); input.select(); }, 50);
 }
 /** Etiqueta de número sin el nombre de la serie */
 function issueLabel(series, f, channelName) {
@@ -1354,10 +1448,13 @@ function filesView(ch) {
       const un = ungroupMap(ch), items = [], redraw = () => draw(cur);
 
       const makeComicItem = (f, displayLabel, seriesLabel, groupState) => {
-        // groupState: null = sin serie (solo), 'grouped' | 'short' | 'full'
+        // groupState: null = sin serie, 'grouped' | 'short' | 'full'
         const opts = [
           ['Información', () => showComicInfo(ch, f, displayLabel)],
         ];
+        if (seriesLabel && groupState) {
+          opts.push(['Editar', () => showEditSeries(ch, seriesLabel, redraw)]);
+        }
         if (groupState === 'short' || groupState === 'full') {
           opts.push(['Volver a agrupar la serie', () => setUngroupMode(ch, seriesLabel, null, redraw)]);
         } else if (groupState === 'grouped') {
@@ -1370,15 +1467,33 @@ function filesView(ch) {
           cover: () => comicCover(ch, f),
           go: () => openComic(ch, f, cur),
           longPress: () => sheet(displayLabel, opts),
-          // Título: mismo menú (compatibilidad)
-          menu: groupState ? () => sheet(seriesLabel || displayLabel, opts.filter((o) => o[0] !== 'Información')) : undefined,
+          menu: groupState ? () => sheet(seriesDisplayName(ch, seriesLabel), opts.filter((o) => o[0] !== 'Información')) : undefined,
         };
       };
 
       for (const { label: seriesLabel, files: fs } of groupSeries(files, ch.name)) {
+        const seriesShown = seriesDisplayName(ch, seriesLabel);
         if (fs.length === 1) {
           const f = fs[0];
-          items.push(makeComicItem(f, comicDisplay(f.name, ch.name), seriesLabel, null));
+          // Si el parseo detectó serie aunque sea 1 archivo, permitir editar nombre de serie
+          const p = parseComicName(f.name, ch.name);
+          const soloSeries = p?.series || seriesLabel;
+          const hasSeriesName = !!(p?.series);
+          items.push(makeComicItem(
+            f,
+            comicDisplay(f.name, ch.name),
+            hasSeriesName ? soloSeries : null,
+            hasSeriesName ? 'grouped' : null
+          ));
+          // Un solo número: no desagrupar; si hasSeriesName solo Editar+Info
+          if (hasSeriesName) {
+            const it = items[items.length - 1];
+            it.longPress = () => sheet(it.label, [
+              ['Información', () => showComicInfo(ch, f, it.label)],
+              ['Editar', () => showEditSeries(ch, soloSeries, redraw)],
+            ]);
+            it.menu = undefined;
+          }
         } else if (un[seriesLabel.toLowerCase()]) {
           const mode = un[seriesLabel.toLowerCase()];
           fs.forEach((f) => {
@@ -1388,19 +1503,19 @@ function filesView(ch) {
             items.push(makeComicItem(f, displayLabel, seriesLabel, mode));
           });
         } else {
+          const seriesOpts = [
+            ['Información', () => showSeriesInfo(ch, seriesLabel, fs)],
+            ['Editar', () => showEditSeries(ch, seriesLabel, redraw)],
+            ['Desagrupar serie', () => setUngroupMode(ch, seriesLabel, 'short', redraw)],
+            ['Desagrupar serie (con nombre)', () => setUngroupMode(ch, seriesLabel, 'full', redraw)],
+          ];
           items.push({
-            label: seriesLabel,
+            label: seriesShown,
             sub: `${fs.length} números`,
             cover: () => comicCover(ch, fs[0], fs.length, true),
             go: () => seriesView(ch, seriesLabel, fs),
-            longPress: () => sheet(seriesLabel, [
-              ['Desagrupar serie', () => setUngroupMode(ch, seriesLabel, 'short', redraw)],
-              ['Desagrupar serie (con nombre)', () => setUngroupMode(ch, seriesLabel, 'full', redraw)],
-            ]),
-            menu: () => sheet(seriesLabel, [
-              ['Desagrupar serie', () => setUngroupMode(ch, seriesLabel, 'short', redraw)],
-              ['Desagrupar serie (con nombre)', () => setUngroupMode(ch, seriesLabel, 'full', redraw)],
-            ]),
+            longPress: () => sheet(seriesShown, seriesOpts),
+            menu: () => sheet(seriesShown, seriesOpts),
           });
         }
       }
@@ -1415,13 +1530,18 @@ function filesView(ch) {
   });
 }
 function seriesView(ch, s, files) {
-  go(s, () => grid(files.map((f) => {
+  const title = seriesDisplayName(ch, s);
+  go(title, () => grid(files.map((f) => {
     const p = parseComicName(f.name, ch.name);
     const displayLabel = (p && p.series.toLowerCase() === s.toLowerCase())
       ? issueDisplay(p)
       : issueLabel(s, f, ch.name);
     const opts = [
       ['Información', () => showComicInfo(ch, f, displayLabel)],
+      ['Editar', () => showEditSeries(ch, s, () => {
+        // Actualizar título de la vista
+        titleEl.textContent = seriesDisplayName(ch, s);
+      })],
       ['Desagrupar serie', () => setUngroupMode(ch, s, 'short', () => history.back())],
       ['Desagrupar serie (con nombre)', () => setUngroupMode(ch, s, 'full', () => history.back())],
     ];
