@@ -113,53 +113,86 @@ const cleanInfo = (s) => (s || '').replace(/\s*\[[^\]]*\]/g, '').replace(/\s*\((
 // Marcador tras #: número o Special / Especial / Extra
 const ISSUE_TAG = '(?:\\d+(?:\\.\\d+)?|Special|Especial|Extra)';
 function parseComicName(name, channelName) {
-  // Quitar solo [corchetes]; (1 de 2) puede permanecer hasta cleanInfo
+  // Quitar [corchetes], @sitios y basura; dejar el patrón serie #n
   const raw = stripExt(name).replace(/_/g, ' ')
     .replace(/\s*\[[^\]]*\]/g, '')
+    .replace(/\s*@\S+/g, '')
     .replace(/\s+/g, ' ')
     .trim();
   if (!raw) return null;
   const ch = (channelName || '').trim();
-  const finish = (series, tag, info) => {
-    series = (series || '').trim();
-    if (!series) return null;
+  const normTag = (tag) => {
     let number = String(tag || '').trim();
     const low = number.toLowerCase();
-    if (low === 'special') number = 'Special';
-    else if (low === 'especial') number = 'Especial';
-    else if (low === 'extra') number = 'Extra';
-    return { series, number, info: cleanInfo(info || ''), channel: ch || '' };
+    if (low === 'special') return 'Special';
+    if (low === 'especial') return 'Especial';
+    if (low === 'extra') return 'Extra';
+    return number;
   };
+  const finish = (series, tag, info, rangeEnd) => {
+    series = (series || '').trim();
+    if (!series) return null;
+    return {
+      series,
+      number: normTag(tag),
+      rangeEnd: rangeEnd ? normTag(rangeEnd) : '',
+      info: cleanInfo(info || ''),
+      channel: ch || '',
+    };
+  };
+  const stripCh = (series) => {
+    if (!ch) return series;
+    return series.replace(new RegExp(`^${escRe(ch)}\\s*-\\s*`, 'i'), '').trim() || series;
+  };
+  // Rango: "Crossed - Dead Or Alive #01 - #02"
+  const reRange = new RegExp(`^(.+?)\\s*#\\s*(${ISSUE_TAG})\\s*-\\s*#\\s*(${ISSUE_TAG})\\s*$`, 'i');
+  const mRange = raw.match(reRange);
+  if (mRange) {
+    const out = finish(stripCh(mRange[1]), mRange[2], '', mRange[3]);
+    if (out) return out;
+  }
+  // Canal - serie #n [- info]
   if (ch) {
     const re1 = new RegExp(
-      `^${escRe(ch)}\\s*-\\s*(.+?)\\s*#\\s*(${ISSUE_TAG})(?:\\s*-\\s*(.+))?$`,
+      `^${escRe(ch)}\\s*-\\s*(.+?)\\s*#\\s*(${ISSUE_TAG})(?:\\s*-\\s*(.+))?\\s*$`,
       'i'
     );
     const m1 = raw.match(re1);
     if (m1) {
-      const out = finish(m1[1], m1[2], m1[3]);
+      // Evitar tratar "#01 - #02" como info si reRange falló por canal
+      let info = m1[3] || '';
+      const rangeInInfo = info.match(new RegExp(`^#\\s*(${ISSUE_TAG})\\s*$`, 'i'));
+      if (rangeInInfo) {
+        const out = finish(m1[1], m1[2], '', rangeInInfo[1]);
+        if (out) return out;
+      }
+      const out = finish(m1[1], m1[2], info);
       if (out) return out;
     }
   }
-  const re2 = new RegExp(`^(.+?)\\s*#\\s*(${ISSUE_TAG})(?:\\s*-\\s*(.+))?$`, 'i');
+  // Serie #n [- info]  (info no empieza por #n de rango ya cubierto)
+  const re2 = new RegExp(`^(.+?)\\s*#\\s*(${ISSUE_TAG})(?:\\s*-\\s*(.+))?\\s*$`, 'i');
   const m2 = raw.match(re2);
   if (m2) {
-    let series = m2[1].trim();
-    if (ch) {
-      const pre = new RegExp(`^${escRe(ch)}\\s*-\\s*`, 'i');
-      series = series.replace(pre, '').trim() || series;
+    let info = m2[3] || '';
+    const rangeInInfo = info.match(new RegExp(`^#\\s*(${ISSUE_TAG})\\s*$`, 'i'));
+    if (rangeInInfo) {
+      const out = finish(stripCh(m2[1]), m2[2], '', rangeInInfo[1]);
+      if (out) return out;
     }
-    const out = finish(series, m2[2], m2[3]);
+    const out = finish(stripCh(m2[1]), m2[2], info);
     if (out) return out;
   }
   return null;
 }
-/** Etiqueta visible: "#01", "#Special", "#Extra - Batmito 1" */
+/** Etiqueta visible: "#01", "#01 - #02", "#Extra - Batmito 1" */
 function issueDisplay(parsed) {
   if (!parsed) return '';
+  if (parsed.rangeEnd) return `#${parsed.number} - #${parsed.rangeEnd}`;
   const base = '#' + parsed.number;
   return parsed.info ? `${base} - ${parsed.info}` : base;
 }
+
 function comicDisplay(name, channelName) {
   const p = parseComicName(name, channelName);
   if (p) {
@@ -991,15 +1024,15 @@ function comicCover(ch, f, badge, series) {
   io.observe(d);
   return d;
 }
-/** Pulsación larga (móvil/tablet) sin disparar el click */
+/** Pulsación larga (móvil/tablet) sin menú del sistema ni click */
 function bindLongPress(node, fn, ms = 480) {
   if (!fn || !node) return;
-  let timer = null, sx = 0, sy = 0, moved = false, fired = false;
+  let timer = null, sx = 0, sy = 0, fired = false;
   const clear = () => { if (timer) { clearTimeout(timer); timer = null; } };
   const onStart = (e) => {
-    const t = e.touches ? e.touches[0] : e;
-    sx = t.clientX; sy = t.clientY;
-    moved = false; fired = false;
+    const pt = e.touches ? e.touches[0] : e;
+    sx = pt.clientX; sy = pt.clientY;
+    fired = false;
     clear();
     timer = setTimeout(() => {
       fired = true;
@@ -1008,11 +1041,8 @@ function bindLongPress(node, fn, ms = 480) {
     }, ms);
   };
   const onMove = (e) => {
-    const t = e.touches ? e.touches[0] : e;
-    if (Math.abs(t.clientX - sx) > 12 || Math.abs(t.clientY - sy) > 12) {
-      moved = true;
-      clear();
-    }
+    const pt = e.touches ? e.touches[0] : e;
+    if (Math.abs(pt.clientX - sx) > 12 || Math.abs(pt.clientY - sy) > 12) clear();
   };
   const onEnd = (e) => {
     clear();
@@ -1025,12 +1055,12 @@ function bindLongPress(node, fn, ms = 480) {
   node.addEventListener('touchmove', onMove, { passive: true });
   node.addEventListener('touchend', onEnd, { passive: false });
   node.addEventListener('touchcancel', clear, { passive: true });
-  // Escritorio: botón derecho como alternativa
+  // Bloquear menú del SO (guardar imagen, etc.) y usar el nuestro
   node.addEventListener('contextmenu', (e) => {
     e.preventDefault();
+    e.stopPropagation();
     fn(e);
-  });
-  // Evitar click tras long-press
+  }, true);
   node.addEventListener('click', (e) => {
     if (fired) { e.preventDefault(); e.stopPropagation(); fired = false; }
   }, true);
