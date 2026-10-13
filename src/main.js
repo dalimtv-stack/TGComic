@@ -1149,7 +1149,7 @@ function showComicInfo(ch, f, displayTitle) {
     body.append(el('div', 'info-sec', 'Cómic'));
     body.append(row('Título', title));
     body.append(row('Serie', series));
-    body.append(row('Canal', ch?.name || '—'));
+    body.append(row('Canal', ch ? channelDisplayName(ch) : '—'));
     body.append(row('Editorial', ch?.group || '—'));
     body.append(row('Nombre archivo', fname || '—'));
     body.append(row('Formato archivo', fmt));
@@ -1275,7 +1275,7 @@ function showSeriesInfo(ch, seriesLabel, files) {
     body.append(el('div', 'info-sec', 'Serie'));
     body.append(row('Nombre', display));
     if (display !== seriesLabel) body.append(row('Nombre original', seriesLabel));
-    body.append(row('Canal', ch?.name || '—'));
+    body.append(row('Canal', ch ? channelDisplayName(ch) : '—'));
     body.append(row('Editorial', ch?.group || '—'));
     body.append(row('Números', String(n)));
     body.append(row('Tamaño total', formatBytes(bytes)));
@@ -1446,6 +1446,263 @@ function showSeriesCoverPicker(ch, seriesLabel, files, after) {
   frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
   document.body.append(frame);
 }
+
+/** Nombres y portadas de canal (por id de Telegram) */
+const cnKey = 'channelNames';
+function channelRenameMap() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(cnKey) || '{}');
+    return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  } catch { return {}; }
+}
+function channelDisplayName(ch) {
+  if (!ch) return '—';
+  const m = channelRenameMap();
+  return m[String(ch.id)] || ch.name || '—';
+}
+function setChannelDisplayName(ch, newName, after) {
+  const m = channelRenameMap();
+  const id = String(ch.id);
+  const n = String(newName || '').trim();
+  if (!n || n === ch.name) delete m[id];
+  else m[id] = n;
+  try { localStorage.setItem(cnKey, JSON.stringify(m)); } catch (_) {}
+  after?.();
+}
+const channelCoverKey = (ch) => `cc:${ch.id}`;
+async function getChannelCoverBlob(ch, files) {
+  try {
+    const b = await kv.get(channelCoverKey(ch));
+    if (b instanceof Blob) return b;
+  } catch (_) {}
+  // Portada GitHub / fallback cómic vía art no aplica aquí; usar primer cómic si hay
+  if (files?.[0]) return getCover(ch, files[0]);
+  return null;
+}
+async function setChannelCoverBlob(ch, blob) {
+  if (!blob) return;
+  try {
+    const opt = await optimizeImageBlob(blob, 384, 0.75);
+    await kv.set(channelCoverKey(ch), opt || blob);
+  } catch (e) {
+    console.warn('channel cover', e);
+    try { await kv.set(channelCoverKey(ch), blob); } catch (_) {}
+  }
+}
+function channelCoverNode(ch) {
+  const d = el('div', 'cover'), ltr = el('span', '', (channelDisplayName(ch) || '?').slice(0, 1).toUpperCase());
+  d.append(ltr);
+  d._load = async () => {
+    // 1) Portada personalizada
+    try {
+      const custom = await kv.get(channelCoverKey(ch));
+      if (custom instanceof Blob) {
+        const img = new Image();
+        img.onload = () => { ltr.remove(); d.prepend(img); };
+        img.src = URL.createObjectURL(custom);
+        return;
+      }
+    } catch (_) {}
+    // 2) Arte GitHub / fallback cómic (nodo art reutilizable)
+    const artNode = art('channels', ch.name, ch);
+    // Sustituir contenido cuando art cargue: observar el nodo art
+    d.replaceChildren(artNode);
+    // art() returns a cover div - use it fully
+  };
+  // Carga diferida: si hay custom, mostrarla; si no, delegar en art()
+  d._load = async () => {
+    try {
+      const custom = await kv.get(channelCoverKey(ch));
+      if (custom instanceof Blob) {
+        const img = new Image();
+        img.onload = () => { try { ltr.remove(); } catch (_) {} d.replaceChildren(img); };
+        img.src = URL.createObjectURL(custom);
+        return;
+      }
+    } catch (_) {}
+    const artNode = art('channels', ch.name, ch);
+    d.replaceChildren(artNode);
+    // Disparar carga del art
+    artNode._load?.();
+  };
+  io.observe(d);
+  return d;
+}
+async function showChannelInfo(ch) {
+  try {
+    document.querySelector('.info-frame.channel-info')?.remove();
+    const display = channelDisplayName(ch);
+    let files = (await kv.get('f:' + ch.id)) || [];
+    const n = files.length;
+    let bytes = 0;
+    for (const f of files) bytes += Number(f.size) || 0;
+    let seriesCount = 0;
+    try {
+      const groups = groupSeries(files, ch.name);
+      seriesCount = groups.filter((g) => g.files.length > 1).length;
+    } catch (_) {}
+    const frame = el('div', 'info-frame channel-info');
+    const box = el('div', 'info-box');
+    const head = el('div', 'info-head');
+    head.append(el('span', '', 'Información'));
+    const close = el('button', 'btn info-close', '×');
+    close.onclick = () => frame.remove();
+    head.append(close);
+    const body = el('div', 'info-body');
+    const row = (label, value) => {
+      const r = el('div', 'info-row');
+      r.append(el('span', 'info-label', label), el('span', 'info-value', String(value ?? '—')));
+      return r;
+    };
+    body.append(el('div', 'info-sec', 'Canal'));
+    body.append(row('Nombre', display));
+    if (display !== ch.name) body.append(row('Nombre original', ch.name));
+    body.append(row('Editorial', ch.group || '—'));
+    body.append(row('Cómics', String(n)));
+    body.append(row('Series (agrupadas)', String(seriesCount)));
+    body.append(row('Tamaño total', formatBytes(bytes)));
+    box.append(head, body);
+    frame.append(box);
+    frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+    document.body.append(frame);
+  } catch (err) {
+    console.error(err);
+    alert('No se pudo mostrar la información del canal');
+  }
+}
+function showEditChannel(ch, files, after) {
+  sheet(channelDisplayName(ch), [
+    ['Editar nombre del canal', () => showEditChannelName(ch, after)],
+    ['Seleccionar portada del canal', () => showChannelCoverPicker(ch, files || [], after)],
+  ]);
+}
+function showEditChannelName(ch, after) {
+  document.querySelector('.info-frame.edit-channel')?.remove();
+  const current = channelDisplayName(ch);
+  const frame = el('div', 'info-frame edit-channel');
+  const box = el('div', 'info-box');
+  const head = el('div', 'info-head');
+  head.append(el('span', '', 'Editar nombre'));
+  const close = el('button', 'btn info-close', '×');
+  close.onclick = () => frame.remove();
+  head.append(close);
+  const body = el('div', 'info-body');
+  body.append(el('div', 'info-sec', 'Nombre del canal'));
+  const input = el('input', 'edit-input');
+  input.type = 'text';
+  input.value = current;
+  input.autocomplete = 'off';
+  body.append(input);
+  const actions = el('div', 'edit-actions');
+  const cancel = el('button', 'btn', 'Cancelar');
+  cancel.onclick = () => frame.remove();
+  const save = el('button', 'btn edit-save', 'Guardar');
+  save.onclick = () => {
+    setChannelDisplayName(ch, input.value, () => {
+      frame.remove();
+      after?.();
+    });
+  };
+  actions.append(cancel, save);
+  body.append(actions);
+  box.append(head, body);
+  frame.append(box);
+  frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+  document.body.append(frame);
+  setTimeout(() => { input.focus(); input.select(); }, 50);
+}
+function showChannelCoverPicker(ch, files, after) {
+  document.querySelector('.info-frame.cover-pick')?.remove();
+  const title = channelDisplayName(ch);
+  const frame = el('div', 'info-frame cover-pick');
+  const box = el('div', 'info-box cover-pick-box');
+  const head = el('div', 'info-head');
+  head.append(el('span', '', 'Portada del canal'));
+  const close = el('button', 'btn info-close', '×');
+  close.onclick = () => frame.remove();
+  head.append(close);
+  const body = el('div', 'info-body');
+  body.append(el('div', 'info-sec', title));
+  body.append(el('p', 'cover-pick-hint', 'Elige la portada de un cómic/serie del canal o una imagen del dispositivo.'));
+
+  const pickFile = el('button', 'btn cover-pick-device', '📁  Desde fotos o archivos');
+  const fileInput = el('input');
+  fileInput.type = 'file';
+  fileInput.accept = 'image/*';
+  fileInput.hidden = true;
+  pickFile.onclick = () => fileInput.click();
+  fileInput.onchange = async () => {
+    const file = fileInput.files?.[0];
+    if (!file) return;
+    try {
+      await setChannelCoverBlob(ch, file);
+      frame.remove();
+      after?.();
+    } catch (e) {
+      alert('No se pudo usar la imagen: ' + (e?.message || e));
+    }
+  };
+  body.append(pickFile, fileInput);
+
+  const grid = el('div', 'cover-pick-grid');
+  body.append(el('div', 'info-sec', 'Cómics y series'));
+  body.append(grid);
+
+  const useBlob = async (blob) => {
+    if (!blob) {
+      alert('Esta entrada aún no tiene portada en caché. Ábrela una vez e inténtalo de nuevo.');
+      return;
+    }
+    await setChannelCoverBlob(ch, blob);
+    frame.remove();
+    after?.();
+  };
+
+  const list = Array.isArray(files) ? files : [];
+  if (!list.length) {
+    grid.append(el('div', 'info-loading', 'No hay cómics en este canal.'));
+  } else {
+    // Agrupar: una celda por serie (portada de serie o primer cómic) + sueltos
+    let groups = [];
+    try { groups = groupSeries(list, ch.name); } catch (_) {
+      groups = list.map((f) => ({ label: comicDisplay(f.name, ch.name), files: [f] }));
+    }
+    for (const g of groups) {
+      const cell = el('button', 'cover-pick-cell');
+      cell.type = 'button';
+      const thumb = el('div', 'cover-pick-thumb');
+      const lab = el('span', 'cover-pick-lab',
+        g.files.length > 1
+          ? seriesDisplayName(ch, g.label)
+          : (comicDisplay(g.files[0].name, ch.name))
+      );
+      cell.append(thumb, lab);
+      const f0 = g.files[0];
+      cell.onclick = async () => {
+        let b = null;
+        if (g.files.length > 1) b = await getSeriesCoverBlob(ch, g.label, g.files);
+        if (!b) b = await getCover(ch, f0);
+        await useBlob(b);
+      };
+      grid.append(cell);
+      (async () => {
+        let b = null;
+        if (g.files.length > 1) b = await getSeriesCoverBlob(ch, g.label, g.files);
+        if (!b) b = await getCover(ch, f0);
+        if (!b || !thumb.isConnected) return;
+        const img = new Image();
+        img.onload = () => { thumb.replaceChildren(img); };
+        img.src = URL.createObjectURL(b);
+      })();
+    }
+  }
+
+  box.append(head, body);
+  frame.append(box);
+  frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+  document.body.append(frame);
+}
+
 /** Etiqueta de número sin el nombre de la serie */
 function issueLabel(series, f, channelName) {
   const p = parseComicName(f.name, channelName);
@@ -1535,19 +1792,25 @@ function groupsView() {
 }
 function channelsView(g) {
   go(g, async (e) => {
-    const chs = LIB.filter((c) => c.group === g).sort((a, b) => natural(a.name, b.name));
+    const chs = LIB.filter((c) => c.group === g);
     const build = async () => {
       const items = [];
       for (const ch of chs) {
         const files = (await kv.get('f:' + ch.id)) || [];
         const n = files.length;
+        const label = channelDisplayName(ch);
         items.push({
-          label: ch.name,
+          label,
           sub: n ? (n === 1 ? '1 cómic' : `${n} cómics`) : '',
-          cover: () => art('channels', ch.name, ch),
+          cover: () => channelCoverNode(ch),
           go: () => filesView(ch),
+          longPress: () => sheet(label, [
+            ['Información', () => showChannelInfo(ch)],
+            ['Editar', () => showEditChannel(ch, files, () => build())],
+          ]),
         });
       }
+      items.sort((a, b) => natural(a.label, b.label));
       if (alive(e)) grid(items, true);
     };
     await build();
@@ -1562,7 +1825,7 @@ function channelsView(g) {
   });
 }
 function filesView(ch) {
-  go(ch.name, async (e) => {
+  go(channelDisplayName(ch), async (e) => {
     let cur = [];
     const draw = (files) => {
       if (!alive(e)) return;
