@@ -134,11 +134,13 @@ const cleanInfo = (s) => (s || '').replace(/\s*\[[^\]]*\]/g, '').replace(/\s*\((
  * Formatos preferidos:
  * 1.  [channel] - [serie] #[n|Special|Especial|Extra] [- info]
  * 2.  [serie] #[n|Special|Especial|Extra] [- info]
- * 3.  [serie] [n|nX] [- info]   (sin #, p.ej. "Fabulas 07b - título")
+ * 3.  [serie] [n|nX|n de m] [- info]   (sin #, p.ej. "Fabulas 07b - título", "Coleccionable 01 de 40")
  * No se muestra [channel]. [corchetes] ocultos.
  */
-// Marcador: número (con opcional decimal y letra: 07b, 1a), o Special / Especial / Extra
-const ISSUE_TAG = '(?:\\d+(?:\\.\\d+)?[a-zA-Z]?|Special|Especial|Extra)';
+// Número de número: 12, 07b, 1.5, 01 de 40, 3 of 12
+const ISSUE_NUM = '(?:\\d+(?:\\.\\d+)?[a-zA-Z]?(?:\\s*(?:de|of)\\s*\\d+)?)';
+// Marcador completo: número o Special / Especial / Extra
+const ISSUE_TAG = `(?:${ISSUE_NUM}|Special|Especial|Extra)`;
 function parseComicName(name, channelName) {
   // Quitar [corchetes], @sitios y basura; dejar el patrón serie #n
   const raw = stripExt(name).replace(/_/g, ' ')
