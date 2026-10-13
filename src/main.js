@@ -1287,33 +1287,31 @@ function reader(f, pages, zr, ctx) {
         im.style.objectFit = 'contain';
         if (horiz) {
           if (screen) {
+            // Cabe entera → centrada
             im.style.width = 'auto';
             im.style.height = 'auto';
             im.style.maxWidth = vw() + 'px';
             im.style.maxHeight = vh() + 'px';
-            slot.style.overflowX = 'hidden';
-            slot.style.overflowY = 'hidden';
+            im.style.flexShrink = '0';
+            slot.style.overflow = 'hidden';
+            slot.style.display = 'flex';
             slot.style.alignItems = 'center';
             slot.style.justifyContent = 'center';
           } else {
-            // Ancho = viewport; si es más alta, scroll vertical desde arriba (sin comprimir)
+            // Ancho = 100% del viewport
             im.style.width = '100%';
             im.style.maxWidth = '100%';
             im.style.height = 'auto';
             im.style.maxHeight = 'none';
             im.style.flex = 'none';
             im.style.flexShrink = '0';
-            im.style.alignSelf = 'flex-start';
             slot.style.overflowX = 'hidden';
             slot.style.overflowY = 'auto';
-            slot.style.alignItems = 'flex-start';
-            slot.style.justifyContent = 'flex-start';
             slot.style.webkitOverflowScrolling = 'touch';
-            slot.scrollTop = 0;
+            // Centrado o arriba se decide en place() según si es alta
           }
           slot.style.height = '100%';
           slot.style.maxHeight = '100%';
-          slot.style.display = 'block'; // no flex: evita que la img se encoja y recorte
 
         } else {
           if (screen) {
@@ -1356,15 +1354,28 @@ function reader(f, pages, zr, ctx) {
           slot.style.minWidth = h + 'px';
           slot.style.marginRight = GAP + 'px';
           if (fitMode() === 'width') {
-            // block layout: altura natural de la imagen
             const imgH = im.offsetHeight || im.naturalHeight || 0;
             const viewH = (window.visualViewport?.height || vh());
             const tall = imgH > viewH + 4;
-            slot.style.overflowY = 'auto';
-            slot.style.display = 'block';
-            slot.scrollTop = 0;
             slot.dataset.tall = tall ? '1' : '0';
+            if (tall) {
+              // Más alta que la pantalla: scroll desde el flujo normal (no recentrar)
+              slot.style.display = 'block';
+              slot.style.overflowY = 'auto';
+              slot.style.alignItems = '';
+              slot.style.justifyContent = '';
+            } else {
+              // Cabe entera: centrada
+              slot.style.display = 'flex';
+              slot.style.alignItems = 'center';
+              slot.style.justifyContent = 'center';
+              slot.style.overflowY = 'hidden';
+              slot.scrollTop = 0;
+            }
           } else {
+            slot.style.display = 'flex';
+            slot.style.alignItems = 'center';
+            slot.style.justifyContent = 'center';
             slot.style.overflowY = 'hidden';
             slot.dataset.tall = '0';
           }
@@ -1409,12 +1420,9 @@ function reader(f, pages, zr, ctx) {
         savePage(n);
         setCount();
         syncLock = true;
-        // Al cambiar de página, subir el scroll vertical interno
-        slots.forEach((s) => { try { s.scrollTop = 0; } catch (_) {} });
         jumpTo(i);
         await ensure(i);
         jumpTo(i);
-        try { slots[i].scrollTop = 0; } catch (_) {}
         ensure(i - 1); ensure(i + 1); ensure(i + 2);
         requestAnimationFrame(() => {
           jumpTo(i);
@@ -1522,7 +1530,7 @@ function reader(f, pages, zr, ctx) {
             n = idx;
             savePage(n);
             setCount();
-            try { slots[idx].scrollTop = 0; } catch (_) {}
+            // No forzar scrollTop=0: respeta dónde estaba / inicio natural
             ensure(idx - 1); ensure(idx); ensure(idx + 1); ensure(idx + 2);
           }
         };
@@ -1543,20 +1551,21 @@ function reader(f, pages, zr, ctx) {
           const x = e.touches[0].clientX, y = e.touches[0].clientY;
           const dx = x - sx, dy = y - sy;
           if (!axis) {
-            // Umbral bajo; ligera preferencia horizontal para pasar de página con naturalidad
-            if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
-            axis = Math.abs(dx) >= Math.abs(dy) * 0.75 ? 'x' : 'y';
+            if (Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
+            axis = Math.abs(dx) >= Math.abs(dy) ? 'x' : 'y';
           }
           if (axis === 'x') {
             e.preventDefault();
+            // 1:1 con el dedo
             rd.scrollLeft = baseLeft - dx;
             const now = performance.now();
             const dt = Math.max(1, now - lastT);
-            velX = (x - lastX) / dt; // px/ms
+            velX = (x - lastX) / dt;
             lastX = x;
             lastT = now;
           } else if (axis === 'y') {
             e.preventDefault();
+            // 1:1 vertical (sin saltar al top)
             activeSlot.scrollTop = Math.max(0, baseTop - dy);
           }
         };
@@ -1565,9 +1574,9 @@ function reader(f, pages, zr, ctx) {
             const w = Math.max(1, sizes[n] || rd.clientWidth);
             const offset = rd.scrollLeft - posOf(n);
             let idx = n;
-            // Más recorrido o velocidad clara → cambia; si no, vuelve a la actual (suave)
-            if (offset > w * 0.28 || velX < -0.55) idx = Math.min(pages.length - 1, n + 1);
-            else if (offset < -w * 0.28 || velX > 0.55) idx = Math.max(0, n - 1);
+            // Poco recorrido basta (~15%) o un flick ligero
+            if (offset > w * 0.15 || velX < -0.25) idx = Math.min(pages.length - 1, n + 1);
+            else if (offset < -w * 0.15 || velX > 0.25) idx = Math.max(0, n - 1);
             snapTo(idx);
           }
           axis = null;
