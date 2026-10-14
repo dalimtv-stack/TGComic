@@ -132,47 +132,103 @@ export function createRepackTool(d) {
     await getReady();
     const peer = peerOf(ch);
     const client = getClient();
-    status?.('Preparando subida…');
-    const buf = new Uint8Array(await blob.arrayBuffer());
-    // Liberar blob cuanto antes si ya no se usa
+    if (!blob || !blob.size) throw new Error('CBZ vacío');
+    status?.(`Preparando subida… (${formatBytes?.(blob.size) || blob.size + ' B'})`);
+
     const attrs = [new Api.DocumentAttributeFilename({ fileName })];
-    const baseOpts = {
-      caption: caption || '',
-      forceDocument: true,
-      workers: 1,
-      attributes: attrs,
-    };
-
-    const tryCustom = async () => {
-      let CustomFile;
-      try { ({ CustomFile } = await import('telegram/Utils')); }
-      catch (_) { ({ CustomFile } = await import('telegram/Utils.js')); }
-      if (!CustomFile) throw new Error('CustomFile no disponible');
-      return client.sendFile(peer, {
-        ...baseOpts,
-        file: new CustomFile(fileName, buf.byteLength, fileName, buf),
-      });
-    };
-    const tryBuffer = async () => {
-      const B = globalThis.Buffer;
-      if (!B) throw new Error('Buffer no disponible');
-      return client.sendFile(peer, { ...baseOpts, file: B.from(buf) });
-    };
-    const tryRaw = async () => client.sendFile(peer, { ...baseOpts, file: buf });
-
-    let lastErr;
-    for (const fn of [tryCustom, tryBuffer, tryRaw]) {
+    const onProgress = (sent, total) => {
       if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
+      const s = Number(sent?.toString?.() ?? sent);
+      const t = Number(total?.toString?.() ?? total);
+      if (t > 0 && Number.isFinite(s)) {
+        status?.(`Subiendo… ${Math.min(100, Math.round((s / t) * 100))}%`);
+      } else if (Number.isFinite(s) && s > 0) {
+        status?.(`Subiendo… ${formatBytes?.(s) || s + ' B'}`);
+      }
+    };
+
+    // 1) Preferido en navegador: File/Blob (GramJS sube por partes, sin CustomFile ni Buffer)
+    const browserFile = (typeof File !== 'undefined')
+      ? new File([blob], fileName, { type: blob.type || 'application/zip' })
+      : blob;
+
+    try {
+      status?.('Subiendo…');
+      await client.sendFile(peer, {
+        file: browserFile,
+        caption: caption || '',
+        forceDocument: true,
+        workers: 1,
+        attributes: attrs,
+        progressCallback: onProgress,
+      });
+      return;
+    } catch (e) {
+      if (e?.cancelled || abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
+      console.warn('[repack] sendFile(File/Blob) falló, reintento uploadFile', e);
+      status?.(`Reintento de subida… (${e?.message || e})`);
+    }
+
+    // 2) Fallback: buffer + CustomFile + uploadFile (algunas builds de GramJS)
+    let buf;
+    try {
+      buf = new Uint8Array(await blob.arrayBuffer());
+    } catch (e) {
+      throw new Error('No se pudo leer el CBZ para subir: ' + (e?.message || e));
+    }
+
+    let CustomFile;
+    try {
+      ({ CustomFile } = await import('telegram/Utils'));
+    } catch (_) {
+      try { ({ CustomFile } = await import('telegram/Utils.js')); }
+      catch (e2) { CustomFile = null; }
+    }
+
+    if (CustomFile) {
       try {
-        status?.(`Subiendo (${fn.name})…`);
-        await fn();
+        const custom = new CustomFile(fileName, buf.byteLength, fileName, buf);
+        const uploaded = await client.uploadFile({
+          file: custom,
+          workers: 1,
+          onProgress: (progress) => {
+            // progress 0..1 en algunas versiones
+            const p = Number(progress);
+            if (Number.isFinite(p) && p >= 0 && p <= 1) {
+              status?.(`Subiendo… ${Math.min(100, Math.round(p * 100))}%`);
+            }
+          },
+        });
+        await client.sendFile(peer, {
+          file: uploaded,
+          caption: caption || '',
+          forceDocument: true,
+          attributes: attrs,
+        });
+        buf = null;
         return;
       } catch (e) {
-        lastErr = e;
-        console.warn('[repack] upload', fn.name, e);
+        if (e?.cancelled || abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
+        console.warn('[repack] uploadFile+CustomFile falló', e);
       }
     }
-    throw lastErr || new Error('No se pudo subir el archivo');
+
+    // 3) Último recurso: sendFile con Uint8Array
+    try {
+      await client.sendFile(peer, {
+        file: buf,
+        caption: caption || '',
+        forceDocument: true,
+        workers: 1,
+        attributes: attrs,
+        progressCallback: onProgress,
+      });
+      buf = null;
+      return;
+    } catch (e) {
+      if (e?.cancelled || abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
+      throw new Error('No se pudo subir el archivo: ' + (e?.message || e));
+    }
   }
 
   async function deleteMessage(ch, msgId) {
