@@ -17,6 +17,8 @@ export function createRepackTool(d) {
   const getClient = () => d.client;
   const getReady = () => d.ready;
   const getLIB = () => d.LIB;
+  // Importante: si no se declara, `jobQueue` lanza ReferenceError y la recarga "no hace nada"
+  const jobQueue = d.jobQueue || null;
 
   let running = false;
   let abort = false;
@@ -70,12 +72,24 @@ export function createRepackTool(d) {
    * Prioridad: título mostrado en la webapp (comicDisplayName + fallback de listado)
    * → parseo de nombre → limpio del archivo.
    */
+  function ensureChannelInName(name, chName) {
+    let n = cleanFileBase(String(name || '').replace(/\.cbz$/i, ''));
+    if (!chName) return n + '.cbz';
+    try {
+      const esc = chName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const has = new RegExp('^' + esc + '\\s*-', 'i').test(n);
+      if (!has) n = chName + ' - ' + n;
+    } catch (_) {
+      if (!n.toLowerCase().startsWith(chName.toLowerCase())) n = chName + ' - ' + n;
+    }
+    return n + '.cbz';
+  }
+
   function suggestUploadName(ch, f) {
     const raw = f?.name || 'comic.cbr';
     const cleaned = cleanFileBase(raw);
     const chName = (ch?.name || '').trim();
 
-    // Mismo criterio que las tarjetas / info del cómic
     let listFallback = cleaned;
     try {
       if (typeof comicDisplay === 'function') {
@@ -88,12 +102,11 @@ export function createRepackTool(d) {
       if (typeof comicDisplayName === 'function') {
         const shown = comicDisplayName(ch, f, listFallback);
         if (shown && String(shown).trim()) {
-          return cleanFileBase(shown) + '.cbz';
+          return ensureChannelInName(shown, chName);
         }
       }
     } catch (_) {}
 
-    // Si no hay título de UI, intentar parseo estructurado
     let parsed = null;
     try {
       if (typeof parseComicName === 'function') {
@@ -101,19 +114,15 @@ export function createRepackTool(d) {
       }
     } catch (_) {}
 
-    if (parsed?.series && parsed?.number != null) {
-      const series = parsed.series;
-      const num = String(parsed.number);
-      const info = (parsed.info || '').trim();
-      let body = info ? `${series} #${num} - ${info}` : `${series} #${num}`;
-      const hadChannelPrefix = chName && new RegExp(
-        '^' + chName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*-',
-        'i'
-      ).test(cleaned);
-      return (hadChannelPrefix ? `${chName} - ${body}` : body) + '.cbz';
+    if (parsed && parsed.series && parsed.number != null && String(parsed.number).length) {
+      const series = String(parsed.series).trim();
+      const num = String(parsed.number).trim();
+      const info = String(parsed.info || '').trim();
+      const body = info ? (series + ' #' + num + ' - ' + info) : (series + ' #' + num);
+      return ensureChannelInName(body, chName);
     }
 
-    return cleaned + '.cbz';
+    return ensureChannelInName(cleaned, chName);
   }
 
   async function downloadWholeMessage(msg, size, status) {
@@ -517,10 +526,14 @@ export function createRepackTool(d) {
     if (fill) fill.style.width = Math.max(0, Math.min(100, pct)) + '%';
   }
 
-  async function processOne(item, deleteOriginal, asWebp = false) {
+  async function processOne(item, deleteOriginal, asWebp = false, onStatus) {
     const { ch, f } = item;
     const label = f.name || ('#' + f.id);
-    const status = (t) => logLine(`[${label}] ${t}`);
+    const status = (t) => {
+      const msg = '[' + label + '] ' + t;
+      try { logLine(msg); } catch (_) {}
+      try { onStatus?.(msg); } catch (_) {}
+    };
     status(`Inicio (${formatBytes?.(f.size) || f.size + ' B'})`);
     if (f.size > 40 * 1024 * 1024) {
       status('AVISO: archivo grande; en móvil puede fallar por memoria');
@@ -563,21 +576,29 @@ export function createRepackTool(d) {
     let done = 0, ok = 0, fail = 0;
 
     const work = async (item, ctx) => {
-      await processOne({ ...item, asWebp }, deleteOriginal, asWebp);
+      const onStatus = (m) => {
+        try { ctx?.log?.(m); } catch (_) {}
+      };
+      await processOne({ ...item, asWebp }, deleteOriginal, asWebp, onStatus);
     };
 
     if (jobQueue && typeof jobQueue.enqueue === 'function' && selected.length) {
-      for (const item of selected) {
-        jobQueue.enqueue({
-          type: 'repack',
-          label: item.outName || item.f?.name || 'repack',
-          run: async (ctx) => {
-            await work(item, ctx);
-            ctx.setProgress(100);
-          },
-        });
+      try {
+        for (const item of selected) {
+          jobQueue.enqueue({
+            type: 'repack',
+            label: item.outName || item.f?.name || 'repack',
+            run: async (ctx) => {
+              await work(item, ctx);
+              try { ctx.setProgress(100); } catch (_) {}
+            },
+          });
+        }
+        try { jobQueue.show(); } catch (_) {}
+      } catch (e) {
+        console.error('[repack] jobQueue', e);
+        alert('No se pudo encolar: ' + (e?.message || e));
       }
-      try { jobQueue.show(); } catch (_) {}
       running = false;
       resetStopButton();
       return;
