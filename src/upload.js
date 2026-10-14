@@ -29,8 +29,126 @@ export function createUploadTool(d) {
   }
 
   let busy = false;
+  let abort = false;
 
   const yieldTick = () => new Promise((r) => setTimeout(r, 0));
+
+  function ensureUploadChip() {
+    let chip = document.getElementById('upload-chip');
+    if (chip) return chip;
+    chip = el('button', 'repack-chip', 'Subida');
+    chip.id = 'upload-chip';
+    chip.type = 'button';
+    chip.title = 'Mostrar progreso de subida';
+    chip.onclick = () => {
+      const panel = document.getElementById('upload-panel');
+      if (panel) {
+        panel.hidden = false;
+        delete panel.dataset.userHidden;
+      }
+      chip.hidden = true;
+    };
+    document.body.append(chip);
+    return chip;
+  }
+
+  function showUploadProgressPanel() {
+    let panel = document.getElementById('upload-panel');
+    if (panel) {
+      panel.hidden = false;
+      delete panel.dataset.userHidden;
+      const chip = document.getElementById('upload-chip');
+      if (chip) chip.hidden = true;
+      return panel;
+    }
+    panel = el('div', 'repack-panel');
+    panel.id = 'upload-panel';
+    const titleRow = el('div', 'repack-panel-head');
+    const title = el('div', 'repack-panel-title', 'Subida de cómic');
+    const btnMin = el('button', 'btn repack-min', 'Ocultar');
+    btnMin.type = 'button';
+    btnMin.onclick = () => {
+      panel.hidden = true;
+      panel.dataset.userHidden = '1';
+      const chip = ensureUploadChip();
+      const home = typeof d.getIsHome === 'function' ? !!d.getIsHome() : !document.getElementById('rd');
+      chip.hidden = !home || !!document.getElementById('rd');
+    };
+    titleRow.append(title, btnMin);
+    const bar = el('div', 'repack-panel-bar');
+    const fill = el('div', 'repack-panel-fill');
+    fill.id = 'upload-fill';
+    bar.append(fill);
+    const log = el('div', 'repack-panel-log');
+    log.id = 'upload-log';
+    const actions = el('div', 'repack-panel-actions');
+    const btnStop = el('button', 'btn', 'Cerrar');
+    btnStop.id = 'upload-stop';
+    btnStop.type = 'button';
+    btnStop.onclick = () => {
+      if (busy) {
+        abort = true;
+        logLine('Cancelando…');
+        btnStop.textContent = 'Cerrando…';
+      }
+      panel.hidden = true;
+      const chip = document.getElementById('upload-chip');
+      if (chip && busy) {
+        chip.hidden = false;
+        chip.textContent = 'Subida…';
+      } else {
+        if (chip) chip.hidden = true;
+      }
+    };
+    actions.append(btnStop);
+    panel.append(titleRow, bar, log, actions);
+    document.body.append(panel);
+    return panel;
+  }
+
+  function logLine(text) {
+    const log = document.getElementById('upload-log');
+    if (!log) return;
+    const line = el('div', 'repack-log-line', text);
+    log.append(line);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function setFill(pct) {
+    const fill = document.getElementById('upload-fill');
+    if (fill) fill.style.width = Math.max(0, Math.min(100, pct)) + '%';
+  }
+
+  function syncFloatingUi() {
+    const home = typeof d.getIsHome === 'function' ? !!d.getIsHome() : !document.getElementById('rd');
+    const reading = !!document.getElementById('rd');
+    const panel = document.getElementById('upload-panel');
+    const chip = document.getElementById('upload-chip');
+    if (reading || !home) {
+      if (panel) panel.hidden = true;
+      if (chip) chip.hidden = true;
+      return;
+    }
+    if (busy) {
+      if (panel && !panel.dataset.userHidden) {
+        panel.hidden = false;
+        if (chip) chip.hidden = true;
+      } else if (chip) {
+        chip.hidden = false;
+      }
+    } else {
+      if (panel) panel.hidden = true;
+      if (chip) chip.hidden = true;
+    }
+  }
+
+  function hideFloatingUi() {
+    const panel = document.getElementById('upload-panel');
+    const chip = document.getElementById('upload-chip');
+    if (panel) panel.hidden = true;
+    if (chip) chip.hidden = true;
+  }
+
 
   function channelTitle(channelName, editorial) {
     const ch = String(channelName || '').trim();
@@ -97,6 +215,7 @@ export function createUploadTool(d) {
     const writer = new zip.ZipWriter(new zip.BlobWriter('application/zip'));
     let nImg = 0;
     for (const x of ex.extract().files) {
+      if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
       const n = x.fileHeader.name || '';
       if (x.fileHeader.flags.directory || !x.extraction) continue;
       const base = n.split(/[/\\]/).pop() || n;
@@ -320,7 +439,7 @@ export function createUploadTool(d) {
       const head = el('div', 'info-head');
       head.append(el('span', '', 'Subir cómic'));
       const close = el('button', 'btn info-close', '×');
-      close.onclick = () => { if (!busy) frame.remove(); };
+      close.onclick = () => { frame.remove(); };
       head.append(close);
 
       const body = el('div', 'info-body');
@@ -488,9 +607,12 @@ export function createUploadTool(d) {
       numberInp.oninput = updatePreview;
       infoInp.oninput = updatePreview;
 
-      cancel.onclick = () => { if (!busy) frame.remove(); };
+      cancel.onclick = () => { frame.remove(); };
       goBtn.onclick = async () => {
-        if (busy) return;
+        if (busy) {
+          alert('Ya hay una subida en curso');
+          return;
+        }
         if (!pickedFile) {
           alert('Selecciona un archivo');
           return;
@@ -524,47 +646,58 @@ export function createUploadTool(d) {
 
         if (!confirm(`¿Subir como «${outName}» al canal «${chName}» (${ed})?`)) return;
 
+        const fileRef = pickedFile;
+        // Cerrar formulario y mostrar panel de log (como Recarga CBR)
+        frame.remove();
         busy = true;
-        goBtn.disabled = true;
-        cancel.disabled = true;
-        close.disabled = true;
-        const st = (msg) => { status.textContent = msg; };
+        abort = false;
+        showUploadProgressPanel();
+        const logEl = document.getElementById('upload-log');
+        if (logEl) logEl.replaceChildren();
+        setFill(0);
+        logLine(`Archivo: ${fileRef.name} (${formatBytes?.(fileRef.size) || fileRef.size + ' B'})`);
+        logLine(`Destino: ${chName} · ${ed}`);
+        logLine(`Nombre final: ${outName}`);
+        const st = (msg) => logLine(msg);
 
         try {
+          st('Preparando canal…');
+          await yieldTick();
           const ch = await ensureChannel(chName, ed, st);
-          let blob = await localFileToCbzBlob(pickedFile, st);
+          if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
+          setFill(15);
+          st('Convirtiendo a CBZ si hace falta…');
+          await yieldTick();
+          let blob = await localFileToCbzBlob(fileRef, st);
+          if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
+          setFill(55);
+          st(`CBZ listo · subiendo a Telegram…`);
+          await yieldTick();
           await uploadCbz(ch, outName, blob, '', st);
           blob = null;
-          st('Actualizando listado…');
-          try { await fetchFiles(ch); } catch (_) {}
+          if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
+          setFill(90);
+          st('Actualizando listado del canal…');
+          try { await fetchFiles(ch); } catch (e) {
+            st('Listado: ' + (e?.message || e));
+          }
+          setFill(100);
           st('✓ Subido correctamente');
-          setTimeout(() => frame.remove(), 900);
         } catch (e) {
-          console.error('[upload]', e);
-          status.textContent = 'Error: ' + (e?.message || e);
-          status.classList.add('sync-err');
-          goBtn.disabled = false;
-          cancel.disabled = false;
-          close.disabled = false;
+          if (e?.cancelled) st('Cancelado');
+          else {
+            console.error('[upload]', e);
+            st('ERROR: ' + (e?.message || e));
+          }
         } finally {
           busy = false;
+          abort = false;
+          const btnStop = document.getElementById('upload-stop');
+          if (btnStop) btnStop.textContent = 'Cerrar';
+          syncFloatingUi();
         }
       };
 
-      // --- Montar DOM ---
-      body.append(el('div', 'info-sec', 'Archivo'));
-      body.append(fileBtn, fileInput, fileLabel);
-
-      body.append(el('div', 'info-sec', 'Editorial'));
-      body.append(editorialSel, editorialInp);
-
-      body.append(el('div', 'info-sec', 'Canal'));
-      body.append(channelSel, channelInp);
-
-      body.append(el('div', 'info-sec', 'Título del archivo'));
-      body.append(seriesInp, numberInp, infoInp, preview);
-
-      body.append(status);
       actions.append(cancel, goBtn);
       body.append(actions);
 
@@ -577,7 +710,7 @@ export function createUploadTool(d) {
       let armed = false;
       setTimeout(() => { armed = true; }, 350);
       frame.addEventListener('click', (ev) => {
-        if (!armed || busy) return;
+        if (!armed) return;
         if (ev.target === frame) frame.remove();
       });
       document.body.append(frame);
@@ -587,13 +720,20 @@ export function createUploadTool(d) {
     }
   }
 
+  try {
+    window.addEventListener('tgcomic:reader', (ev) => {
+      if (ev?.detail?.open) hideFloatingUi();
+      else syncFloatingUi();
+    });
+  } catch (_) {}
+
   return {
     showUploadFrame,
     composeFileName,
     ensureChannel,
     uploadCbz,
     localFileToCbzBlob,
-    syncFloatingUi() {},
-    hideFloatingUi() {},
+    syncFloatingUi,
+    hideFloatingUi,
   };
 }
