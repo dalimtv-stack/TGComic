@@ -347,17 +347,17 @@ export function createRepackTool(d) {
     const btnMin = el('button', 'btn repack-min', 'Ocultar');
     btnMin.type = 'button';
     btnMin.onclick = () => {
-      panel.classList.add('minimized');
       panel.hidden = true;
+      panel.classList.remove('minimized');
       const chip = ensureRestoreChip();
       chip.hidden = false;
     };
     titleRow.append(title, btnMin);
-    const bar = el('div', 'repack-bar');
-    const fill = el('div', 'repack-fill');
+    const bar = el('div', 'repack-panel-bar');
+    const fill = el('div', 'repack-panel-fill');
     fill.id = 'repack-fill';
     bar.append(fill);
-    const log = el('div', 'repack-log');
+    const log = el('div', 'repack-panel-log');
     log.id = 'repack-log';
     const actions = el('div', 'repack-panel-actions');
     const btnStop = el('button', 'btn', 'Detener');
