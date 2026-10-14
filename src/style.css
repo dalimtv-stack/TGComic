@@ -327,3 +327,20 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
   .continue-slide{flex-basis:320px;width:320px}
 }
 .app-menu-item.menu-check.on{color:var(--acc)}
+
+/* Recarga CBR / externos */
+.repack-panel{position:fixed;right:12px;bottom:12px;z-index:80;width:min(360px,calc(100vw - 24px));max-height:min(50vh,420px);display:flex;flex-direction:column;gap:8px;padding:12px;border-radius:14px;background:#1c1d22f2;-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);box-shadow:0 8px 32px #000a;color:var(--fg)}
+.repack-panel.minimized{max-height:48px;overflow:hidden}
+.repack-panel-title{font-weight:650;font-size:.95rem}
+.repack-panel-bar{height:6px;border-radius:99px;background:#ffffff14;overflow:hidden}
+.repack-panel-fill{height:100%;width:0;background:var(--acc);transition:width .2s}
+.repack-panel-log{flex:1;overflow:auto;font-size:.78rem;line-height:1.35;color:var(--mut);max-height:220px;-webkit-overflow-scrolling:touch}
+.repack-log-line{padding:2px 0;border-bottom:1px solid #ffffff08}
+.repack-panel-actions{display:flex;gap:8px;justify-content:flex-end}
+.repack-list{max-height:40vh;overflow:auto;display:flex;flex-direction:column;gap:6px;margin:.5rem 0}
+.repack-row{display:flex;gap:10px;align-items:flex-start;padding:8px;border-radius:10px;background:#ffffff08}
+.repack-row input{margin-top:4px}
+.repack-row-meta{display:flex;flex-direction:column;gap:2px;min-width:0}
+.repack-row-meta b{font-size:.88rem;word-break:break-word}
+.repack-row-meta small{color:var(--mut);font-size:.75rem}
+.repack-check{display:flex;align-items:center;gap:8px;margin:.5rem 0;font-size:.9rem}

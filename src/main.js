@@ -28,6 +28,7 @@ import {
 } from './meta.js';
 import { createReader } from './reader.js';
 import { createCovers } from './covers.js';
+import { createRepackTool } from './repack.js';
 
 const apiId = Number(import.meta.env.VITE_API_ID);
 const apiHash = import.meta.env.VITE_API_HASH;
@@ -226,6 +227,7 @@ async function fetchFiles(ch) {
       name,
       size: Number(m.document.size.toString()),
       caption: caption || undefined,
+      forwarded: !!(m.fwdFrom),
     });
   }
   out.sort((a, b) => natural(a.name, b.name));
@@ -426,7 +428,8 @@ const paintUnreadMenu = () => {
   menuUnreadBtn.classList.toggle('on', on);
 };
 paintUnreadMenu();
-menuPanel.append(menuInfoBtn, menuCfgBtn, menuSyncBtn, menuUnreadBtn);
+const menuRepackBtn = el('button', 'app-menu-item', 'Recargar CBR / externos');
+menuPanel.append(menuInfoBtn, menuCfgBtn, menuSyncBtn, menuRepackBtn, menuUnreadBtn);
 actions.append(menuBtn);
 document.body.append(menuPanel);
 
@@ -559,6 +562,11 @@ function showViewerConfig() {
   document.body.append(frame);
 }
 menuCfgBtn.onclick = (ev) => { ev.stopPropagation(); showViewerConfig(); };
+menuRepackBtn.onclick = (ev) => {
+  ev.stopPropagation();
+  closeAppMenu();
+  repackTool.showRepackFrame();
+};
 menuSyncBtn.onclick = (ev) => {
   ev.stopPropagation();
   closeAppMenu();
@@ -2475,6 +2483,27 @@ const readerApi = createReader(
   }
 );
 const { openComic } = readerApi;
+
+// ---------- Recarga CBR / externos ----------
+const repackTool = createRepackTool({
+  el,
+  get client() { return client; },
+  Api, bigInt,
+  get LIB() { return LIB; },
+  kv,
+  get ready() { return ready; },
+  peerOf,
+  fetchFiles, getMsg, openPages, pageBlob,
+  downloadRarBytes, sniff, TgReader, pagesOf,
+  natural,
+  formatBytes: (n) => {
+    const x = Number(n) || 0;
+    if (x < 1024) return x + ' B';
+    if (x < 1024 * 1024) return (x / 1024).toFixed(1) + ' KB';
+    return (x / (1024 * 1024)).toFixed(2) + ' MB';
+  },
+});
+
 
 // ---------- Inicio ----------
 async function migrateCacheImages() {
