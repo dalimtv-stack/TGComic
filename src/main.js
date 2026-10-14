@@ -1428,23 +1428,61 @@ async function setChannelCoverBlob(ch, blob) {
     try { await kv.set(channelCoverKey(ch), blob); } catch (_) {}
   }
 }
-function channelCoverNode(ch) {
+function channelReadProgress(ch, files) {
+  const list = Array.isArray(files) ? files : [];
+  if (!list.length) return null;
+  let done = 0;
+  for (const f of list) {
+    if (isComicRead(ch.id, f.id)) done++;
+  }
+  if (done === 0) return null;
+  return { done, tot: list.length, pct: Math.round((done / list.length) * 100) };
+}
+
+function applyCoverProgress(node, prog) {
+  if (!node || !prog) return;
+  node.querySelector?.('.prog')?.remove();
+  node.querySelector?.('.prog-badge')?.remove();
+  const bar = el('div', 'prog');
+  const fill = el('div', 'prog-fill');
+  fill.style.width = prog.pct + '%';
+  bar.append(fill);
+  node.append(bar);
+  node.append(el('span', 'prog-badge', prog.pct >= 95 ? '✓' : prog.pct + '%'));
+}
+
+function channelCoverNode(ch, files) {
   // Si hay portada personalizada se muestra; si no, el mismo flujo que antes (GitHub / cómic)
   const host = el('div', 'cover');
   const letter = el('span', '', (channelDisplayName(ch) || '?').slice(0, 1).toUpperCase());
   host.append(letter);
+  const prog = channelReadProgress(ch, files);
+  if (prog) applyCoverProgress(host, prog);
   host._load = async () => {
     try {
       const custom = await kv.get(channelCoverKey(ch));
       if (custom instanceof Blob) {
         const img = new Image();
-        img.onload = () => { host.replaceChildren(img); };
+        img.onload = () => {
+          host.replaceChildren(img);
+          if (prog) applyCoverProgress(host, prog);
+        };
         img.src = URL.createObjectURL(custom);
         return;
       }
     } catch (_) {}
-    // Sin personalizada → comportamiento original (GitHub + fallback)
+    // Sin personalizada → comportamiento original (GitHub / fallback)
     const artNode = art('channels', ch.name, ch);
+    if (prog) {
+      // Pintar progreso sobre el nodo de arte cuando cargue
+      const prevLoad = artNode._load;
+      artNode._load = async () => {
+        await prevLoad?.();
+        applyCoverProgress(artNode, prog);
+      };
+      // Si ya tiene contenido, aplicar ya
+      if (artNode.querySelector('img')) applyCoverProgress(artNode, prog);
+    }
     if (host.parentNode) {
       host.replaceWith(artNode);
       artNode._load?.();
@@ -2204,7 +2242,8 @@ function channelsView(g) {
         gridItems.push({
           label,
           sub: n ? (n === 1 ? '1 cómic' : `${n} cómics`) : '',
-          cover: () => channelCoverNode(ch),
+          cover: () => channelCoverNode(ch, files),
+          isUnread: n ? files.some((f) => !isComicRead(ch.id, f.id)) : true,
           go: () => filesView(ch),
           longPress: () => sheet(label, [
             ['Información', () => showChannelInfo(ch)],
