@@ -1,17 +1,14 @@
 /**
- * Herramienta: convertir CBR → CBZ y re-subir (también mensajes reenviados)
- * en el mismo canal, en segundo plano, liberando temporales.
+ * Herramienta: convertir CBR → CBZ y re-subir (también mensajes reenviados).
+ * Pensado para móvil: poca RAM (streaming, un archivo a la vez, liberar buffers).
  */
 import * as zip from '@zip.js/zip.js';
 
-/**
- * @param {object} d dependencias desde main
- */
 export function createRepackTool(d) {
   const {
-    el, Api, bigInt,
+    el, Api,
     kv, peerOf,
-    fetchFiles, getMsg, openPages, pageBlob,
+    fetchFiles, getMsg, pageBlob,
     downloadRarBytes, sniff, TgReader, pagesOf,
     natural, formatBytes,
   } = d;
@@ -22,78 +19,89 @@ export function createRepackTool(d) {
   let running = false;
   let abort = false;
 
-  function isCbrName(name) {
-    return /\.cbr$/i.test(name || '');
-  }
-  function toCbzName(name) {
-    return String(name || 'comic.cbr').replace(/\.cbr$/i, '.cbz');
-  }
+  const isCbrName = (name) => /\.cbr$/i.test(name || '');
+  const toCbzName = (name) => String(name || 'comic.cbr').replace(/\.cbr$/i, '.cbz');
+  const yieldTick = () => new Promise((r) => setTimeout(r, 0));
 
-  async function buildCbzFromPages(pages, onProgress) {
-    const writer = new zip.ZipWriter(new zip.BlobWriter('application/zip'), { bufferedWrite: true });
-    const total = pages.length || 1;
-    for (let i = 0; i < pages.length; i++) {
-      if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
-      const p = pages[i];
-      const name = (p.filename || p.name || `page_${String(i + 1).padStart(4, '0')}.jpg`).replace(/^\/+/, '');
-      const blob = p.blob || (await pageBlob(p));
-      await writer.add(name, new zip.BlobReader(blob), { level: 0 }); // store: más rápido, CBZ típico
-      onProgress?.(`Empaquetando CBZ… ${i + 1}/${total}`);
-      if (i % 4 === 3) await new Promise((r) => setTimeout(r, 0));
-    }
-    const out = await writer.close();
-    return out;
-  }
-
-  async function downloadAsBlob(ch, f, status) {
+  async function downloadWholeMessage(msg, size, status) {
+    const client = getClient();
     const ac = { get cancelled() { return abort; } };
+    // Preferir downloadMedia (más eficiente)
+    try {
+      const buf = await client.downloadMedia(msg.media, {
+        workers: 2,
+        progressCallback: (got) => {
+          if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
+          const n = Number(got?.toString?.() ?? got);
+          if (size > 0 && n >= 0) status(`Descargando… ${Math.min(100, Math.round((n / size) * 100))}%`);
+        },
+      });
+      if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
+      if (buf) {
+        const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+        if (u8.byteLength > 0) return u8;
+      }
+    } catch (e) {
+      if (e?.cancelled || abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
+      console.warn('[repack] downloadMedia, se reintenta por trozos', e);
+    }
+    status('Descargando por trozos…');
+    return downloadRarBytes(msg, size, status, ac);
+  }
+
+  /** Si ya es ZIP: no reextraer; solo cambiar extensión al subir. */
+  async function convertToCbzBlob(ch, f, status) {
     const msg = await getMsg(ch, f);
     if (!msg?.media) throw new Error('Sin media en el mensaje');
-    const r = new TgReader(msg, f.size);
-    const kind = await sniff(r);
+
+    const probe = new TgReader(msg, f.size);
+    const kind = await sniff(probe);
+
     if (kind === 'zip') {
-      // Ya es ZIP (aunque se llame .cbr): leer páginas o re-subir bytes
-      status('Leyendo archivo ZIP…');
-      const zr = new zip.ZipReader(r);
-      try {
-        const entries = pagesOf(await zr.getEntries());
-        if (!entries.length) throw new Error('ZIP sin imágenes');
-        // Si solo queremos reempaquetar limpio:
-        const pages = [];
-        for (let i = 0; i < entries.length; i++) {
-          if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
-          const e = entries[i];
-          const blob = await pageBlob(e);
-          pages.push({ filename: e.filename, blob });
-          if (i % 3 === 2) status(`Extrayendo… ${i + 1}/${entries.length}`);
-        }
-        return { pages, caption: f.caption || '' };
-      } finally {
-        try { await zr.close(); } catch (_) {}
-      }
+      status('Es ZIP (CBR falso): descarga directa…');
+      const data = await downloadWholeMessage(msg, f.size, status);
+      // Una sola copia → Blob; soltar referencia al buffer grande después
+      const blob = new Blob([data], { type: 'application/zip' });
+      status(`Listo para subir (${formatBytes?.(blob.size) || blob.size + ' B'})`);
+      return blob;
     }
-    // RAR real
-    status(`Descargando CBR… 0%`);
-    const data = await downloadRarBytes(msg, f.size, status, ac);
+
+    // RAR real: extraer imagen a imagen y escribir CBZ sin acumular todas
+    status('Descargando CBR (RAR)…');
+    let data = await downloadWholeMessage(msg, f.size, status);
     if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
-    status('Extrayendo RAR…');
+
+    status('Extrayendo RAR → CBZ (streaming)…');
     const { createExtractorFromData } = await import('node-unrar-js');
     const rarWasm = (await import('node-unrar-js/esm/js/unrar.wasm?url')).default;
     const ab = data.buffer.byteLength === data.byteLength && data.byteOffset === 0
       ? data.buffer
       : data.slice().buffer;
+    // data ya no hace falta como vista
+    data = null;
+
     const ex = await createExtractorFromData({
       wasmBinary: await (await fetch(rarWasm)).arrayBuffer(),
       data: ab,
     });
+
+    const writer = new zip.ZipWriter(new zip.BlobWriter('application/zip'), {
+      bufferedWrite: true,
+      level: 0,
+    });
+
+    let nImg = 0;
     const mimeOf = (name) => {
       const e = (name.split(/[/\\]/).pop() || name).toLowerCase().match(/\.(jpe?g|png|webp|gif|avif)$/);
       if (!e) return 'application/octet-stream';
       return ({ jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', avif: 'image/avif' })[e[1]] || 'application/octet-stream';
     };
-    const pages = [];
+
     for (const x of ex.extract().files) {
-      if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
+      if (abort) {
+        try { await writer.close(); } catch (_) {}
+        throw Object.assign(new Error('cancelado'), { cancelled: true });
+      }
       const n = x.fileHeader.name || '';
       if (x.fileHeader.flags.directory || !x.extraction) continue;
       const base = n.split(/[/\\]/).pop() || n;
@@ -101,20 +109,32 @@ export function createRepackTool(d) {
       const raw = x.extraction;
       const src = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
       if (!src.byteLength) continue;
-      const copy = new ArrayBuffer(src.byteLength);
-      new Uint8Array(copy).set(src);
-      pages.push({ filename: base, blob: new Blob([copy], { type: mimeOf(base) }) });
+      // Copia propia y soltar referencia WASM cuanto antes
+      const copy = new Uint8Array(src.byteLength);
+      copy.set(src);
+      const pageBlob = new Blob([copy.buffer], { type: mimeOf(base) });
+      nImg++;
+      await writer.add(base, new zip.BlobReader(pageBlob), { level: 0 });
+      status(`Empaquetando… ${nImg} img`);
+      if (nImg % 2 === 0) await yieldTick();
     }
-    pages.sort((a, b) => natural(a.filename, b.filename));
-    if (!pages.length) throw new Error('CBR sin imágenes');
-    return { pages, caption: f.caption || '' };
+
+    if (!nImg) {
+      try { await writer.close(); } catch (_) {}
+      throw new Error('CBR sin imágenes legibles');
+    }
+    const out = await writer.close();
+    status(`CBZ listo (${formatBytes?.(out.size) || out.size + ' B'}, ${nImg} img)`);
+    return out;
   }
 
-  async function uploadCbz(ch, fileName, blob, caption) {
+  async function uploadCbz(ch, fileName, blob, caption, status) {
     await getReady();
     const peer = peerOf(ch);
     const client = getClient();
+    status?.('Preparando subida…');
     const buf = new Uint8Array(await blob.arrayBuffer());
+    // Liberar blob cuanto antes si ya no se usa
     const attrs = [new Api.DocumentAttributeFilename({ fileName })];
     const baseOpts = {
       caption: caption || '',
@@ -123,37 +143,33 @@ export function createRepackTool(d) {
       attributes: attrs,
     };
 
-    // 1) CustomFile (API correcta de gramJS en browser)
     const tryCustom = async () => {
       let CustomFile;
-      try {
-        ({ CustomFile } = await import('telegram/Utils'));
-      } catch (_) {
-        try { ({ CustomFile } = await import('telegram/Utils.js')); } catch (__) {}
-      }
+      try { ({ CustomFile } = await import('telegram/Utils')); }
+      catch (_) { ({ CustomFile } = await import('telegram/Utils.js')); }
       if (!CustomFile) throw new Error('CustomFile no disponible');
-      const fileArg = new CustomFile(fileName, buf.byteLength, fileName, buf);
-      return client.sendFile(peer, { ...baseOpts, file: fileArg });
+      return client.sendFile(peer, {
+        ...baseOpts,
+        file: new CustomFile(fileName, buf.byteLength, fileName, buf),
+      });
     };
-
-    // 2) Buffer polyfill
     const tryBuffer = async () => {
       const B = globalThis.Buffer;
       if (!B) throw new Error('Buffer no disponible');
       return client.sendFile(peer, { ...baseOpts, file: B.from(buf) });
     };
-
-    // 3) Uint8Array crudo
     const tryRaw = async () => client.sendFile(peer, { ...baseOpts, file: buf });
 
     let lastErr;
     for (const fn of [tryCustom, tryBuffer, tryRaw]) {
+      if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
       try {
+        status?.(`Subiendo (${fn.name})…`);
         await fn();
         return;
       } catch (e) {
         lastErr = e;
-        console.warn('[repack] upload attempt failed', fn.name, e);
+        console.warn('[repack] upload', fn.name, e);
       }
     }
     throw lastErr || new Error('No se pudo subir el archivo');
@@ -274,6 +290,12 @@ export function createRepackTool(d) {
     const line = el('div', 'repack-log-line', text);
     log.append(line);
     log.scrollTop = log.scrollHeight;
+    // Persistir últimas líneas por si el SO mata la pestaña
+    try {
+      const prev = JSON.parse(sessionStorage.getItem('repack:log') || '[]');
+      prev.push({ t: Date.now(), text });
+      sessionStorage.setItem('repack:log', JSON.stringify(prev.slice(-40)));
+    } catch (_) {}
   }
 
   function setFill(pct) {
@@ -285,30 +307,26 @@ export function createRepackTool(d) {
     const { ch, f } = item;
     const label = f.name || ('#' + f.id);
     const status = (t) => logLine(`[${label}] ${t}`);
-    status('Iniciando…');
-    let pages = null;
-    let caption = f.caption || '';
+    status(`Inicio (${formatBytes?.(f.size) || f.size + ' B'})`);
+    if (f.size > 40 * 1024 * 1024) {
+      status('AVISO: archivo grande; en móvil puede fallar por memoria');
+    }
+    let cbz = null;
     try {
-      const got = await downloadAsBlob(ch, f, status);
-      pages = got.pages;
-      caption = got.caption || caption;
-      status(`Imágenes: ${pages.length}`);
-      const cbz = await buildCbzFromPages(pages, status);
-      // Liberar páginas
-      pages = null;
+      cbz = await convertToCbzBlob(ch, f, status);
+      if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
       const outName = toCbzName(f.name);
-      status(`Subiendo ${outName} (${formatBytes?.(cbz.size) || cbz.size + ' B'})…`);
-      await uploadCbz(ch, outName, cbz, caption);
-      status('Subido');
+      await uploadCbz(ch, outName, cbz, f.caption || '', status);
+      cbz = null;
+      status('Subido a Telegram');
       if (deleteOriginal) {
         status('Borrando original…');
         await deleteMessage(ch, f.id);
         status('Original borrado');
       }
-      // refrescar listado canal
       try { await fetchFiles(ch); } catch (_) {}
     } finally {
-      pages = null;
+      cbz = null;
     }
   }
 
@@ -319,15 +337,14 @@ export function createRepackTool(d) {
     }
     running = true;
     abort = false;
+    try { sessionStorage.setItem('repack:log', '[]'); } catch (_) {}
     showProgressPanel();
     document.getElementById('repack-panel')?.classList.remove('minimized');
     const log = document.getElementById('repack-log');
     if (log) log.replaceChildren();
     const total = selected.length;
-    let done = 0;
-    let ok = 0;
-    let fail = 0;
-    logLine(`Cola: ${total} archivo(s)`);
+    let done = 0, ok = 0, fail = 0;
+    logLine(`Cola: ${total} archivo(s). No cambies de app si puedes; el sistema puede cerrar la pestaña si se queda sin RAM.`);
     for (const item of selected) {
       if (abort) {
         logLine('Detenido por el usuario');
@@ -337,21 +354,23 @@ export function createRepackTool(d) {
         await processOne(item, deleteOriginal);
         ok++;
       } catch (e) {
+        if (e?.cancelled) {
+          logLine('Cancelado');
+          break;
+        }
         fail++;
         logLine(`ERROR ${item.f.name}: ${e?.message || e}`);
         console.error('[repack]', e);
       }
       done++;
       setFill((done / total) * 100);
-      // Ceder al navegador
-      await new Promise((r) => setTimeout(r, 200));
+      await yieldTick();
+      await new Promise((r) => setTimeout(r, 300));
     }
     logLine(`Fin. OK: ${ok} · Fallos: ${fail}`);
     running = false;
     abort = false;
     resetStopButton();
-    const chip = document.getElementById('repack-chip');
-    if (chip) chip.textContent = 'Recarga CBR';
   }
 
   function showRepackFrame() {
@@ -365,21 +384,31 @@ export function createRepackTool(d) {
     head.append(close);
     const body = el('div', 'info-body');
     body.append(el('p', 'cover-pick-hint',
-      'Descarga CBR (y reenviados), los convierte a CBZ, los sube al mismo canal y puede borrar el mensaje original. Requiere permiso de escritura en el canal. Procesa de uno en uno; no cierres la pestaña.'
+      'Convierte CBR → CBZ y re-sube al mismo canal. En el móvil hazlos de uno en uno y con archivos no demasiado grandes: el navegador puede matar la pestaña si se queda sin memoria (parece un “reload”).'
     ));
+    // Mostrar log previo si la pestaña murió a mitad
+    try {
+      const prev = JSON.parse(sessionStorage.getItem('repack:log') || '[]');
+      if (prev.length) {
+        body.append(el('div', 'info-sec', 'Última ejecución (recuperada)'));
+        const boxLog = el('div', 'repack-list');
+        for (const row of prev.slice(-12)) {
+          boxLog.append(el('div', 'repack-log-line', row.text));
+        }
+        body.append(boxLog);
+      }
+    } catch (_) {}
+
     const status = el('p', 'sync-status', 'Buscando candidatos…');
     body.append(status);
-
     const delLabel = el('label', 'repack-check');
     const delCb = el('input');
     delCb.type = 'checkbox';
-    delCb.checked = true;
+    delCb.checked = false; // más seguro por defecto
     delLabel.append(delCb, document.createTextNode(' Borrar mensaje original tras subir'));
     body.append(delLabel);
-
     const listHost = el('div', 'repack-list');
     body.append(listHost);
-
     const actions = el('div', 'edit-actions');
     const btnAll = el('button', 'btn', 'Seleccionar todos');
     const btnNone = el('button', 'btn', 'Ninguno');
@@ -394,18 +423,19 @@ export function createRepackTool(d) {
 
     let candidates = [];
     const checks = [];
-
     const paintList = () => {
       listHost.replaceChildren();
+      checks.length = 0;
       if (!candidates.length) {
-        listHost.append(el('p', 'cover-pick-hint', 'No hay CBR ni reenviados en la biblioteca en caché. Entra en los canales para indexar archivos.'));
+        listHost.append(el('p', 'cover-pick-hint', 'No hay CBR ni reenviados indexados. Entra antes en los canales.'));
         return;
       }
       for (const item of candidates) {
         const row = el('label', 'repack-row');
         const cb = el('input');
         cb.type = 'checkbox';
-        cb.checked = true;
+        // Por defecto solo el primero para no matar el móvil
+        cb.checked = checks.length === 0;
         cb._item = item;
         checks.push(cb);
         const meta = el('span', 'repack-row-meta');
@@ -418,7 +448,6 @@ export function createRepackTool(d) {
       }
       btnStart.disabled = false;
     };
-
     btnAll.onclick = () => checks.forEach((c) => { c.checked = true; });
     btnNone.onclick = () => checks.forEach((c) => { c.checked = false; });
     btnStart.onclick = () => {
@@ -427,16 +456,13 @@ export function createRepackTool(d) {
         alert('Selecciona al menos un archivo');
         return;
       }
-      if (!confirm(`Se procesarán ${selected.length} archivo(s). ¿Continuar?`)) return;
+      if (selected.length > 1 && !confirm(`Vas a procesar ${selected.length} archivos seguidos en el móvil. ¿Seguro? Mejor de uno en uno.`)) return;
       frame.remove();
       runQueue(selected, delCb.checked);
     };
-
     collectCandidates().then((list) => {
       candidates = list;
-      status.textContent = list.length
-        ? `${list.length} candidato(s) (CBR o reenviados)`
-        : 'Sin candidatos';
+      status.textContent = list.length ? `${list.length} candidato(s)` : 'Sin candidatos';
       paintList();
     }).catch((e) => {
       status.textContent = 'Error: ' + (e?.message || e);
