@@ -570,9 +570,23 @@ menuRepackBtn.onclick = (ev) => {
   repackTool.showRepackFrame();
 };
 menuUploadBtn.onclick = (ev) => {
+  ev.preventDefault();
   ev.stopPropagation();
+  if (typeof ev.stopImmediatePropagation === 'function') ev.stopImmediatePropagation();
   closeAppMenu();
-  uploadTool.showUploadFrame();
+  // Esperar a que termine el gesto (mouseup/touchend) para que no cierre el overlay
+  setTimeout(() => {
+    try {
+      if (!uploadTool || typeof uploadTool.showUploadFrame !== 'function') {
+        alert('La herramienta de subida no está disponible. Recarga la página.');
+        return;
+      }
+      uploadTool.showUploadFrame();
+    } catch (e) {
+      console.error('[upload] showUploadFrame', e);
+      alert('Error al abrir subida: ' + (e?.message || e));
+    }
+  }, 50);
 };
 menuSyncBtn.onclick = (ev) => {
   ev.stopPropagation();
@@ -2525,26 +2539,37 @@ const repackTool = createRepackTool({
 
 
 
-const uploadTool = createUploadTool({
-  el,
-  get client() { return client; },
-  Api, bigInt,
-  get LIB() { return LIB; },
-  setLIB: (v) => { LIB = v; },
-  kv,
-  get ready() { return ready; },
-  peerOf,
-  fetchFiles,
-  refreshLibrary,
-  natural,
-  getIsHome: () => stack.length < 2 && !document.getElementById('rd'),
-  formatBytes: (n) => {
-    const x = Number(n) || 0;
-    if (x < 1024) return x + ' B';
-    if (x < 1024 * 1024) return (x / 1024).toFixed(1) + ' KB';
-    return (x / (1024 * 1024)).toFixed(2) + ' MB';
+let uploadTool = {
+  showUploadFrame() {
+    alert('Subida no disponible. Revisa la consola o recarga la página.');
   },
-});
+  syncFloatingUi() {},
+  hideFloatingUi() {},
+};
+try {
+  uploadTool = createUploadTool({
+    el,
+    get client() { return client; },
+    Api, bigInt,
+    get LIB() { return LIB; },
+    setLIB: (v) => { LIB = v; },
+    kv,
+    get ready() { return ready; },
+    peerOf,
+    fetchFiles,
+    refreshLibrary,
+    natural,
+    getIsHome: () => stack.length < 2 && !document.getElementById('rd'),
+    formatBytes: (n) => {
+      const x = Number(n) || 0;
+      if (x < 1024) return x + ' B';
+      if (x < 1024 * 1024) return (x / 1024).toFixed(1) + ' KB';
+      return (x / (1024 * 1024)).toFixed(2) + ' MB';
+    },
+  });
+} catch (e) {
+  console.error('[upload] createUploadTool falló', e);
+}
 
 // ---------- Inicio ----------
 async function migrateCacheImages() {
