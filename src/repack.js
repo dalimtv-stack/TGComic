@@ -25,7 +25,7 @@ export function createRepackTool(d) {
   const toCbzName = (name) => String(name || 'comic.cbr').replace(/\.cbr$/i, '.cbz');
   const yieldTick = () => new Promise((r) => setTimeout(r, 0));
 
-  async function blobToWebp(blob, quality = 0.75) {
+  async function blobToWebp(blob, quality = 0.62) {
     if (!blob || !blob.size) return blob;
     if ((blob.type || '').includes('webp') && blob.size < 1.5 * 1024 * 1024) return blob;
     let bmp = null;
@@ -191,8 +191,12 @@ export function createRepackTool(d) {
         let pageBlob = new Blob([copy.buffer], { type: mimeOf(base) });
         let outName = base;
         if (wantWebp) {
-          pageBlob = await blobToWebp(pageBlob);
-          outName = base.replace(/\.[^.]+$/i, '.webp');
+          const origSize = pageBlob.size || 0;
+          const converted = await blobToWebp(pageBlob);
+          if (converted && converted.size && converted.size < origSize * 0.98) {
+            pageBlob = converted;
+            outName = base.replace(/\.[^.]+$/i, '.webp');
+          }
         }
         nImg++;
         await writer.add(outName, new zip.BlobReader(pageBlob), { level: 0 });
@@ -230,8 +234,12 @@ export function createRepackTool(d) {
         let pageBlob = await e.getData(new zip.BlobWriter());
         let outName = base;
         if (wantWebp) {
-          pageBlob = await blobToWebp(pageBlob);
-          outName = base.replace(/\.[^.]+$/i, '.webp');
+          const origSize = pageBlob.size || 0;
+          const converted = await blobToWebp(pageBlob);
+          if (converted && converted.size && converted.size < origSize * 0.98) {
+            pageBlob = converted;
+            outName = base.replace(/\.[^.]+$/i, '.webp');
+          }
         }
         nImg++;
         await writer.add(outName, new zip.BlobReader(pageBlob), { level: 0 });
@@ -551,20 +559,10 @@ export function createRepackTool(d) {
     running = true;
     abort = false;
     try { sessionStorage.setItem('repack:log', '[]'); } catch (_) {}
-    showProgressPanel();
-    document.getElementById('repack-panel')?.classList.remove('minimized');
-    const log = document.getElementById('repack-log');
-    if (log) log.replaceChildren();
     const total = selected.length;
     let done = 0, ok = 0, fail = 0;
-    logLine(`Cola: ${total} archivo(s).` + (asWebp ? ' WebP ON' : ''));
 
     const work = async (item, ctx) => {
-      const st = (m) => {
-        logLine(`[${item.f.name}] ${m}`);
-        ctx?.log?.(m);
-      };
-      // processOne uses logLine via status closure — call with flags
       await processOne({ ...item, asWebp }, deleteOriginal, asWebp);
     };
 
@@ -581,10 +579,15 @@ export function createRepackTool(d) {
       }
       try { jobQueue.show(); } catch (_) {}
       running = false;
-      logLine('Tareas añadidas a la cola global.');
       resetStopButton();
       return;
     }
+
+    showProgressPanel();
+    document.getElementById('repack-panel')?.classList.remove('minimized');
+    const log = document.getElementById('repack-log');
+    if (log) log.replaceChildren();
+    logLine(`Cola: ${total} archivo(s).` + (asWebp ? ' WebP ON' : ''));
 
     for (const item of selected) {
       if (abort) {

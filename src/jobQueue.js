@@ -203,8 +203,9 @@ export function createJobQueue({ el, pref }) {
   function ensurePanel() {
     let panel = document.getElementById('job-queue-panel');
     if (panel) return panel;
-    panel = el('div', 'repack-panel');
+    panel = el('div', 'repack-panel job-queue-panel');
     panel.id = 'job-queue-panel';
+
     const head = el('div', 'repack-panel-head');
     head.append(el('div', 'repack-panel-title', 'Cola de tareas'));
     const btnMin = el('button', 'btn repack-min', 'Ocultar');
@@ -215,18 +216,42 @@ export function createJobQueue({ el, pref }) {
       chip.hidden = false;
     };
     head.append(btnMin);
+
     const bar = el('div', 'repack-panel-bar');
     const fill = el('div', 'repack-panel-fill');
     fill.id = 'job-queue-fill';
     bar.append(fill);
     const eta = el('div', 'job-queue-eta');
     eta.id = 'job-queue-eta';
-    const list = el('div', 'repack-panel-log');
-    list.id = 'job-queue-list';
-    const log = el('div', 'repack-panel-log');
+
+    // Sección 1: trabajo actual (desplegable)
+    const curFold = el('details', 'job-fold');
+    curFold.open = true;
+    curFold.id = 'job-fold-current';
+    const curSum = el('summary', '', 'Trabajo actual');
+    curFold.append(curSum);
+    const curBody = el('div', 'job-fold-body');
+    const curStatus = el('div', 'job-current-status');
+    curStatus.id = 'job-current-status';
+    curStatus.textContent = 'Ninguno';
+    const log = el('div', 'repack-panel-log job-fold-scroll');
     log.id = 'job-queue-log';
-    log.style.maxHeight = '120px';
-    const actions = el('div', 'repack-panel-actions');
+    curBody.append(curStatus, log);
+    curFold.append(curBody);
+
+    // Sección 2: pendientes / historial
+    const pendFold = el('details', 'job-fold');
+    pendFold.open = true;
+    pendFold.id = 'job-fold-pending';
+    const pendSum = el('summary', '', 'Tareas pendientes e historial');
+    pendFold.append(pendSum);
+    const pendBody = el('div', 'job-fold-body');
+    const list = el('div', 'repack-panel-log job-fold-scroll');
+    list.id = 'job-queue-list';
+    pendBody.append(list);
+    pendFold.append(pendBody);
+
+    const actions = el('div', 'repack-panel-actions job-queue-actions');
     const btnPause = el('button', 'btn', 'Pausar');
     btnPause.id = 'job-queue-pause';
     btnPause.type = 'button';
@@ -242,7 +267,8 @@ export function createJobQueue({ el, pref }) {
     btnClose.type = 'button';
     btnClose.onclick = () => { panel.hidden = true; };
     actions.append(btnPause, btnClear, btnClose);
-    panel.append(head, bar, eta, list, log, actions);
+
+    panel.append(head, bar, eta, curFold, pendFold, actions);
     document.body.append(panel);
     return panel;
   }
@@ -279,12 +305,13 @@ export function createJobQueue({ el, pref }) {
   function paintPanel() {
     const panel = document.getElementById('job-queue-panel');
     if (!panel || panel.hidden) {
-      const active = jobs.some((j) => j.status === 'pending' || j.status === 'running');
+      const active = jobs.some((x) => x.status === 'pending' || x.status === 'running');
       if (active) {
         const chip = ensureChip();
         if (!document.getElementById('job-queue-panel') || document.getElementById('job-queue-panel').hidden) {
           chip.hidden = false;
-          chip.textContent = `Cola (${jobs.filter((j) => j.status === 'pending' || j.status === 'running').length})`;
+          const n = jobs.filter((x) => x.status === 'pending' || x.status === 'running').length;
+          chip.textContent = n > 1 ? ('Cola (' + n + ')') : 'Cola';
         }
       }
       return;
@@ -292,20 +319,52 @@ export function createJobQueue({ el, pref }) {
     const list = document.getElementById('job-queue-list');
     const eta = document.getElementById('job-queue-eta');
     const btnPause = document.getElementById('job-queue-pause');
+    const curStatus = document.getElementById('job-current-status');
     if (btnPause) btnPause.textContent = paused ? 'Reanudar' : 'Pausar';
     if (eta) eta.textContent = etaLabel() || (paused ? 'En pausa' : '');
+
+    const running = jobs.find((x) => x.status === 'running');
+    if (curStatus) {
+      if (running) {
+        curStatus.textContent = running.label + ' · ' + Math.round(running.progress || 0) + '%';
+      } else if (paused) {
+        curStatus.textContent = 'En pausa';
+      } else {
+        const next = jobs.find((x) => x.status === 'pending');
+        curStatus.textContent = next ? ('Siguiente: ' + next.label) : 'Ninguno';
+      }
+    }
+
+    // Rellenar barra con progreso del running
+    if (running) setBar(running.progress || 0);
+
     if (!list) return;
     list.replaceChildren();
-    for (const j of jobs.slice(-15).reverse()) {
-      const row = el('div', 'repack-log-line');
-      const st = j.status;
-      row.textContent = `[${st}] ${j.label}${j.error ? ' — ' + j.error : ''}`;
+    const ordered = jobs.slice(-20).reverse();
+    for (const job of ordered) {
+      const row = el('div', 'job-row');
+      const st = job.status;
+      const label = el('span', 'job-row-label');
+      label.textContent = '[' + st + '] ' + job.label + (job.error ? ' — ' + job.error : '');
+      row.append(label);
       if (st === 'error' || st === 'interrupted') {
         const rt = el('button', 'btn repack-min', 'Reintentar');
         rt.type = 'button';
-        rt.style.marginLeft = '8px';
-        rt.onclick = () => retry(j.id);
-        row.append(rt);
+        rt.onclick = () => retry(job.id);
+        const rm = el('button', 'btn repack-min', 'Quitar');
+        rm.type = 'button';
+        rm.onclick = () => remove(job.id);
+        row.append(rt, rm);
+      } else if (st === 'pending') {
+        const rm = el('button', 'btn repack-min', 'Quitar');
+        rm.type = 'button';
+        rm.onclick = () => remove(job.id);
+        row.append(rm);
+      } else if (st === 'done') {
+        const rm = el('button', 'btn repack-min', 'Quitar');
+        rm.type = 'button';
+        rm.onclick = () => remove(job.id);
+        row.append(rm);
       }
       list.append(row);
     }

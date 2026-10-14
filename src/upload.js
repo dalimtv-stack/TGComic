@@ -34,7 +34,7 @@ export function createUploadTool(d) {
 
   const yieldTick = () => new Promise((r) => setTimeout(r, 0));
 
-  async function blobToWebp(blob, quality = 0.75) {
+  async function blobToWebp(blob, quality = 0.62) {
     if (!blob || !blob.size) return blob;
     if ((blob.type || '').includes('webp') && blob.size < 1.5 * 1024 * 1024) return blob;
     let bmp = null;
@@ -252,10 +252,13 @@ export function createUploadTool(d) {
           let pageBlob = await e.getData(new zip.BlobWriter());
           let outName = base;
           if (wantWebp) {
+            const origSize = pageBlob.size || 0;
             const converted = await blobToWebp(pageBlob);
-            pageBlob = null;
-            pageBlob = converted;
-            outName = base.replace(/\.[^.]+$/i, '.webp');
+            // Solo usar WebP si realmente reduce tamaño (si no, se queda la original)
+            if (converted && converted.size && converted.size < origSize * 0.98) {
+              pageBlob = converted;
+              outName = base.replace(/\.[^.]+$/i, '.webp');
+            }
           }
           nImg++;
           await writer.add(outName, new zip.BlobReader(pageBlob), { level: 0 });
@@ -311,9 +314,12 @@ export function createUploadTool(d) {
         let pageBlob = new Blob([copy.buffer], { type: mimeOf(base) });
         let outName = base;
         if (wantWebp) {
+          const origSize = pageBlob.size || 0;
           const converted = await blobToWebp(pageBlob);
-          pageBlob = converted;
-          outName = base.replace(/\.[^.]+$/i, '.webp');
+          if (converted && converted.size && converted.size < origSize * 0.98) {
+            pageBlob = converted;
+            outName = base.replace(/\.[^.]+$/i, '.webp');
+          }
         }
         nImg++;
         await writer.add(outName, new zip.BlobReader(pageBlob), { level: 0 });
@@ -694,15 +700,19 @@ export function createUploadTool(d) {
           .replace(/_/g, ' ')
           .replace(/\s+/g, ' ')
           .trim();
-        base = base.replace(/\s*\[WebP\]\s*$/i, '').trim();
-        // Guardar [info] entre corchetes (excepto WebP)
+
+        // Quitar @handles (p. ej. @Comicverso)
+        base = base.replace(/\s*@\S+/g, '').trim();
+        // Quitar [WebP] y guardar otros [tags]
+        base = base.replace(/\s*\[WebP\]/ig, '').trim();
         const extras = [];
         base = base.replace(/\s*\[([^\]]+)\]/g, (_, inner) => {
-          if (!/^webp$/i.test(String(inner).trim())) extras.push(String(inner).trim());
+          const t = String(inner || '').trim();
+          if (t && !/^webp$/i.test(t)) extras.push(t);
           return ' ';
         }).replace(/\s+/g, ' ').trim();
 
-        // Quitar "Canal - " del inicio si coincide
+        // Quitar prefijo de canal si coincide
         let chName = '';
         if (channelSel.value === '__new__') chName = channelInp.value.trim();
         else {
@@ -721,31 +731,32 @@ export function createUploadTool(d) {
         let number = '';
         let info = '';
 
-        // 1) Serie #01 - Info  |  Serie #01  |  Serie #Special - Info
-        let m = base.match(/^(.*)\s+#\s*(\d+[a-z]?|Special|Especial|Extra|Anual|Annual)\b(?:\s*[-–—:]\s*(.*))?$/i);
-        // 2) Serie 01 - Info (sin #)
-        if (!m) m = base.match(/^(.*)\s+(\d{1,4}[a-z]?)\s*[-–—]\s+(.*)$/i);
-        // 3) Serie 01 al final
-        if (!m) m = base.match(/^(.*)\s+(\d{1,4}[a-z]?)$/i);
+        // Prioridad: ... #01 ... o ... #Special ...
+        let m = base.match(/^(.*?)\s*#\s*(\d+[a-z]?|Special|Especial|Extra|Anual|Annual)\b(?:\s*[-–—:]\s*(.*))?$/i);
+        if (!m) {
+          // ... 01 - resto (sin almohadilla)
+          m = base.match(/^(.*?)\s+(\d{1,4}[a-z]?)\s*[-–—]\s+(.*)$/i);
+        }
+        if (!m) {
+          // ... 01 al final
+          m = base.match(/^(.*?)\s+(\d{1,4}[a-z]?)$/i);
+        }
 
         if (m) {
-          series = (m[1] || '').trim();
-          number = (m[2] || '').trim();
-          info = (m[3] || '').trim();
+          series = String(m[1] || '').trim();
+          number = String(m[2] || '').trim();
+          info = String(m[3] || '').trim();
         } else {
           series = base;
         }
-        // Si la serie aún lleva "Algo - Resto", dejar Resto como serie cuando no hay canal
-        if (series && !number && series.includes(' - ')) {
-          // dejar como está; el usuario puede editar
-        }
+        // Si tras quitar canal queda "Serie - resto" sin número, no forzar
         if (extras.length) {
-          info = info ? (info + ' ' + extras.join(' ')).trim() : extras.join(' ');
+          info = info ? (info + ' [' + extras.join('] [') + ']').trim() : extras.map((x) => '[' + x + ']').join(' ');
         }
 
-        seriesInp.value = series || '';
-        numberInp.value = number || '';
-        infoInp.value = info || '';
+        seriesInp.value = series;
+        numberInp.value = number;
+        infoInp.value = info;
         updatePreview();
         updatePreview();
       };
@@ -829,14 +840,6 @@ export function createUploadTool(d) {
         frame.remove();
         busy = true;
         abort = false;
-        showUploadProgressPanel();
-        const logEl = document.getElementById('upload-log');
-        if (logEl) logEl.replaceChildren();
-        setFill(0);
-        logLine('Archivo: ' + fileRef.name);
-        logLine('Destino: ' + chName + ' · ' + ed);
-        logLine('Nombre final: ' + outName);
-        if (wantWebp) logLine('Modo WebP activado');
 
         if (jobQueue && typeof jobQueue.enqueue === 'function') {
           jobQueue.enqueue({
@@ -844,19 +847,27 @@ export function createUploadTool(d) {
             label: outName,
             run: async (ctx) => {
               try {
+                ctx.log('Archivo: ' + fileRef.name);
+                ctx.log('Destino: ' + chName + ' · ' + ed);
+                ctx.log('Nombre final: ' + outName);
+                if (wantWebp) ctx.log('Modo WebP (solo si reduce tamaño)');
                 await runJob(ctx);
               } finally {
                 busy = false;
-                const btnStop = document.getElementById('upload-stop');
-                if (btnStop) btnStop.textContent = 'Cerrar';
-                setFill(100);
-                syncFloatingUi();
               }
             },
           });
           try { jobQueue.show(); } catch (_) {}
           busy = false;
         } else {
+          showUploadProgressPanel();
+          const logEl = document.getElementById('upload-log');
+          if (logEl) logEl.replaceChildren();
+          setFill(0);
+          logLine('Archivo: ' + fileRef.name);
+          logLine('Destino: ' + chName + ' · ' + ed);
+          logLine('Nombre final: ' + outName);
+          if (wantWebp) logLine('Modo WebP (solo si reduce tamaño)');
           try {
             await runJob({
               log: logLine,
