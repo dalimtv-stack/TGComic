@@ -34,19 +34,35 @@ export function createUploadTool(d) {
 
   const yieldTick = () => new Promise((r) => setTimeout(r, 0));
 
-  async function blobToWebp(blob, quality = 0.82) {
+  async function blobToWebp(blob, quality = 0.75) {
     if (!blob || !blob.size) return blob;
-    if ((blob.type || '').includes('webp')) return blob;
+    if ((blob.type || '').includes('webp') && blob.size < 1.5 * 1024 * 1024) return blob;
+    let bmp = null;
     try {
-      const bmp = await createImageBitmap(blob);
+      bmp = await createImageBitmap(blob);
+      // Limitar lado mayor para no tumbar el móvil (OOM → recarga de la app)
+      const maxEdge = 2400;
+      const scale = Math.min(1, maxEdge / Math.max(bmp.width, bmp.height));
+      const w = Math.max(1, Math.round(bmp.width * scale));
+      const h = Math.max(1, Math.round(bmp.height * scale));
       const cv = document.createElement('canvas');
-      cv.width = bmp.width;
-      cv.height = bmp.height;
-      cv.getContext('2d').drawImage(bmp, 0, 0);
-      bmp.close?.();
-      const out = await new Promise((res) => cv.toBlob(res, 'image/webp', quality));
-      return out || blob;
+      cv.width = w;
+      cv.height = h;
+      const ctx = cv.getContext('2d', { alpha: false });
+      ctx.drawImage(bmp, 0, 0, w, h);
+      try { bmp.close?.(); } catch (_) {}
+      bmp = null;
+      const out = await new Promise((res) => {
+        try { cv.toBlob((b) => res(b), 'image/webp', quality); }
+        catch { res(null); }
+      });
+      // Liberar canvas
+      cv.width = 0;
+      cv.height = 0;
+      await yieldTick();
+      return out && out.size ? out : blob;
     } catch {
+      try { bmp?.close?.(); } catch (_) {}
       return blob;
     }
   }
@@ -200,9 +216,7 @@ export function createUploadTool(d) {
   async function localFileToCbzBlob(file, status, opts) {
     const wantWebp = !!(opts && opts.asWebp);
     status?.('Leyendo archivo…');
-    const ab = await file.arrayBuffer();
-    const u8 = new Uint8Array(ab);
-    const name = file.name || 'comic';
+    await yieldTick();
 
     const mimeOf = (n) => {
       const e = (String(n).split(/[/\\]/).pop() || n).toLowerCase().match(/\.(jpe?g|png|webp|gif|avif)$/);
@@ -212,99 +226,141 @@ export function createUploadTool(d) {
       return 'image/' + ext;
     };
 
-    async function packImagesFromEntries(getEntries, closeReader) {
-      const writer = new zip.ZipWriter(new zip.BlobWriter('application/zip'));
-      let nImg = 0;
-      const entries = await getEntries();
-      for (const e of entries) {
-        if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
-        if (e.directory) continue;
-        const base = (e.filename || '').split(/[/\\]/).pop() || e.filename;
-        if (!/\.(jpe?g|png|webp|gif|avif)$/i.test(base)) continue;
-        let pageBlob = await e.getData(new zip.BlobWriter());
-        let outName = base;
-        if (wantWebp) {
-          pageBlob = await blobToWebp(pageBlob);
-          outName = base.replace(/\.[^.]+$/i, '.webp');
-        }
-        nImg++;
-        await writer.add(outName, new zip.BlobReader(pageBlob), { level: 0 });
-        if (nImg % 5 === 0) {
-          status?.(wantWebp ? `WebP… ${nImg} img` : `Empaquetando… ${nImg} img`);
-          await yieldTick();
-        }
+    const name = file.name || 'comic';
+
+    // --- CBZ / ZIP: leer entradas una a una ---
+    async function fromZipBlob(zipBlob) {
+      const reader = new zip.ZipReader(new zip.BlobReader(zipBlob));
+      let entries;
+      try {
+        entries = await reader.getEntries();
+      } catch (e) {
+        try { await reader.close(); } catch (_) {}
+        throw e;
       }
-      if (closeReader) await closeReader();
+      const writer = new zip.ZipWriter(new zip.BlobWriter('application/zip'), {
+        bufferedWrite: true,
+        level: 0,
+      });
+      let nImg = 0;
+      try {
+        for (const e of entries) {
+          if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
+          if (e.directory) continue;
+          const base = (e.filename || '').split(/[/\\]/).pop() || e.filename;
+          if (!/\.(jpe?g|png|webp|gif|avif)$/i.test(base)) continue;
+          let pageBlob = await e.getData(new zip.BlobWriter());
+          let outName = base;
+          if (wantWebp) {
+            const converted = await blobToWebp(pageBlob);
+            pageBlob = null;
+            pageBlob = converted;
+            outName = base.replace(/\.[^.]+$/i, '.webp');
+          }
+          nImg++;
+          await writer.add(outName, new zip.BlobReader(pageBlob), { level: 0 });
+          pageBlob = null;
+          if (nImg % 1 === 0) {
+            status?.(wantWebp ? ('WebP… ' + nImg + ' img') : ('Empaquetando… ' + nImg + ' img'));
+            await yieldTick();
+            // Pausa extra cada 3 páginas para dejar respirar al GC
+            if (nImg % 3 === 0) await new Promise((r) => setTimeout(r, 30));
+          }
+        }
+      } finally {
+        try { await reader.close(); } catch (_) {}
+      }
       if (!nImg) {
         try { await writer.close(); } catch (_) {}
         throw new Error('Sin imágenes legibles');
       }
       const out = await writer.close();
-      status?.(`CBZ listo (${formatBytes?.(out.size) || out.size + ' B'}, ${nImg} img)` + (wantWebp ? ' WebP' : ''));
+      status?.('CBZ listo (' + (formatBytes?.(out.size) || out.size + ' B') + ', ' + nImg + ' img)' + (wantWebp ? ' WebP' : ''));
       return out;
     }
 
-    // ZIP / CBZ
-    if (isZipHeader(u8) || /\.cbz$/i.test(name)) {
+    // --- CBR / RAR ---
+    async function fromRarBytes(u8) {
+      status?.('Extrayendo CBR…');
+      await yieldTick();
+      const dataAb = u8.buffer.byteLength === u8.byteLength && u8.byteOffset === 0
+        ? u8.buffer
+        : u8.slice().buffer;
+      const ex = await createExtractorFromData({
+        wasmBinary: await (await fetch(rarWasm)).arrayBuffer(),
+        data: dataAb,
+      });
+      const writer = new zip.ZipWriter(new zip.BlobWriter('application/zip'), {
+        bufferedWrite: true,
+        level: 0,
+      });
+      let nImg = 0;
+      const files = ex.extract().files;
+      for (const x of files) {
+        if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
+        const n = x.fileHeader.name || '';
+        if (x.fileHeader.flags.directory || !x.extraction) continue;
+        const base = n.split(/[/\\]/).pop() || n;
+        if (!/\.(jpe?g|png|webp|gif|avif)$/i.test(base)) continue;
+        const raw = x.extraction;
+        const src = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
+        if (!src.byteLength) continue;
+        // copiar y soltar referencia al buffer interno del rar
+        const copy = new Uint8Array(src.byteLength);
+        copy.set(src);
+        let pageBlob = new Blob([copy.buffer], { type: mimeOf(base) });
+        let outName = base;
+        if (wantWebp) {
+          const converted = await blobToWebp(pageBlob);
+          pageBlob = converted;
+          outName = base.replace(/\.[^.]+$/i, '.webp');
+        }
+        nImg++;
+        await writer.add(outName, new zip.BlobReader(pageBlob), { level: 0 });
+        pageBlob = null;
+        status?.(wantWebp ? ('WebP… ' + nImg + ' img') : ('Empaquetando… ' + nImg + ' img'));
+        await yieldTick();
+        if (nImg % 3 === 0) await new Promise((r) => setTimeout(r, 30));
+      }
+      if (!nImg) {
+        try { await writer.close(); } catch (_) {}
+        throw new Error('CBR sin imágenes legibles');
+      }
+      const out = await writer.close();
+      status?.('CBZ listo (' + (formatBytes?.(out.size) || out.size + ' B') + ', ' + nImg + ' img)' + (wantWebp ? ' WebP' : ''));
+      return out;
+    }
+
+    // Cabeceras sin cargar todo si es File grande: usamos el File/Blob directo para ZIP
+    const head = new Uint8Array(await file.slice(0, 8).arrayBuffer());
+    const isZip = isZipHeader(head) || /\.cbz$/i.test(name);
+    const isRar = isRarHeader(head) || /\.cbr$/i.test(name);
+
+    if (isZip) {
       if (!wantWebp) {
         status?.('Ya es ZIP/CBZ');
-        return new Blob([u8], { type: 'application/zip' });
+        return file instanceof Blob ? file : new Blob([file], { type: 'application/zip' });
       }
-      status?.('Reempaquetando CBZ → WebP…');
-      const reader = new zip.ZipReader(new zip.BlobReader(new Blob([u8], { type: 'application/zip' })));
-      return packImagesFromEntries(
-        () => reader.getEntries(),
-        () => reader.close(),
-      );
+      status?.('Descomprimiendo CBZ → WebP → CBZ…');
+      return fromZipBlob(file instanceof Blob ? file : new Blob([file]));
     }
 
-    // RAR / CBR
-    if (!isRarHeader(u8) && !/\.cbr$/i.test(name)) {
-      if (isZipHeader(u8)) return new Blob([u8], { type: 'application/zip' });
-      throw new Error('Formato no soportado (usa CBZ o CBR)');
+    if (isRar) {
+      status?.('Leyendo CBR en memoria…');
+      const ab = await file.arrayBuffer();
+      const u8 = new Uint8Array(ab);
+      try {
+        return await fromRarBytes(u8);
+      } finally {
+        // ayudar al GC
+      }
     }
 
-    status?.('Extrayendo CBR…');
-    const dataAb = u8.buffer.byteLength === u8.byteLength && u8.byteOffset === 0
-      ? u8.buffer
-      : u8.slice().buffer;
-    const ex = await createExtractorFromData({
-      wasmBinary: await (await fetch(rarWasm)).arrayBuffer(),
-      data: dataAb,
-    });
-    const writer = new zip.ZipWriter(new zip.BlobWriter('application/zip'));
-    let nImg = 0;
-    for (const x of ex.extract().files) {
-      if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
-      const n = x.fileHeader.name || '';
-      if (x.fileHeader.flags.directory || !x.extraction) continue;
-      const base = n.split(/[/\\]/).pop() || n;
-      if (!/\.(jpe?g|png|webp|gif|avif)$/i.test(base)) continue;
-      const raw = x.extraction;
-      const src = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
-      if (!src.byteLength) continue;
-      const copy = new Uint8Array(src.byteLength);
-      copy.set(src);
-      let pageBlob = new Blob([copy.buffer], { type: mimeOf(base) });
-      let outName = base;
-      if (wantWebp) {
-        pageBlob = await blobToWebp(pageBlob);
-        outName = base.replace(/\.[^.]+$/i, '.webp');
-      }
-      nImg++;
-      await writer.add(outName, new zip.BlobReader(pageBlob), { level: 0 });
-      if (nImg % 5 === 0) {
-        status?.(wantWebp ? `WebP… ${nImg} img` : `Empaquetando… ${nImg} img`);
-        await yieldTick();
-      }
+    // Último intento: tratar como zip
+    if (isZipHeader(head)) {
+      return file instanceof Blob ? file : new Blob([await file.arrayBuffer()], { type: 'application/zip' });
     }
-    if (!nImg) {
-      try { await writer.close(); } catch (_) {}
-      throw new Error('CBR sin imágenes legibles');
-    }
-    const out = await writer.close();
-    status?.(`CBZ listo (${formatBytes?.(out.size) || out.size + ' B'}, ${nImg} img)` + (wantWebp ? ' WebP' : ''));
-    return out;
+    throw new Error('Formato no soportado (usa CBZ o CBR)');
   }
 
   async function uploadCbz(ch, fileName, blob, caption, status) {
@@ -639,12 +695,14 @@ export function createUploadTool(d) {
           .replace(/\s+/g, ' ')
           .trim();
         base = base.replace(/\s*\[WebP\]\s*$/i, '').trim();
-        const bracketInfo = [];
+        // Guardar [info] entre corchetes (excepto WebP)
+        const extras = [];
         base = base.replace(/\s*\[([^\]]+)\]/g, (_, inner) => {
-          if (!/^webp$/i.test(inner)) bracketInfo.push(inner);
-          return '';
+          if (!/^webp$/i.test(String(inner).trim())) extras.push(String(inner).trim());
+          return ' ';
         }).replace(/\s+/g, ' ').trim();
 
+        // Quitar "Canal - " del inicio si coincide
         let chName = '';
         if (channelSel.value === '__new__') chName = channelInp.value.trim();
         else {
@@ -652,15 +710,24 @@ export function createUploadTool(d) {
           chName = (opt && opt._ch && opt._ch.name) || (opt && opt.textContent) || '';
         }
         if (chName) {
-          try {
-            const esc = chName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            base = base.replace(new RegExp('^' + esc + '\\s*-\\s*', 'i'), '').trim();
-          } catch (_) {}
+          const low = base.toLowerCase();
+          const chLow = chName.toLowerCase();
+          if (low.startsWith(chLow)) {
+            base = base.slice(chName.length).replace(/^\s*-\s*/, '').trim();
+          }
         }
 
-        let series = '', number = '', info = '';
-        let m = base.match(/^(.+?)\s+#?(\d+[a-z]?|Special|Especial|Extra|Anual|Annual)\b(?:\s*-\s*(.+))?$/i);
-        if (!m) m = base.match(/^(.+?)\s+(\d+[a-z]?)\s*-\s*(.+)$/i);
+        let series = '';
+        let number = '';
+        let info = '';
+
+        // 1) Serie #01 - Info  |  Serie #01  |  Serie #Special - Info
+        let m = base.match(/^(.*)\s+#\s*(\d+[a-z]?|Special|Especial|Extra|Anual|Annual)\b(?:\s*[-–—:]\s*(.*))?$/i);
+        // 2) Serie 01 - Info (sin #)
+        if (!m) m = base.match(/^(.*)\s+(\d{1,4}[a-z]?)\s*[-–—]\s+(.*)$/i);
+        // 3) Serie 01 al final
+        if (!m) m = base.match(/^(.*)\s+(\d{1,4}[a-z]?)$/i);
+
         if (m) {
           series = (m[1] || '').trim();
           number = (m[2] || '').trim();
@@ -668,13 +735,18 @@ export function createUploadTool(d) {
         } else {
           series = base;
         }
-        if (bracketInfo.length) {
-          info = info ? (info + ' ' + bracketInfo.join(' ')).trim() : bracketInfo.join(' ');
+        // Si la serie aún lleva "Algo - Resto", dejar Resto como serie cuando no hay canal
+        if (series && !number && series.includes(' - ')) {
+          // dejar como está; el usuario puede editar
+        }
+        if (extras.length) {
+          info = info ? (info + ' ' + extras.join(' ')).trim() : extras.join(' ');
         }
 
-        if (series) seriesInp.value = series;
-        if (number) numberInp.value = number;
-        if (info) infoInp.value = info;
+        seriesInp.value = series || '';
+        numberInp.value = number || '';
+        infoInp.value = info || '';
+        updatePreview();
         updatePreview();
       };
       editorialSel.onchange = () => {

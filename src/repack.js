@@ -25,19 +25,35 @@ export function createRepackTool(d) {
   const toCbzName = (name) => String(name || 'comic.cbr').replace(/\.cbr$/i, '.cbz');
   const yieldTick = () => new Promise((r) => setTimeout(r, 0));
 
-  async function blobToWebp(blob, quality = 0.82) {
+  async function blobToWebp(blob, quality = 0.75) {
     if (!blob || !blob.size) return blob;
-    if ((blob.type || '').includes('webp')) return blob;
+    if ((blob.type || '').includes('webp') && blob.size < 1.5 * 1024 * 1024) return blob;
+    let bmp = null;
     try {
-      const bmp = await createImageBitmap(blob);
+      bmp = await createImageBitmap(blob);
+      // Limitar lado mayor para no tumbar el móvil (OOM → recarga de la app)
+      const maxEdge = 2400;
+      const scale = Math.min(1, maxEdge / Math.max(bmp.width, bmp.height));
+      const w = Math.max(1, Math.round(bmp.width * scale));
+      const h = Math.max(1, Math.round(bmp.height * scale));
       const cv = document.createElement('canvas');
-      cv.width = bmp.width;
-      cv.height = bmp.height;
-      cv.getContext('2d').drawImage(bmp, 0, 0);
-      bmp.close?.();
-      const out = await new Promise((res) => cv.toBlob(res, 'image/webp', quality));
-      return out || blob;
+      cv.width = w;
+      cv.height = h;
+      const ctx = cv.getContext('2d', { alpha: false });
+      ctx.drawImage(bmp, 0, 0, w, h);
+      try { bmp.close?.(); } catch (_) {}
+      bmp = null;
+      const out = await new Promise((res) => {
+        try { cv.toBlob((b) => res(b), 'image/webp', quality); }
+        catch { res(null); }
+      });
+      // Liberar canvas
+      cv.width = 0;
+      cv.height = 0;
+      await yieldTick();
+      return out && out.size ? out : blob;
     } catch {
+      try { bmp?.close?.(); } catch (_) {}
       return blob;
     }
   }
@@ -180,8 +196,10 @@ export function createRepackTool(d) {
         }
         nImg++;
         await writer.add(outName, new zip.BlobReader(pageBlob), { level: 0 });
+        pageBlob = null;
         status(`Empaquetando… ${nImg} img` + (wantWebp ? ' (WebP)' : ''));
-        if (nImg % 2 === 0) await yieldTick();
+        await yieldTick();
+        if (nImg % 3 === 0) await new Promise((r) => setTimeout(r, 30));
       }
       if (!nImg) {
         try { await writer.close(); } catch (_) {}
@@ -217,8 +235,10 @@ export function createRepackTool(d) {
         }
         nImg++;
         await writer.add(outName, new zip.BlobReader(pageBlob), { level: 0 });
+        pageBlob = null;
         status(`Empaquetando… ${nImg} img` + (wantWebp ? ' (WebP)' : ''));
-        if (nImg % 2 === 0) await yieldTick();
+        await yieldTick();
+        if (nImg % 3 === 0) await new Promise((r) => setTimeout(r, 30));
       }
       await reader.close();
       if (!nImg) {
