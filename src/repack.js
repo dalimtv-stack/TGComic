@@ -1,6 +1,6 @@
 /**
  * Herramienta: convertir CBR → CBZ y re-subir (también mensajes reenviados).
- * Pensado para móvil: poca RAM (streaming, un archivo a la vez, liberar buffers).
+ * Móvil: poca RAM, un archivo a la vez, liberar buffers.
  */
 import * as zip from '@zip.js/zip.js';
 
@@ -8,10 +8,10 @@ export function createRepackTool(d) {
   const {
     el, Api,
     kv, peerOf,
-    fetchFiles, getMsg, pageBlob,
-    downloadRarBytes, sniff, TgReader, pagesOf,
+    fetchFiles, getMsg,
+    downloadRarBytes, sniff, TgReader,
     natural, formatBytes,
-    parseComicName, comicDisplay, comicDisplayName, stripExt,
+    parseComicName, comicDisplayName,
   } = d;
   const getClient = () => d.client;
   const getReady = () => d.ready;
@@ -24,7 +24,6 @@ export function createRepackTool(d) {
   const toCbzName = (name) => String(name || 'comic.cbr').replace(/\.cbr$/i, '.cbz');
   const yieldTick = () => new Promise((r) => setTimeout(r, 0));
 
-  /** Limpia nombre de archivo: _ → espacios, sin dobles espacios */
   function cleanFileBase(name) {
     return String(name || '')
       .replace(/\.cb[zr]$/i, '')
@@ -33,29 +32,25 @@ export function createRepackTool(d) {
       .trim();
   }
 
-  /**
-   * Sugiere nombre CBZ legible:
-   * [Canal] - [Serie] #[n] - [Info].cbz cuando el parseo lo permite.
-   * Si no, limpia el nombre original (_ → espacio).
-   */
+  /** Nombre CBZ sugerido al subir */
   function suggestUploadName(ch, f) {
     const raw = f?.name || 'comic.cbr';
     const cleaned = cleanFileBase(raw);
     const chName = (ch?.name || '').trim();
 
-    // Título personalizado en local (si existe)
-    let preferred = null;
     try {
       if (typeof comicDisplayName === 'function') {
-        preferred = comicDisplayName(ch, f, null);
+        const preferred = comicDisplayName(ch, f, null);
+        if (preferred && String(preferred).trim()) {
+          return cleanFileBase(preferred) + '.cbz';
+        }
       }
     } catch (_) {}
 
     let parsed = null;
     try {
       if (typeof parseComicName === 'function') {
-        parsed = parseComicName(cleaned + '.cbz', chName)
-          || parseComicName(raw, chName);
+        parsed = parseComicName(cleaned + '.cbz', chName) || parseComicName(raw, chName);
       }
     } catch (_) {}
 
@@ -63,26 +58,13 @@ export function createRepackTool(d) {
       const series = parsed.series;
       const num = String(parsed.number);
       const info = (parsed.info || '').trim();
-      // Preferir formato sin repetir canal si el canal ya contextualiza
-      let body;
-      if (info) body = `${series} #${num} - ${info}`;
-      else body = `${series} #${num}`;
-      // Si el nombre original traía el canal como prefijo, mantener convención completa
-      const hadChannelPrefix = chName && new RegExp('^' + chName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*-', 'i').test(cleaned);
-      const base = hadChannelPrefix ? `${chName} - ${body}` : body;
-      return base + '.cbz';
+      let body = info ? `${series} #${num} - ${info}` : `${series} #${num}`;
+      const hadChannelPrefix = chName && new RegExp(
+        '^' + chName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*-',
+        'i'
+      ).test(cleaned);
+      return (hadChannelPrefix ? `${chName} - ${body}` : body) + '.cbz';
     }
-
-    if (preferred && String(preferred).trim()) {
-      return cleanFileBase(preferred) + '.cbz';
-    }
-
-    try {
-      if (typeof comicDisplay === 'function') {
-        const d = comicDisplay(cleaned + '.cbz', chName) || comicDisplay(raw, chName);
-        if (d && d.trim()) return cleanFileBase(d) + '.cbz';
-      }
-    } catch (_) {}
 
     return cleaned + '.cbz';
   }
@@ -90,7 +72,6 @@ export function createRepackTool(d) {
   async function downloadWholeMessage(msg, size, status) {
     const client = getClient();
     const ac = { get cancelled() { return abort; } };
-    // Preferir downloadMedia (más eficiente)
     try {
       const buf = await client.downloadMedia(msg.media, {
         workers: 2,
@@ -124,24 +105,21 @@ export function createRepackTool(d) {
     if (kind === 'zip') {
       status('Es ZIP (CBR falso): descarga directa…');
       const data = await downloadWholeMessage(msg, f.size, status);
-      // Una sola copia → Blob; soltar referencia al buffer grande después
       const blob = new Blob([data], { type: 'application/zip' });
       status(`Listo para subir (${formatBytes?.(blob.size) || blob.size + ' B'})`);
       return blob;
     }
 
-    // RAR real: extraer imagen a imagen y escribir CBZ sin acumular todas
     status('Descargando CBR (RAR)…');
     let data = await downloadWholeMessage(msg, f.size, status);
     if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
 
-    status('Extrayendo RAR → CBZ (streaming)…');
+    status('Extrayendo RAR → CBZ…');
     const { createExtractorFromData } = await import('node-unrar-js');
     const rarWasm = (await import('node-unrar-js/esm/js/unrar.wasm?url')).default;
     const ab = data.buffer.byteLength === data.byteLength && data.byteOffset === 0
       ? data.buffer
       : data.slice().buffer;
-    // data ya no hace falta como vista
     data = null;
 
     const ex = await createExtractorFromData({
@@ -158,7 +136,10 @@ export function createRepackTool(d) {
     const mimeOf = (name) => {
       const e = (name.split(/[/\\]/).pop() || name).toLowerCase().match(/\.(jpe?g|png|webp|gif|avif)$/);
       if (!e) return 'application/octet-stream';
-      return ({ jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', avif: 'image/avif' })[e[1]] || 'application/octet-stream';
+      return ({
+        jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+        webp: 'image/webp', gif: 'image/gif', avif: 'image/avif',
+      })[e[1]] || 'application/octet-stream';
     };
 
     for (const x of ex.extract().files) {
@@ -173,7 +154,6 @@ export function createRepackTool(d) {
       const raw = x.extraction;
       const src = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
       if (!src.byteLength) continue;
-      // Copia propia y soltar referencia WASM cuanto antes
       const copy = new Uint8Array(src.byteLength);
       copy.set(src);
       const pageBlob = new Blob([copy.buffer], { type: mimeOf(base) });
@@ -192,6 +172,12 @@ export function createRepackTool(d) {
     return out;
   }
 
+  /**
+   * Subida en navegador con GramJS:
+   * - uploadFile acepta File del navegador
+   * - sendFile recibe el InputFile resultante
+   * - Fallback: CustomFile con buffer explícito (path '')
+   */
   async function uploadCbz(ch, fileName, blob, caption, status) {
     await getReady();
     const peer = peerOf(ch);
@@ -200,30 +186,6 @@ export function createRepackTool(d) {
     status?.(`Preparando subida… (${formatBytes?.(blob.size) || blob.size + ' B'})`);
 
     const attrs = [new Api.DocumentAttributeFilename({ fileName })];
-
-    // GramJS en navegador: CustomFile(name, size, path='', buffer)
-    // path debe ser '' (si pones el nombre lo trata como ruta de disco).
-    let CustomFile;
-    try {
-      ({ CustomFile } = await import('telegram/client/uploads'));
-    } catch (_) {
-      try { ({ CustomFile } = await import('telegram/Utils')); }
-      catch (_) {
-        try { ({ CustomFile } = await import('telegram/Utils.js')); }
-        catch (_) { CustomFile = null; }
-      }
-    }
-    if (!CustomFile) throw new Error('CustomFile no disponible en esta build de GramJS');
-
-    status?.('Leyendo CBZ en memoria…');
-    const ab = await blob.arrayBuffer();
-    const u8 = new Uint8Array(ab);
-    // Preferir Buffer si el polyfill de Vite está activo (GramJS lo espera a menudo)
-    const B = globalThis.Buffer;
-    const buffer = B ? B.from(u8) : u8;
-
-    const custom = new CustomFile(fileName, buffer.length || u8.byteLength, '', buffer);
-
     const onProg = (p) => {
       if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
       const n = Number(p);
@@ -232,7 +194,53 @@ export function createRepackTool(d) {
       }
     };
 
-    // 1) uploadFile → sendFile (más fiable en browser)
+    // --- 1) Browser File → uploadFile → sendFile ---
+    try {
+      const browserFile = new File([blob], fileName, {
+        type: blob.type || 'application/zip',
+      });
+      status?.('Subiendo…');
+      const inputFile = await client.uploadFile({
+        file: browserFile,
+        workers: 1,
+        onProgress: onProg,
+      });
+      await client.sendFile(peer, {
+        file: inputFile,
+        caption: caption || '',
+        forceDocument: true,
+        attributes: attrs,
+      });
+      return;
+    } catch (e) {
+      if (e?.cancelled || abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
+      console.warn('[repack] uploadFile(File) falló', e);
+      status?.(`Reintento (CustomFile)… (${e?.message || e})`);
+    }
+
+    // --- 2) CustomFile + buffer explícito ---
+    status?.('Leyendo CBZ en memoria…');
+    const ab = await blob.arrayBuffer();
+    const u8 = new Uint8Array(ab);
+    const B = globalThis.Buffer;
+    const buffer = B ? B.from(u8) : u8;
+
+    let CustomFile = null;
+    for (const mod of ['telegram/client/uploads', 'telegram/Utils', 'telegram/Utils.js']) {
+      try {
+        const m = await import(/* @vite-ignore */ mod);
+        if (m.CustomFile) { CustomFile = m.CustomFile; break; }
+      } catch (_) {}
+    }
+    if (!CustomFile) throw new Error('CustomFile no disponible en GramJS');
+
+    const custom = new CustomFile(fileName, u8.byteLength, '');
+    // Algunas builds no asignan el 4º arg: forzar buffer
+    try { custom.buffer = buffer; } catch (_) {}
+    try {
+      if (custom.buffer == null) Object.defineProperty(custom, 'buffer', { value: buffer, writable: true });
+    } catch (_) {}
+
     try {
       status?.('Subiendo…');
       const inputFile = await client.uploadFile({
@@ -249,11 +257,11 @@ export function createRepackTool(d) {
       return;
     } catch (e) {
       if (e?.cancelled || abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
-      console.warn('[repack] uploadFile falló, sendFile(CustomFile)', e);
+      console.warn('[repack] uploadFile(CustomFile) falló', e);
       status?.(`Reintento sendFile… (${e?.message || e})`);
     }
 
-    // 2) sendFile directo con CustomFile
+    // --- 3) sendFile(CustomFile) ---
     try {
       await client.sendFile(peer, {
         file: custom,
@@ -343,25 +351,23 @@ export function createRepackTool(d) {
       panel.hidden = true;
       const chip = ensureRestoreChip();
       chip.hidden = false;
-      chip.textContent = running ? 'Recarga…' : 'Recarga CBR';
     };
     titleRow.append(title, btnMin);
-    const log = el('div', 'repack-panel-log');
-    log.id = 'repack-log';
-    const bar = el('div', 'repack-panel-bar');
-    const fill = el('div', 'repack-panel-fill');
+    const bar = el('div', 'repack-bar');
+    const fill = el('div', 'repack-fill');
     fill.id = 'repack-fill';
     bar.append(fill);
+    const log = el('div', 'repack-log');
+    log.id = 'repack-log';
     const actions = el('div', 'repack-panel-actions');
     const btnStop = el('button', 'btn', 'Detener');
     btnStop.id = 'repack-stop';
     btnStop.type = 'button';
     btnStop.onclick = () => {
-      if (!running) return;
       abort = true;
       btnStop.disabled = true;
       btnStop.textContent = 'Deteniendo…';
-      logLine('Parada solicitada; se detendrá al terminar el paso actual…');
+      logLine('Cancelando…');
     };
     actions.append(btnStop);
     panel.append(titleRow, bar, log, actions);
@@ -385,7 +391,6 @@ export function createRepackTool(d) {
     const line = el('div', 'repack-log-line', text);
     log.append(line);
     log.scrollTop = log.scrollHeight;
-    // Persistir últimas líneas por si el SO mata la pestaña
     try {
       const prev = JSON.parse(sessionStorage.getItem('repack:log') || '[]');
       prev.push({ t: Date.now(), text });
@@ -410,7 +415,9 @@ export function createRepackTool(d) {
     try {
       cbz = await convertToCbzBlob(ch, f, status);
       if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
-      const outName = item.outName || toCbzName(cleanFileBase(f.name) + '.cbr');
+      let outName = item.outName || toCbzName(cleanFileBase(f.name) + '.cbr');
+      outName = String(outName).trim().replace(/_/g, ' ').replace(/\s+/g, ' ');
+      if (!/\.cbz$/i.test(outName)) outName = outName.replace(/\.cb[zr]$/i, '') + '.cbz';
       status(`Nombre de subida: ${outName}`);
       await uploadCbz(ch, outName, cbz, f.caption || '', status);
       cbz = null;
@@ -440,7 +447,7 @@ export function createRepackTool(d) {
     if (log) log.replaceChildren();
     const total = selected.length;
     let done = 0, ok = 0, fail = 0;
-    logLine(`Cola: ${total} archivo(s). No cambies de app si puedes; el sistema puede cerrar la pestaña si se queda sin RAM.`);
+    logLine(`Cola: ${total} archivo(s).`);
     for (const item of selected) {
       if (abort) {
         logLine('Detenido por el usuario');
@@ -469,7 +476,7 @@ export function createRepackTool(d) {
     resetStopButton();
   }
 
-
+  /** Pantalla para renombrar cada archivo antes de subir */
   function showNameReview(selected, deleteOriginal) {
     document.querySelector('.info-frame.repack-names')?.remove();
     const frame = el('div', 'info-frame repack-names');
@@ -481,7 +488,7 @@ export function createRepackTool(d) {
     head.append(close);
     const body = el('div', 'info-body');
     body.append(el('p', 'cover-pick-hint',
-      'Revisa o edita el nombre final (.cbz). Se proponen espacios en lugar de _ y el formato Serie #n cuando se puede detectar.'
+      'Edita el nombre final de cada archivo (.cbz). Se proponen espacios en lugar de _ cuando se puede.'
     ));
 
     const inputs = [];
@@ -508,9 +515,8 @@ export function createRepackTool(d) {
       const ready = inputs.map((inp) => {
         let name = String(inp.value || '').trim();
         if (!name) name = suggestUploadName(inp._item.ch, inp._item.f);
-        if (!/\.cbz$/i.test(name)) name = name.replace(/\\.cb[zr]$/i, '') + '.cbz';
-        // Normalizar espacios
-        name = name.replace(/_/g, ' ').replace(/\\s+/g, ' ').trim();
+        name = name.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+        if (!/\.cbz$/i.test(name)) name = name.replace(/\.cb[zr]$/i, '') + '.cbz';
         if (!/\.cbz$/i.test(name)) name += '.cbz';
         return { ...inp._item, outName: name };
       });
@@ -536,35 +542,24 @@ export function createRepackTool(d) {
     head.append(close);
     const body = el('div', 'info-body');
     body.append(el('p', 'cover-pick-hint',
-      'Convierte CBR → CBZ y re-sube al mismo canal. En el móvil hazlos de uno en uno y con archivos no demasiado grandes: el navegador puede matar la pestaña si se queda sin memoria (parece un “reload”).'
+      'Convierte CBR → CBZ y re-sube al mismo canal. Podrás editar el nombre antes de subir. En el móvil hazlos de uno en uno.'
     ));
-    // Mostrar log previo si la pestaña murió a mitad
-    try {
-      const prev = JSON.parse(sessionStorage.getItem('repack:log') || '[]');
-      if (prev.length) {
-        body.append(el('div', 'info-sec', 'Última ejecución (recuperada)'));
-        const boxLog = el('div', 'repack-list');
-        for (const row of prev.slice(-12)) {
-          boxLog.append(el('div', 'repack-log-line', row.text));
-        }
-        body.append(boxLog);
-      }
-    } catch (_) {}
-
-    const status = el('p', 'sync-status', 'Buscando candidatos…');
+    const status = el('div', 'sync-status', 'Buscando candidatos…');
     body.append(status);
-    const delLabel = el('label', 'repack-check');
+
+    const delLabel = el('label', 'repack-del');
     const delCb = el('input');
     delCb.type = 'checkbox';
-    delCb.checked = false; // más seguro por defecto
-    delLabel.append(delCb, document.createTextNode(' Borrar mensaje original tras subir'));
+    delCb.checked = true;
+    delLabel.append(delCb, document.createTextNode(' Borrar el original tras subir OK'));
     body.append(delLabel);
+
     const listHost = el('div', 'repack-list');
     body.append(listHost);
     const actions = el('div', 'edit-actions');
     const btnAll = el('button', 'btn', 'Seleccionar todos');
     const btnNone = el('button', 'btn', 'Ninguno');
-    const btnStart = el('button', 'btn edit-save', 'Iniciar');
+    const btnStart = el('button', 'btn edit-save', 'Siguiente');
     btnStart.disabled = true;
     actions.append(btnAll, btnNone, btnStart);
     body.append(actions);
@@ -586,7 +581,6 @@ export function createRepackTool(d) {
         const row = el('label', 'repack-row');
         const cb = el('input');
         cb.type = 'checkbox';
-        // Por defecto solo el primero para no matar el móvil
         cb.checked = checks.length === 0;
         cb._item = item;
         checks.push(cb);
@@ -608,8 +602,9 @@ export function createRepackTool(d) {
         alert('Selecciona al menos un archivo');
         return;
       }
-      if (selected.length > 1 && !confirm(`Vas a procesar ${selected.length} archivos seguidos en el móvil. ¿Seguro? Mejor de uno en uno.`)) return;
+      if (selected.length > 1 && !confirm(`Vas a procesar ${selected.length} archivos. ¿Seguro? Mejor de uno en uno en móvil.`)) return;
       frame.remove();
+      // Siempre pedir/editar nombres antes de subir
       showNameReview(selected, delCb.checked);
     };
     collectCandidates().then((list) => {
