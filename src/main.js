@@ -370,7 +370,10 @@ async function openPages(m, size, status, ac) {
   }
   out.sort((x, y) => natural(x.filename, y.filename));
   if (!out.length) throw new Error('El CBR no contiene imágenes legibles.');
- // ---------- Portadas (módulo covers.js) ----------
+  return { pages: out, close: () => {} };
+}
+
+// ---------- Portadas (módulo covers.js) ----------
 let reading = false;
 const coverApi = createCovers(
   {
@@ -384,8 +387,6 @@ const coverApi = createCovers(
   }
 );
 const { getCover, saveCoverBlob, optimizeImageBlob, comicCover, pump, io } = coverApi;
-
-_load?.(); } }), { rootMargin: '400px' });
 
 // ---------- Navegación y vistas ----------
 const app = $('#app'), titleEl = $('#title'), backBtn = $('#back'), actions = $('#actions');
