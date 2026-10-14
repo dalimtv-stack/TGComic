@@ -242,3 +242,8 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 .repack-name-from{font-size:.78rem;color:var(--mut);word-break:break-all;margin-bottom:.35rem;text-decoration:line-through;opacity:.85}
 .repack-name-input{margin:.25rem 0}
 .repack-name-row small{display:block;color:var(--mut);font-size:.75rem;margin-top:.25rem}
+
+/* Seguir leyendo: desplegable (mismo patrón que Editoriales) */
+.continue-fold{margin:.5rem .75rem .35rem}
+.continue-fold-body{padding:.35rem 0 .55rem;background:var(--card);border-radius:0 0 14px 14px}
+.continue-fold-body .continue-track{padding-left:.65rem;padding-right:.65rem}
