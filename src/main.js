@@ -27,6 +27,7 @@ import {
   groupDisplayName, setGroupDisplayName,
 } from './meta.js';
 import { createReader } from './reader.js';
+import { createCovers } from './covers.js';
 
 const apiId = Number(import.meta.env.VITE_API_ID);
 const apiHash = import.meta.env.VITE_API_HASH;
@@ -369,93 +370,22 @@ async function openPages(m, size, status, ac) {
   }
   out.sort((x, y) => natural(x.filename, y.filename));
   if (!out.length) throw new Error('El CBR no contiene imágenes legibles.');
-  return { pages: out, close: () => {} };
-}
-
-// ---------- Portadas (primera imagen del CBZ, miniatura cacheada) ----------
-const cq = []; let crun = 0, reading = false;
-const enqueue = (fn) => new Promise((res) => { cq.push(() => fn().then(res, () => res(null))); pump(); });
-function pump() { if (reading) return; while (crun < 2 && cq.length) { crun++; cq.shift()().finally(() => { crun--; pump(); }); } }
-
-async function getCover(ch, f) {
-  const key = `c:${ch.id}:${f.id}`;
-  let b = await kv.get(key);
-  if (b === 'none') b = undefined; // legacy: CBR marcados como none
-  if (!b) b = await enqueue(() => makeCover(ch, f, key));
-  return b && b !== 'none' ? b : null;
-}
-/** ¿El canvas puede exportar WebP? (se comprueba una vez) */
-let _webpOk = null;
-async function supportsWebP() {
-  if (_webpOk != null) return _webpOk;
-  _webpOk = await new Promise((res) => {
-    try {
-      const c = document.createElement('canvas');
-      c.width = 1; c.height = 1;
-      c.toBlob((b) => res(!!(b && b.type === 'image/webp')), 'image/webp', 0.8);
-    } catch { res(false); }
-  });
-  return _webpOk;
-}
-/**
- * Redimensiona y comprime una imagen para caché.
- * maxEdge: lado mayor máximo en px. quality: 0–1.
- */
-async function optimizeImageBlob(blob, maxEdge = 320, quality = 0.72) {
-  if (!blob || !blob.size) return null;
-  // Si ya es pequeña y WebP, no tocar
-  if (blob.type === 'image/webp' && blob.size < 40 * 1024 && maxEdge >= 320) {
-    try {
-      const bmp = await createImageBitmap(blob);
-      const ok = Math.max(bmp.width, bmp.height) <= maxEdge + 8;
-      bmp.close?.();
-      if (ok) return blob;
-    } catch (_) {}
+ // ---------- Portadas (módulo covers.js) ----------
+let reading = false;
+const coverApi = createCovers(
+  {
+    get reading() { return reading; },
+    set reading(v) { reading = v; },
+  },
+  {
+    el, kv, zip,
+    TgReader, getMsg, pageBlob, sniff, pagesOf,
+    readProgress, isComicRead, stripExt,
   }
-  const bmp = await createImageBitmap(blob);
-  const scale = Math.min(1, maxEdge / Math.max(bmp.width, bmp.height));
-  const w = Math.max(1, Math.round(bmp.width * scale));
-  const h = Math.max(1, Math.round(bmp.height * scale));
-  const cv = el('canvas');
-  cv.width = w; cv.height = h;
-  cv.getContext('2d').drawImage(bmp, 0, 0, w, h);
-  bmp.close?.();
-  const webp = await supportsWebP();
-  const type = webp ? 'image/webp' : 'image/jpeg';
-  const out = await new Promise((r) => cv.toBlob(r, type, quality));
-  // Si WebP salió mayor que el original, o falló, probar JPEG
-  if (!out || (out.size >= blob.size && blob.size < 80 * 1024)) {
-    if (type === 'image/webp') {
-      const jpg = await new Promise((r) => cv.toBlob(r, 'image/jpeg', quality));
-      return jpg && jpg.size < blob.size ? jpg : (jpg || out || blob);
-    }
-    return out && out.size < blob.size ? out : blob;
-  }
-  return out;
-}
-const thumbFromBlob = (blob) => optimizeImageBlob(blob, 280, 0.72);
-async function saveCoverBlob(ch, f, blob) {
-  if (!blob) return;
-  const key = `c:${ch.id}:${f.id}`;
-  try {
-    const out = await thumbFromBlob(blob);
-    if (out) await kv.set(key, out);
-  } catch (e) { console.warn('portada', e); }
-}
-async function makeCover(ch, f, key) {
-  const r = new TgReader(await getMsg(ch, f), f.size);
-  // Solo CBZ en caliente; los CBR guardan portada al abrir el cómic
-  if ((await sniff(r)) !== 'zip') return null;
-  const zr = new zip.ZipReader(r);
-  try {
-    const first = pagesOf(await zr.getEntries())[0];
-    if (!first) return null;
-    const out = await thumbFromBlob(await pageBlob(first));
-    if (out) await kv.set(key, out);
-    return out;
-  } finally { zr.close().catch(() => {}); }
-}
-const io = new IntersectionObserver((es) => es.forEach((x) => { if (x.isIntersecting) { io.unobserve(x.target); x.target._load?.(); } }), { rootMargin: '400px' });
+);
+const { getCover, saveCoverBlob, optimizeImageBlob, comicCover, pump, io } = coverApi;
+
+_load?.(); } }), { rootMargin: '400px' });
 
 // ---------- Navegación y vistas ----------
 const app = $('#app'), titleEl = $('#title'), backBtn = $('#back'), actions = $('#actions');
@@ -846,42 +776,6 @@ function art(kind, name, ch) {
   return d;
 }
 
-function comicCover(ch, f, badge, series) {
-  const d = el('div', 'cover'), ltr = el('span', '', stripExt(f.name).slice(0, 1).toUpperCase());
-  d.append(ltr);
-  if (badge != null && badge !== '') {
-    const b = el('span', series ? 'badge series' : 'badge', String(badge));
-    d.append(b);
-  }
-  // Solo en cómics sueltos, nunca en la tarjeta de serie agrupada
-  const prog = series ? null : readProgress(ch.id, f.id);
-  if (prog) {
-    const bar = el('div', 'prog');
-    const fill = el('div', 'prog-fill');
-    fill.style.width = prog.pct + '%';
-    bar.append(fill);
-    d.append(bar);
-    const pb = el('span', 'prog-badge', prog.pct >= 95 ? '✓' : prog.pct + '%');
-    d.append(pb);
-  } else if (!series && isComicRead(ch.id, f.id)) {
-    // Fallback visual si isComicRead y aún no hay progreso calculable
-    const bar = el('div', 'prog');
-    const fill = el('div', 'prog-fill');
-    fill.style.width = '100%';
-    bar.append(fill);
-    d.append(bar);
-    d.append(el('span', 'prog-badge', '✓'));
-  }
-  d._load = async () => {
-    const b = await getCover(ch, f);
-    if (!b) return;
-    const img = new Image();
-    img.onload = () => { ltr.remove(); d.prepend(img); };
-    img.src = URL.createObjectURL(b);
-  };
-  io.observe(d);
-  return d;
-}
 /** Pulsación larga: el menú se abre AL SOLTAR (si no, el touchend cierra el sheet) */
 function bindLongPress(node, fn, ms = 480) {
   if (!fn || !node) return;

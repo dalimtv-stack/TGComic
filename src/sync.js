@@ -193,9 +193,53 @@ export function logout() {
   localStorage.removeItem(LS_META);
 }
 
-function setMeta(updatedAt) {
+/** Fecha en horario de España: hh:mm:ss DD/MM/AAAA */
+export function formatSyncDate(iso) {
   try {
-    localStorage.setItem(LS_META, JSON.stringify({ updatedAt: updatedAt || new Date().toISOString() }));
+    const d = iso ? new Date(iso) : new Date();
+    if (Number.isNaN(d.getTime())) return String(iso || '');
+    const parts = new Intl.DateTimeFormat('es-ES', {
+      timeZone: 'Europe/Madrid',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour12: false,
+    }).formatToParts(d);
+    const g = (t) => parts.find((p) => p.type === t)?.value || '';
+    return `${g('hour')}:${g('minute')}:${g('second')} ${g('day')}/${g('month')}/${g('year')}`;
+  } catch {
+    return String(iso || '');
+  }
+}
+
+function formatSyncBytes(n) {
+  const x = Number(n) || 0;
+  if (x < 1024) return x + ' B';
+  if (x < 1024 * 1024) return (x / 1024).toFixed(1).replace(/\.0$/, '') + ' KB';
+  return (x / (1024 * 1024)).toFixed(2).replace(/\.00$/, '') + ' MB';
+}
+
+/** Tamaño aproximado del snapshot local (datos que se sincronizan). */
+export function snapshotByteSize() {
+  try {
+    const json = JSON.stringify(collectSnapshot());
+    return new TextEncoder().encode(json).length;
+  } catch {
+    return 0;
+  }
+}
+
+function setMeta(updatedAt, sizeBytes) {
+  try {
+    const prev = JSON.parse(localStorage.getItem(LS_META) || '{}') || {};
+    const size = sizeBytes != null ? sizeBytes : (prev.sizeBytes ?? snapshotByteSize());
+    localStorage.setItem(LS_META, JSON.stringify({
+      updatedAt: updatedAt || new Date().toISOString(),
+      sizeBytes: size,
+    }));
   } catch (_) {}
 }
 
@@ -214,7 +258,7 @@ export async function register(username, password) {
   const payload = await encryptPayload(u, password, collectSnapshot());
   await upsertRemote(id, payload, verifier);
   saveSession(u, password);
-  setMeta();
+  setMeta(undefined, snapshotByteSize());
   return { username: u };
 }
 
@@ -231,13 +275,13 @@ export async function login(username, password) {
   const snap = await decryptPayload(u, password, row.payload);
   applySnapshot(snap);
   saveSession(u, password);
-  setMeta(row.updated_at);
+  setMeta(row.updated_at, snapshotByteSize());
   // Tras login, subir estado fusionado (local + remoto) con verificador correcto
   try {
     const verifier = await passwordVerifier(u, password);
     const payload = await encryptPayload(u, password, collectSnapshot());
     await upsertRemote(id, payload, verifier);
-    setMeta();
+    setMeta(undefined, snapshotByteSize());
   } catch (e) {
     console.warn('[sync] post-login push', e);
   }
@@ -262,7 +306,7 @@ export async function push() {
   const verifier = await passwordVerifier(u, p);
   const payload = await encryptPayload(u, p, collectSnapshot());
   await upsertRemote(id, payload, verifier);
-  setMeta();
+  setMeta(undefined, snapshotByteSize());
   return true;
 }
 
@@ -275,7 +319,7 @@ export async function pull() {
   if (!row?.payload) return false;
   const snap = await decryptPayload(u, p, row.payload);
   applySnapshot(snap);
-  setMeta(row.updated_at);
+  setMeta(row.updated_at, snapshotByteSize());
   return true;
 }
 
@@ -372,16 +416,30 @@ export function showSyncFrame(opts = {}) {
     const row = el('div', 'info-row');
     row.append(el('span', 'info-label', 'Usuario'), el('span', 'info-value', currentUsername()));
     body.append(row);
-    let meta = '';
+    let metaAt = '';
+    let metaSize = 0;
     try {
-      meta = JSON.parse(localStorage.getItem(LS_META) || '{}').updatedAt || '';
+      const meta = JSON.parse(localStorage.getItem(LS_META) || '{}') || {};
+      metaAt = meta.updatedAt || '';
+      metaSize = meta.sizeBytes || 0;
     } catch (_) {}
-    if (meta) {
+    // Tamaño actual del snapshot (más fiable que el guardado)
+    const liveSize = snapshotByteSize() || metaSize;
+    if (metaAt) {
       const r2 = el('div', 'info-row');
-      r2.append(el('span', 'info-label', 'Última sync'), el('span', 'info-value', String(meta)));
+      r2.append(
+        el('span', 'info-label', 'Última sync'),
+        el('span', 'info-value', formatSyncDate(metaAt))
+      );
       body.append(r2);
     }
-    body.append(el('p', 'cover-pick-hint', 'Al abrir la app se bajan los datos; cada cambio local se sube solo. Aquí puedes forzar subida o bajada.'));
+    const r3 = el('div', 'info-row');
+    r3.append(
+      el('span', 'info-label', 'Datos sincronizados'),
+      el('span', 'info-value', formatSyncBytes(liveSize))
+    );
+    body.append(r3);
+    body.append(el('p', 'cover-pick-hint', 'Al abrir la app se bajan los datos; cada cambio local se sube solo. Aquí puedes forzar subida o bajada. El tamaño es el de preferencias, progreso y renombres (no incluye imágenes en caché).'));
     body.append(status);
     const actions = el('div', 'edit-actions sync-actions');
     const btnPull = el('button', 'btn', 'Bajar ahora');
@@ -390,6 +448,7 @@ export function showSyncFrame(opts = {}) {
       try {
         await pull();
         setStatus('Actualizado desde la nube');
+        renderLoggedIn();
         opts.onAfterAuth?.();
       } catch (e) {
         setStatus(e.message || String(e), true);
@@ -401,6 +460,7 @@ export function showSyncFrame(opts = {}) {
       try {
         await push();
         setStatus('Datos subidos');
+        renderLoggedIn();
       } catch (e) {
         setStatus(e.message || String(e), true);
       }
