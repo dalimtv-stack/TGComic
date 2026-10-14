@@ -29,6 +29,7 @@ import {
 import { createReader } from './reader.js';
 import { createCovers } from './covers.js';
 import { createRepackTool } from './repack.js';
+import { createUploadTool } from './upload.js';
 
 const apiId = Number(import.meta.env.VITE_API_ID);
 const apiHash = import.meta.env.VITE_API_HASH;
@@ -429,7 +430,8 @@ const paintUnreadMenu = () => {
 };
 paintUnreadMenu();
 const menuRepackBtn = el('button', 'app-menu-item', 'Recargar CBR / externos');
-menuPanel.append(menuInfoBtn, menuCfgBtn, menuSyncBtn, menuRepackBtn, menuUnreadBtn);
+const menuUploadBtn = el('button', 'app-menu-item', 'Subir cómic');
+menuPanel.append(menuInfoBtn, menuCfgBtn, menuSyncBtn, menuUploadBtn, menuRepackBtn, menuUnreadBtn);
 actions.append(menuBtn);
 document.body.append(menuPanel);
 
@@ -567,6 +569,11 @@ menuRepackBtn.onclick = (ev) => {
   closeAppMenu();
   repackTool.showRepackFrame();
 };
+menuUploadBtn.onclick = (ev) => {
+  ev.stopPropagation();
+  closeAppMenu();
+  uploadTool.showUploadFrame();
+};
 menuSyncBtn.onclick = (ev) => {
   ev.stopPropagation();
   closeAppMenu();
@@ -610,6 +617,9 @@ function show() {
   headerHidden = false;
   $('#top')?.classList.remove('hide');
   e.render(e);
+  // Panel/chip de recarga o subida: solo en home, nunca en el lector
+  try { repackTool?.syncFloatingUi?.(); } catch (_) {}
+  try { uploadTool?.syncFloatingUi?.(); } catch (_) {}
   // Por si el render asíncrono deja el scroll más abajo
   requestAnimationFrame(() => {
     window.scrollTo(0, 0);
@@ -1978,8 +1988,11 @@ function groupsView() {
       homeBody.replaceChildren();
       const continueList = getContinueList();
       if (continueList.length) {
-        const sec = el('section', 'continue');
-        sec.append(el('div', 'sec-title', 'Seguir leyendo'));
+        const foldCont = el('details', 'pubs-fold continue-fold');
+        if (pref('continueOpen', '1') === '1') foldCont.open = true;
+        const sumCont = el('summary', '', 'Seguir leyendo');
+        foldCont.append(sumCont);
+        const contInner = el('div', 'continue-fold-body');
         const track = el('div', 'continue-track');
         for (const item of continueList) {
           const ch = item.ch, f = item.f;
@@ -2010,9 +2023,10 @@ function groupsView() {
           row.append(thumb, meta);
           track.append(row);
         }
-        sec.append(track);
-        homeBody.append(sec);
-        homeBody.append(el('div', 'sec-sep'));
+        contInner.append(track);
+        foldCont.append(contInner);
+        foldCont.addEventListener('toggle', () => setPref('continueOpen', foldCont.open ? '1' : '0'));
+        homeBody.append(foldCont);
       }
       const gs = [...new Set(LIB.map((c) => c.group))];
       gs.sort((a, b) => natural(groupDisplayName(a), groupDisplayName(b)));
@@ -2496,6 +2510,11 @@ const repackTool = createRepackTool({
   fetchFiles, getMsg, openPages, pageBlob,
   downloadRarBytes, sniff, TgReader, pagesOf,
   natural,
+  parseComicName,
+  comicDisplay,
+  comicDisplayName,
+  stripExt,
+  getIsHome: () => stack.length < 2 && !document.getElementById('rd'),
   formatBytes: (n) => {
     const x = Number(n) || 0;
     if (x < 1024) return x + ' B';
@@ -2504,6 +2523,28 @@ const repackTool = createRepackTool({
   },
 });
 
+
+
+const uploadTool = createUploadTool({
+  el,
+  get client() { return client; },
+  Api, bigInt,
+  get LIB() { return LIB; },
+  setLIB: (v) => { LIB = v; },
+  kv,
+  get ready() { return ready; },
+  peerOf,
+  fetchFiles,
+  refreshLibrary,
+  natural,
+  getIsHome: () => stack.length < 2 && !document.getElementById('rd'),
+  formatBytes: (n) => {
+    const x = Number(n) || 0;
+    if (x < 1024) return x + ' B';
+    if (x < 1024 * 1024) return (x / 1024).toFixed(1) + ' KB';
+    return (x / (1024 * 1024)).toFixed(2) + ' MB';
+  },
+});
 
 // ---------- Inicio ----------
 async function migrateCacheImages() {
