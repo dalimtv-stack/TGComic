@@ -311,251 +311,276 @@ export function createUploadTool(d) {
     return [...new Set(arr.filter(Boolean))].sort(natural || undefined);
   }
 
+
   function showUploadFrame() {
     try {
-    document.querySelector('.info-frame.upload-frame')?.remove();
-    const frame = el('div', 'info-frame upload-frame');
-    const box = el('div', 'info-box');
-    const head = el('div', 'info-head');
-    head.append(el('span', '', 'Subir cómic'));
-    const close = el('button', 'btn info-close', '×');
-    close.onclick = () => { if (!busy) frame.remove(); };
-    head.append(close);
+      document.querySelector('.info-frame.upload-frame')?.remove();
+      const frame = el('div', 'info-frame upload-frame');
+      const box = el('div', 'info-box');
+      const head = el('div', 'info-head');
+      head.append(el('span', '', 'Subir cómic'));
+      const close = el('button', 'btn info-close', '×');
+      close.onclick = () => { if (!busy) frame.remove(); };
+      head.append(close);
 
-    const body = el('div', 'info-body');
-    body.append(el('p', 'cover-pick-hint',
-      'Elige un CBZ/CBR del dispositivo. Si el canal no existe se crea (archivado) con el formato Canal:Editorial::Comics::tgstorage. También puedes subir a un canal ya existente.'
-    ));
+      const body = el('div', 'info-body');
+      body.append(el('p', 'cover-pick-hint',
+        'Elige un CBZ/CBR del dispositivo. Si el canal no existe se crea (archivado) con el formato Canal:Editorial::Comics::tgstorage. También puedes subir a un canal ya existente.'
+      ));
 
-    const lib = Array.isArray(getLIB()) ? getLIB() : [];
-    const editorials = uniqueSorted(lib.map((c) => c.group || 'Sin editorial'));
-    const channelsByGroup = {};
-    for (const c of lib) {
-      const g = c.group || 'Sin editorial';
-      (channelsByGroup[g] ||= []).push(c);
-    }
-
-    // Archivo
-    body.append(el('div', 'info-sec', 'Archivo'));
-    const fileBtn = el('button', 'btn cover-pick-device', '📁  Elegir archivo CBZ / CBR');
-    const fileInput = el('input');
-    fileInput.type = 'file';
-    fileInput.accept = '.cbz,.cbr,application/zip,application/x-rar-compressed,*/*';
-    fileInput.hidden = true;
-    const fileLabel = el('p', 'sync-status', 'Ningún archivo seleccionado');
-    let pickedFile = null;
-    fileBtn.onclick = () => fileInput.click();
-    fileInput.onchange = () => {
-      pickedFile = fileInput.files?.[0] || null;
-      fileLabel.textContent = pickedFile
-        ? `${pickedFile.name} (${formatBytes?.(pickedFile.size) || pickedFile.size + ' B'})`
-        : 'Ningún archivo seleccionado';
-      // Prefill desde nombre de archivo
-      if (pickedFile) {
-        const base = String(pickedFile.name).replace(/\.cb[zr]$/i, '').replace(/_/g, ' ');
-        if (!seriesInp.value) {
-          const m = base.match(/^(.+?)\s+#?(\d+[a-z]?|Special|Especial|Extra|Anual|Annual)\b/i)
-            || base.match(/^(.+?)\s+(\d+[a-z]?)\s*-/i);
-          if (m) {
-            seriesInp.value = m[1].replace(new RegExp('^' + (channelSel.value || channelInp.value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*-\\s*', 'i'), '').trim() || m[1];
-            numberInp.value = m[2];
-            const rest = base.slice(m[0].length).replace(/^\s*-\s*/, '').trim();
-            if (rest && !infoInp.value) infoInp.value = rest;
-          } else if (!seriesInp.value) {
-            seriesInp.value = base;
-          }
-          updatePreview();
-        }
+      const lib = Array.isArray(getLIB()) ? getLIB() : [];
+      const editorials = uniqueSorted(lib.map((c) => c.group || 'Sin editorial'));
+      const channelsByGroup = {};
+      for (const c of lib) {
+        const g = c.group || 'Sin editorial';
+        (channelsByGroup[g] ||= []).push(c);
       }
-    };
-    body.append(fileBtn, fileInput, fileLabel);
 
-    // Editorial
-    body.append(el('div', 'info-sec', 'Editorial'));
-    const editorialSel = el('select', 'edit-input upload-select');
-    const optNewEd = el('option');
-    optNewEd.value = '__new__';
-    optNewEd.textContent = '＋ Nueva editorial…';
-    editorialSel.append(optNewEd);
-    for (const g of editorials) {
-      const o = el('option');
-      o.value = g;
-      o.textContent = g;
-      editorialSel.append(o);
-    }
-    if (editorials.length) editorialSel.value = editorials[0];
-    const editorialInp = el('input', 'edit-input');
-    editorialInp.type = 'text';
-    editorialInp.placeholder = 'Nombre de la editorial';
-    editorialInp.hidden = editorials.length > 0;
-    if (!editorials.length) {
-      editorialSel.value = '__new__';
-      editorialInp.hidden = false;
-    }
-    editorialSel.onchange = () => {
-      editorialInp.hidden = editorialSel.value !== '__new__';
+      // --- Controles (declarados antes de los handlers) ---
+      const fileBtn = el('button', 'btn cover-pick-device', '📁  Elegir archivo CBZ / CBR');
+      const fileInput = el('input');
+      fileInput.type = 'file';
+      fileInput.accept = '.cbz,.cbr,application/zip,application/x-rar-compressed,*/*';
+      fileInput.hidden = true;
+      const fileLabel = el('p', 'sync-status', 'Ningún archivo seleccionado');
+      let pickedFile = null;
+
+      const editorialSel = el('select', 'edit-input upload-select');
+      const optNewEd = el('option');
+      optNewEd.value = '__new__';
+      optNewEd.textContent = '＋ Nueva editorial…';
+      editorialSel.append(optNewEd);
+      for (const g of editorials) {
+        const o = el('option');
+        o.value = g;
+        o.textContent = g;
+        editorialSel.append(o);
+      }
+      if (editorials.length) editorialSel.value = editorials[0];
+      const editorialInp = el('input', 'edit-input');
+      editorialInp.type = 'text';
+      editorialInp.placeholder = 'Nombre de la editorial';
+      editorialInp.hidden = editorials.length > 0;
+      if (!editorials.length) {
+        editorialSel.value = '__new__';
+        editorialInp.hidden = false;
+      }
+
+      const channelSel = el('select', 'edit-input upload-select');
+      const channelInp = el('input', 'edit-input');
+      channelInp.type = 'text';
+      channelInp.placeholder = 'Nombre del canal';
+      channelInp.hidden = true;
+
+      const seriesInp = el('input', 'edit-input');
+      seriesInp.type = 'text';
+      seriesInp.placeholder = 'Serie (ej. Silencio)';
+      const numberInp = el('input', 'edit-input');
+      numberInp.type = 'text';
+      numberInp.placeholder = 'Número / Special / Extra / Anual';
+      const infoInp = el('input', 'edit-input');
+      infoInp.type = 'text';
+      infoInp.placeholder = 'Info opcional (ej. Dos caras)';
+      const preview = el('p', 'upload-preview', '');
+
+      const status = el('p', 'sync-status', '');
+      const actions = el('div', 'edit-actions');
+      const cancel = el('button', 'btn', 'Cancelar');
+      const goBtn = el('button', 'btn edit-save', 'Subir');
+
+      // --- Funciones (después de todos los controles) ---
+      const updatePreview = () => {
+        const ed = editorialSel.value === '__new__' ? editorialInp.value.trim() : editorialSel.value;
+        let chName = '';
+        if (channelSel.value === '__new__') chName = channelInp.value.trim();
+        else {
+          const opt = [...channelSel.options].find((o) => o.value === channelSel.value);
+          chName = opt?._ch?.name || opt?.textContent || '';
+        }
+        const fname = composeFileName({
+          channel: chName,
+          series: seriesInp.value,
+          number: numberInp.value,
+          info: infoInp.value,
+        });
+        preview.textContent = `Archivo: ${fname}`;
+        preview._fname = fname;
+        preview._channel = chName;
+        preview._editorial = ed || 'Sin editorial';
+      };
+
+      const rebuildChannels = () => {
+        const g = editorialSel.value === '__new__'
+          ? (editorialInp.value.trim() || 'Sin editorial')
+          : editorialSel.value;
+        channelSel.replaceChildren();
+        const optNewCh = el('option');
+        optNewCh.value = '__new__';
+        optNewCh.textContent = '＋ Nuevo canal…';
+        channelSel.append(optNewCh);
+        const list = (channelsByGroup[g] || []).slice().sort((a, b) =>
+          (natural || ((x, y) => String(x).localeCompare(String(y))))(a.name, b.name)
+        );
+        for (const c of list) {
+          const o = el('option');
+          o.value = c.id;
+          o.textContent = c.name;
+          o._ch = c;
+          channelSel.append(o);
+        }
+        if (list.length) {
+          channelSel.value = list[0].id;
+          channelInp.hidden = true;
+        } else {
+          channelSel.value = '__new__';
+          channelInp.hidden = false;
+        }
+        updatePreview();
+      };
+
+      // --- Handlers ---
+      fileBtn.onclick = () => fileInput.click();
+      fileInput.onchange = () => {
+        pickedFile = fileInput.files?.[0] || null;
+        fileLabel.textContent = pickedFile
+          ? `${pickedFile.name} (${formatBytes?.(pickedFile.size) || pickedFile.size + ' B'})`
+          : 'Ningún archivo seleccionado';
+        if (pickedFile) {
+          const base = String(pickedFile.name).replace(/\.cb[zr]$/i, '').replace(/_/g, ' ');
+          if (!seriesInp.value) {
+            const m = base.match(/^(.+?)\s+#?(\d+[a-z]?|Special|Especial|Extra|Anual|Annual)\b/i)
+              || base.match(/^(.+?)\s+(\d+[a-z]?)\s*-/i);
+            if (m) {
+              const chPrefix = (channelSel.value === '__new__'
+                ? channelInp.value
+                : ([...channelSel.options].find((o) => o.value === channelSel.value)?._ch?.name || '')
+              ).trim();
+              let ser = m[1];
+              if (chPrefix) {
+                ser = ser.replace(new RegExp('^' + chPrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*-\\s*', 'i'), '').trim() || ser;
+              }
+              seriesInp.value = ser;
+              numberInp.value = m[2];
+              const rest = base.slice(m[0].length).replace(/^\s*-\s*/, '').trim();
+              if (rest && !infoInp.value) infoInp.value = rest;
+            } else {
+              seriesInp.value = base;
+            }
+            updatePreview();
+          }
+        }
+      };
+
+      editorialSel.onchange = () => {
+        editorialInp.hidden = editorialSel.value !== '__new__';
+        rebuildChannels();
+      };
+      editorialInp.oninput = () => {
+        if (editorialSel.value === '__new__') rebuildChannels();
+        else updatePreview();
+      };
+      channelSel.onchange = () => {
+        channelInp.hidden = channelSel.value !== '__new__';
+        updatePreview();
+      };
+      channelInp.oninput = updatePreview;
+      seriesInp.oninput = updatePreview;
+      numberInp.oninput = updatePreview;
+      infoInp.oninput = updatePreview;
+
+      cancel.onclick = () => { if (!busy) frame.remove(); };
+      goBtn.onclick = async () => {
+        if (busy) return;
+        if (!pickedFile) {
+          alert('Selecciona un archivo');
+          return;
+        }
+        const ed = editorialSel.value === '__new__'
+          ? editorialInp.value.trim()
+          : editorialSel.value;
+        let chName = channelSel.value === '__new__'
+          ? channelInp.value.trim()
+          : ([...channelSel.options].find((o) => o.value === channelSel.value)?._ch?.name
+            || [...channelSel.options].find((o) => o.value === channelSel.value)?.textContent || '');
+        chName = String(chName || '').trim();
+        if (!ed) {
+          alert('Indica la editorial');
+          return;
+        }
+        if (!chName) {
+          alert('Indica el canal');
+          return;
+        }
+        updatePreview();
+        let outName = preview._fname || composeFileName({
+          channel: chName,
+          series: seriesInp.value,
+          number: numberInp.value,
+          info: infoInp.value,
+        });
+        outName = outName.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+        if (!/\.cbz$/i.test(outName)) outName = outName.replace(/\.cb[zr]$/i, '') + '.cbz';
+        if (!/\.cbz$/i.test(outName)) outName += '.cbz';
+
+        if (!confirm(`¿Subir como «${outName}» al canal «${chName}» (${ed})?`)) return;
+
+        busy = true;
+        goBtn.disabled = true;
+        cancel.disabled = true;
+        close.disabled = true;
+        const st = (msg) => { status.textContent = msg; };
+
+        try {
+          const ch = await ensureChannel(chName, ed, st);
+          let blob = await localFileToCbzBlob(pickedFile, st);
+          await uploadCbz(ch, outName, blob, '', st);
+          blob = null;
+          st('Actualizando listado…');
+          try { await fetchFiles(ch); } catch (_) {}
+          st('✓ Subido correctamente');
+          setTimeout(() => frame.remove(), 900);
+        } catch (e) {
+          console.error('[upload]', e);
+          status.textContent = 'Error: ' + (e?.message || e);
+          status.classList.add('sync-err');
+          goBtn.disabled = false;
+          cancel.disabled = false;
+          close.disabled = false;
+        } finally {
+          busy = false;
+        }
+      };
+
+      // --- Montar DOM ---
+      body.append(el('div', 'info-sec', 'Archivo'));
+      body.append(fileBtn, fileInput, fileLabel);
+
+      body.append(el('div', 'info-sec', 'Editorial'));
+      body.append(editorialSel, editorialInp);
+
+      body.append(el('div', 'info-sec', 'Canal'));
+      body.append(channelSel, channelInp);
+
+      body.append(el('div', 'info-sec', 'Título del archivo'));
+      body.append(seriesInp, numberInp, infoInp, preview);
+
+      body.append(status);
+      actions.append(cancel, goBtn);
+      body.append(actions);
+
+      box.append(head, body);
+      frame.append(box);
+
       rebuildChannels();
       updatePreview();
-    };
-    editorialInp.oninput = updatePreview;
-    body.append(editorialSel, editorialInp);
 
-    // Canal
-    body.append(el('div', 'info-sec', 'Canal'));
-    const channelSel = el('select', 'edit-input upload-select');
-    const channelInp = el('input', 'edit-input');
-    channelInp.type = 'text';
-    channelInp.placeholder = 'Nombre del canal';
-    channelInp.hidden = true;
-    const rebuildChannels = () => {
-      const g = editorialSel.value === '__new__'
-        ? (editorialInp.value.trim() || 'Sin editorial')
-        : editorialSel.value;
-      channelSel.replaceChildren();
-      const optNewCh = el('option');
-      optNewCh.value = '__new__';
-      optNewCh.textContent = '＋ Nuevo canal…';
-      channelSel.append(optNewCh);
-      const list = (channelsByGroup[g] || []).slice().sort((a, b) => natural(a.name, b.name));
-      for (const c of list) {
-        const o = el('option');
-        o.value = c.id;
-        o.textContent = c.name;
-        o._ch = c;
-        channelSel.append(o);
-      }
-      if (list.length) {
-        channelSel.value = list[0].id;
-        channelInp.hidden = true;
-      } else {
-        channelSel.value = '__new__';
-        channelInp.hidden = false;
-      }
-    };
-    channelSel.onchange = () => {
-      channelInp.hidden = channelSel.value !== '__new__';
-      updatePreview();
-    };
-    channelInp.oninput = updatePreview;
-    body.append(channelSel, channelInp);
-    rebuildChannels();
-
-    // Serie / número / info
-    body.append(el('div', 'info-sec', 'Título del archivo'));
-    const seriesInp = el('input', 'edit-input');
-    seriesInp.type = 'text';
-    seriesInp.placeholder = 'Serie (ej. Silencio)';
-    const numberInp = el('input', 'edit-input');
-    numberInp.type = 'text';
-    numberInp.placeholder = 'Número / Special / Extra / Anual';
-    const infoInp = el('input', 'edit-input');
-    infoInp.type = 'text';
-    infoInp.placeholder = 'Info opcional (ej. Dos caras)';
-    const preview = el('p', 'upload-preview', '');
-    const updatePreview = () => {
-      const ed = editorialSel.value === '__new__' ? editorialInp.value.trim() : editorialSel.value;
-      let chName = '';
-      if (channelSel.value === '__new__') chName = channelInp.value.trim();
-      else {
-        const opt = [...channelSel.options].find((o) => o.value === channelSel.value);
-        chName = opt?._ch?.name || opt?.textContent || '';
-      }
-      const fname = composeFileName({
-        channel: chName,
-        series: seriesInp.value,
-        number: numberInp.value,
-        info: infoInp.value,
+      let armed = false;
+      setTimeout(() => { armed = true; }, 350);
+      frame.addEventListener('click', (ev) => {
+        if (!armed || busy) return;
+        if (ev.target === frame) frame.remove();
       });
-      preview.textContent = `Archivo: ${fname}`;
-      preview._fname = fname;
-      preview._channel = chName;
-      preview._editorial = ed || 'Sin editorial';
-    };
-    seriesInp.oninput = updatePreview;
-    numberInp.oninput = updatePreview;
-    infoInp.oninput = updatePreview;
-    body.append(seriesInp, numberInp, infoInp, preview);
-    updatePreview();
-
-    const status = el('p', 'sync-status', '');
-    body.append(status);
-
-    const actions = el('div', 'edit-actions');
-    const cancel = el('button', 'btn', 'Cancelar');
-    cancel.onclick = () => { if (!busy) frame.remove(); };
-    const goBtn = el('button', 'btn edit-save', 'Subir');
-    goBtn.onclick = async () => {
-      if (busy) return;
-      if (!pickedFile) {
-        alert('Selecciona un archivo');
-        return;
-      }
-      const ed = editorialSel.value === '__new__'
-        ? editorialInp.value.trim()
-        : editorialSel.value;
-      let chName = channelSel.value === '__new__'
-        ? channelInp.value.trim()
-        : ([...channelSel.options].find((o) => o.value === channelSel.value)?._ch?.name
-          || [...channelSel.options].find((o) => o.value === channelSel.value)?.textContent || '');
-      chName = String(chName || '').trim();
-      if (!ed) {
-        alert('Indica la editorial');
-        return;
-      }
-      if (!chName) {
-        alert('Indica el canal');
-        return;
-      }
-      updatePreview();
-      let outName = preview._fname || composeFileName({
-        channel: chName,
-        series: seriesInp.value,
-        number: numberInp.value,
-        info: infoInp.value,
-      });
-      outName = outName.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
-      if (!/\.cbz$/i.test(outName)) outName = outName.replace(/\.cb[zr]$/i, '') + '.cbz';
-
-      if (!confirm(`¿Subir como «${outName}» al canal «${chName}» (${ed})?`)) return;
-
-      busy = true;
-      goBtn.disabled = true;
-      cancel.disabled = true;
-      close.disabled = true;
-      const st = (t) => { status.textContent = t; };
-
-      try {
-        const ch = await ensureChannel(chName, ed, st);
-        let blob = await localFileToCbzBlob(pickedFile, st);
-        await uploadCbz(ch, outName, blob, '', st);
-        blob = null;
-        st('Actualizando listado…');
-        try { await fetchFiles(ch); } catch (_) {}
-        st('✓ Subido correctamente');
-        setTimeout(() => frame.remove(), 900);
-      } catch (e) {
-        console.error('[upload]', e);
-        status.textContent = 'Error: ' + (e?.message || e);
-        status.classList.add('sync-err');
-        goBtn.disabled = false;
-        cancel.disabled = false;
-        close.disabled = false;
-      } finally {
-        busy = false;
-      }
-    };
-    actions.append(cancel, goBtn);
-    body.append(actions);
-    box.append(head, body);
-    frame.append(box);
-    // Evitar que el mismo toque/clic que abrió el menú cierre el frame al instante
-    let armed = false;
-    setTimeout(() => { armed = true; }, 350);
-    frame.addEventListener('click', (ev) => {
-      if (!armed || busy) return;
-      if (ev.target === frame) frame.remove();
-    });
-    document.body.append(frame);
+      document.body.append(frame);
     } catch (e) {
       console.error('[upload] showUploadFrame', e);
       alert('No se pudo abrir el formulario de subida: ' + (e?.message || e));
