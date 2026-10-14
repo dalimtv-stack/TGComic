@@ -216,7 +216,7 @@ export function createUploadTool(d) {
       for (const e of entries) {
         if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
         if (e.directory) continue;
-        const base = (e.filename || '').split(/[/\]/).pop() || e.filename;
+        const base = (e.filename || '').split(/[/\\]/).pop() || e.filename;
         if (!/\.(jpe?g|png|webp|gif|avif)$/i.test(base)) continue;
         let pageBlob = await e.getData(new zip.BlobWriter());
         pageBlob = await blobToWebp(pageBlob);
@@ -625,7 +625,8 @@ export function createUploadTool(d) {
               ).trim();
               let ser = m[1];
               if (chPrefix) {
-                ser = ser.replace(new RegExp('^' + chPrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*-\\s*', 'i'), '').trim() || ser;
+                const esc = chPrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                ser = ser.replace(new RegExp('^' + esc + '\\s*-\\s*', 'i'), '').trim() || ser;
               }
               seriesInp.value = ser;
               numberInp.value = m[2];
