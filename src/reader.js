@@ -597,18 +597,23 @@ export function createReader(state, d) {
         };
 
         onResize = () => {
+          // Bloquear scroll handler: si no, al cambiar anchos el mid-scroll
+          // interpreta otra página (salta 3/9/12 al girar el móvil).
+          syncLock = true;
+          clearTimeout(scrollT);
+          const stay = Math.max(0, Math.min(pages.length - 1, n));
+
           resetMobileViewport();
           const w = vw(), h = vh();
           rd.style.width = w + 'px';
           rd.style.height = h + 'px';
-          // Reaplicar tamaños con el viewport actual (corrige zoom al rotar)
+
           for (let i = 0; i < pages.length; i++) {
             const im = slots[i].querySelector('img');
             if (im) {
-              // Quitar estilos inline previos antes de recalcular
               im.style.width = '';
               im.style.height = '';
-              place(i, im);
+              place(i, im); // syncLock ⇒ place no mueve el scroll
             } else {
               const e = estSize();
               sizes[i] = e;
@@ -623,19 +628,38 @@ export function createReader(state, d) {
               }
             }
           }
+
+          // Restaurar la MISMA página (scroll instantáneo, no smooth)
+          const snapStay = () => {
+            n = stay;
+            if (horiz) rd.scrollLeft = posOf(stay);
+            else rd.scrollTop = posOf(stay);
+            setCount();
+          };
+          snapStay();
           requestAnimationFrame(() => {
-            jumpTo(n);
-            setTimeout(() => jumpTo(n), 180);
-            setTimeout(() => jumpTo(n), 400);
+            snapStay();
+            requestAnimationFrame(() => {
+              snapStay();
+              // Liberar tras asentar layout
+              setTimeout(() => {
+                snapStay();
+                syncLock = false;
+              }, 120);
+            });
           });
         };
         let resizeT = 0;
+        let resizeT2 = 0;
         const onOrient = () => {
+          // Congelar índice de página enseguida
+          syncLock = true;
+          clearTimeout(scrollT);
           clearTimeout(resizeT);
-          // iOS tarda en asentar visualViewport tras girar
-          resizeT = setTimeout(onResize, 60);
-          setTimeout(onResize, 220);
-          setTimeout(onResize, 480);
+          clearTimeout(resizeT2);
+          // Una pasada al estabilizar viewport + una de refuerzo (iOS)
+          resizeT = setTimeout(onResize, 100);
+          resizeT2 = setTimeout(onResize, 350);
         };
         addEventListener('resize', onOrient);
         addEventListener('orientationchange', onOrient);
