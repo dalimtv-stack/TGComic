@@ -9,7 +9,7 @@ import * as sync from './sync.js';
 import { buildSearchIndex, filterSearchIndex } from './search.js';
 import {
   stripExt, clean, parseComicName, issueDisplay, comicDisplay,
-  seriesBase, groupSeries, issueLabel,
+  seriesBase, groupSeries, issueLabel, parseComicCaption,
 } from './parse.js';
 import {
   getPageIndex, setPageIndex, getPagesTotal, setPagesTotal,
@@ -945,8 +945,10 @@ function bindLongPress(node, fn, ms = 480) {
 function showComicInfo(ch, f, displayTitle) {
   try {
     document.querySelector('.info-frame.comic-info')?.remove();
+    const cap = parseComicCaption(f?.caption || '');
     const parsed = parseComicName(f?.name || '', ch?.name);
     let series = (ch && f ? getComicSeriesOverride(ch, f) : null)
+      || cap.series
       || parsed?.series || seriesBase(f?.name || '', ch?.name) || '—';
     if (series !== '—' && ch) series = seriesDisplayName(ch, series);
     const parsedTitle = comicDisplay(f?.name || '', ch?.name) || '—';
@@ -980,15 +982,23 @@ function showComicInfo(ch, f, displayTitle) {
     };
     body.append(el('div', 'info-sec', 'Cómic'));
     body.append(row('Título', title));
+    if (cap.originalTitle) body.append(row('Título original', cap.originalTitle));
     body.append(row('Serie', series));
+    if (cap.writer) body.append(row('Guionista', cap.writer));
+    if (cap.artist) body.append(row('Dibujante', cap.artist));
+    if (cap.date) body.append(row('Fecha', cap.date));
     body.append(row('Canal', ch ? channelDisplayName(ch) : '—'));
     body.append(row('Editorial', ch?.group || '—'));
     body.append(row('Nombre archivo', fname || '—'));
-    if (f?.caption) body.append(row('Descripción TG', f.caption));
     body.append(row('Formato archivo', fmt));
     body.append(row('Tamaño', formatBytes(f?.size)));
     body.append(row('Número de páginas', pagesLabel));
     body.append(row('Formato páginas', pageFmt));
+    // Si hay caption pero no se reconoció ninguna clave, mostrar texto crudo
+    if (f?.caption && !cap.originalTitle && !cap.series && !cap.writer && !cap.artist && !cap.date) {
+      body.append(el('div', 'info-sec', 'Descripción Telegram'));
+      body.append(el('p', 'cover-pick-hint', String(f.caption).slice(0, 800)));
+    }
     box.append(head, body);
     frame.append(box);
     frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
@@ -1134,9 +1144,20 @@ function showEditComicTitle(ch, f, currentLabel, after) {
     } catch (_) {}
   })();
 
+  const capEdit = parseComicCaption(f?.caption || '');
   if (f?.caption) {
     body.append(el('div', 'info-sec', 'Descripción Telegram'));
-    body.append(el('p', 'cover-pick-hint', f.caption.slice(0, 500)));
+    if (capEdit.originalTitle || capEdit.series || capEdit.writer || capEdit.artist || capEdit.date) {
+      const bits = [];
+      if (capEdit.originalTitle) bits.push('Título original: ' + capEdit.originalTitle);
+      if (capEdit.series) bits.push('Serie: ' + capEdit.series);
+      if (capEdit.writer) bits.push('Guionista: ' + capEdit.writer);
+      if (capEdit.artist) bits.push('Dibujante: ' + capEdit.artist);
+      if (capEdit.date) bits.push('Fecha: ' + capEdit.date);
+      body.append(el('p', 'cover-pick-hint', bits.join(' · ')));
+    } else {
+      body.append(el('p', 'cover-pick-hint', f.caption.slice(0, 500)));
+    }
   }
 
   const actions = el('div', 'edit-actions');
