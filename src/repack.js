@@ -126,47 +126,16 @@ export function createRepackTool(d) {
   }
 
   /** Si ya es ZIP: no reextraer; solo cambiar extensión al subir. */
-  async function convertToCbzBlob(ch, f, status, opts = {}) {
-    const asWebp = !!opts.asWebp;
+  async function convertToCbzBlob(ch, f, status, opts) {
+    const wantWebp = !!(opts && opts.asWebp);
     const msg = await getMsg(ch, f);
     if (!msg?.media) throw new Error('Sin media en el mensaje');
 
     const probe = new TgReader(msg, f.size);
     const kind = await sniff(probe);
 
-    if (kind === 'zip') {
-      status('Es ZIP (CBR falso): descarga directa…');
-      const data = await downloadWholeMessage(msg, f.size, status);
-      const blob = new Blob([data], { type: 'application/zip' });
-      status(`Listo para subir (${formatBytes?.(blob.size) || blob.size + ' B'})`);
-      return blob;
-    }
-
-    status('Descargando CBR (RAR)…');
-    let data = await downloadWholeMessage(msg, f.size, status);
-    if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
-
-    status('Extrayendo RAR → CBZ…');
-    const { createExtractorFromData } = await import('node-unrar-js');
-    const rarWasm = (await import('node-unrar-js/esm/js/unrar.wasm?url')).default;
-    const ab = data.buffer.byteLength === data.byteLength && data.byteOffset === 0
-      ? data.buffer
-      : data.slice().buffer;
-    data = null;
-
-    const ex = await createExtractorFromData({
-      wasmBinary: await (await fetch(rarWasm)).arrayBuffer(),
-      data: ab,
-    });
-
-    const writer = new zip.ZipWriter(new zip.BlobWriter('application/zip'), {
-      bufferedWrite: true,
-      level: 0,
-    });
-
-    let nImg = 0;
     const mimeOf = (name) => {
-      const e = (name.split(/[/\\]/).pop() || name).toLowerCase().match(/\.(jpe?g|png|webp|gif|avif)$/);
+      const e = (String(name).split(/[/\\]/).pop() || name).toLowerCase().match(/\.(jpe?g|png|webp|gif|avif)$/);
       if (!e) return 'application/octet-stream';
       return ({
         jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
@@ -174,39 +143,111 @@ export function createRepackTool(d) {
       })[e[1]] || 'application/octet-stream';
     };
 
-    for (const x of ex.extract().files) {
-      if (abort) {
+    async function imagesToCbzFromRarData(data) {
+      const { createExtractorFromData } = await import('node-unrar-js');
+      const rarWasm = (await import('node-unrar-js/esm/js/unrar.wasm?url')).default;
+      const ab = data.buffer.byteLength === data.byteLength && data.byteOffset === 0
+        ? data.buffer
+        : data.slice().buffer;
+      const ex = await createExtractorFromData({
+        wasmBinary: await (await fetch(rarWasm)).arrayBuffer(),
+        data: ab,
+      });
+      const writer = new zip.ZipWriter(new zip.BlobWriter('application/zip'), {
+        bufferedWrite: true,
+        level: 0,
+      });
+      let nImg = 0;
+      for (const x of ex.extract().files) {
+        if (abort) {
+          try { await writer.close(); } catch (_) {}
+          throw Object.assign(new Error('cancelado'), { cancelled: true });
+        }
+        const n = x.fileHeader.name || '';
+        if (x.fileHeader.flags.directory || !x.extraction) continue;
+        const base = n.split(/[/\\]/).pop() || n;
+        if (!/\.(jpe?g|png|webp|gif|avif)$/i.test(base)) continue;
+        const raw = x.extraction;
+        const src = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
+        if (!src.byteLength) continue;
+        const copy = new Uint8Array(src.byteLength);
+        copy.set(src);
+        let pageBlob = new Blob([copy.buffer], { type: mimeOf(base) });
+        let outName = base;
+        if (wantWebp) {
+          pageBlob = await blobToWebp(pageBlob);
+          outName = base.replace(/\.[^.]+$/i, '.webp');
+        }
+        nImg++;
+        await writer.add(outName, new zip.BlobReader(pageBlob), { level: 0 });
+        status(`Empaquetando… ${nImg} img` + (wantWebp ? ' (WebP)' : ''));
+        if (nImg % 2 === 0) await yieldTick();
+      }
+      if (!nImg) {
         try { await writer.close(); } catch (_) {}
-        throw Object.assign(new Error('cancelado'), { cancelled: true });
+        throw new Error('CBR sin imágenes legibles');
       }
-      const n = x.fileHeader.name || '';
-      if (x.fileHeader.flags.directory || !x.extraction) continue;
-      const base = n.split(/[/\\]/).pop() || n;
-      if (!/\.(jpe?g|png|webp|gif|avif)$/i.test(base)) continue;
-      const raw = x.extraction;
-      const src = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
-      if (!src.byteLength) continue;
-      const copy = new Uint8Array(src.byteLength);
-      copy.set(src);
-      const pageBlob = new Blob([copy.buffer], { type: mimeOf(base) });
-      nImg++;
-      let outBlob = pageBlob;
-      let outName = base;
-      if (typeof asWebp !== 'undefined' && asWebp) {
-        outBlob = await blobToWebp(pageBlob);
-        outName = base.replace(/\.([^.]+)$/, '.webp');
-      }
-      await writer.add(outName, new zip.BlobReader(outBlob), { level: 0 });
-      status(`Empaquetando… ${nImg} img`);
-      if (nImg % 2 === 0) await yieldTick();
+      const out = await writer.close();
+      status(`CBZ listo (${formatBytes?.(out.size) || out.size + ' B'}, ${nImg} img)`);
+      return out;
     }
 
-    if (!nImg) {
-      try { await writer.close(); } catch (_) {}
-      throw new Error('CBR sin imágenes legibles');
+    async function imagesToCbzFromZipBlob(blob) {
+      const reader = new zip.ZipReader(new zip.BlobReader(blob));
+      const entries = await reader.getEntries();
+      const writer = new zip.ZipWriter(new zip.BlobWriter('application/zip'), {
+        bufferedWrite: true,
+        level: 0,
+      });
+      let nImg = 0;
+      for (const e of entries) {
+        if (abort) {
+          try { await writer.close(); } catch (_) {}
+          try { await reader.close(); } catch (_) {}
+          throw Object.assign(new Error('cancelado'), { cancelled: true });
+        }
+        if (e.directory) continue;
+        const base = (e.filename || '').split(/[/\\]/).pop() || e.filename;
+        if (!/\.(jpe?g|png|webp|gif|avif)$/i.test(base)) continue;
+        let pageBlob = await e.getData(new zip.BlobWriter());
+        let outName = base;
+        if (wantWebp) {
+          pageBlob = await blobToWebp(pageBlob);
+          outName = base.replace(/\.[^.]+$/i, '.webp');
+        }
+        nImg++;
+        await writer.add(outName, new zip.BlobReader(pageBlob), { level: 0 });
+        status(`Empaquetando… ${nImg} img` + (wantWebp ? ' (WebP)' : ''));
+        if (nImg % 2 === 0) await yieldTick();
+      }
+      await reader.close();
+      if (!nImg) {
+        try { await writer.close(); } catch (_) {}
+        throw new Error('ZIP sin imágenes legibles');
+      }
+      const out = await writer.close();
+      status(`CBZ listo (${formatBytes?.(out.size) || out.size + ' B'}, ${nImg} img)`);
+      return out;
     }
-    const out = await writer.close();
-    status(`CBZ listo (${formatBytes?.(out.size) || out.size + ' B'}, ${nImg} img)`);
+
+    if (kind === 'zip') {
+      status('Es ZIP (CBR falso): descarga…');
+      const data = await downloadWholeMessage(msg, f.size, status);
+      const blob = new Blob([data], { type: 'application/zip' });
+      if (!wantWebp) {
+        status(`Listo para subir (${formatBytes?.(blob.size) || blob.size + ' B'})`);
+        return blob;
+      }
+      status('Reempaquetando ZIP → WebP…');
+      return imagesToCbzFromZipBlob(blob);
+    }
+
+    status('Descargando CBR (RAR)…');
+    let data = await downloadWholeMessage(msg, f.size, status);
+    if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
+    status('Extrayendo RAR → CBZ…');
+    const out = await imagesToCbzFromRarData(data);
+    data = null;
     return out;
   }
 
@@ -458,12 +499,12 @@ export function createRepackTool(d) {
     }
     let cbz = null;
     try {
-      cbz = await convertToCbzBlob(ch, f, status, { asWebp: asWebp || !!item.asWebp });
+      const useWebp = !!(item && item.asWebp) || !!asWebp;
+      cbz = await convertToCbzBlob(ch, f, status, { asWebp: useWebp });
       if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
       let outName = item.outName || toCbzName(cleanFileBase(f.name) + '.cbr');
       outName = String(outName).trim().replace(/_/g, ' ').replace(/\s+/g, ' ');
       if (!/\.cbz$/i.test(outName)) outName = outName.replace(/\.cb[zr]$/i, '') + '.cbz';
-      const useWebp = asWebp || !!item.asWebp;
       if (useWebp && !/\[WebP\]/i.test(outName)) {
         outName = outName.replace(/\.cbz$/i, ' [WebP].cbz');
       }

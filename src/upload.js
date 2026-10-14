@@ -197,44 +197,69 @@ export function createUploadTool(d) {
     return u8 && u8.length >= 2 && u8[0] === 0x50 && u8[1] === 0x4b;
   }
 
-  async function localFileToCbzBlob(file, status, opts = {}) {
-    const asWebp = !!(opts && opts.asWebp);
+  async function localFileToCbzBlob(file, status, opts) {
+    const wantWebp = !!(opts && opts.asWebp);
     status?.('Leyendo archivo…');
     const ab = await file.arrayBuffer();
     const u8 = new Uint8Array(ab);
     const name = file.name || 'comic';
 
-    if (isZipHeader(u8) || /\.cbz$/i.test(name)) {
-      if (!asWebp) {
-        status?.('Ya es ZIP/CBZ');
-        return new Blob([u8], { type: 'application/zip' });
-      }
-      status?.('Reempaquetando CBZ → WebP…');
-      const reader = new zip.ZipReader(new zip.BlobReader(new Blob([u8], { type: 'application/zip' })));
-      const entries = await reader.getEntries();
+    const mimeOf = (n) => {
+      const e = (String(n).split(/[/\\]/).pop() || n).toLowerCase().match(/\.(jpe?g|png|webp|gif|avif)$/);
+      if (!e) return 'application/octet-stream';
+      const ext = e[1].toLowerCase();
+      if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
+      return 'image/' + ext;
+    };
+
+    async function packImagesFromEntries(getEntries, closeReader) {
       const writer = new zip.ZipWriter(new zip.BlobWriter('application/zip'));
       let nImg = 0;
+      const entries = await getEntries();
       for (const e of entries) {
         if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
         if (e.directory) continue;
         const base = (e.filename || '').split(/[/\\]/).pop() || e.filename;
         if (!/\.(jpe?g|png|webp|gif|avif)$/i.test(base)) continue;
         let pageBlob = await e.getData(new zip.BlobWriter());
-        pageBlob = await blobToWebp(pageBlob);
-        const outName = base.replace(/\.[^.]+$/, '.webp');
+        let outName = base;
+        if (wantWebp) {
+          pageBlob = await blobToWebp(pageBlob);
+          outName = base.replace(/\.[^.]+$/i, '.webp');
+        }
         nImg++;
         await writer.add(outName, new zip.BlobReader(pageBlob), { level: 0 });
-        if (nImg % 5 === 0) status?.(`WebP… ${nImg} img`);
-        await yieldTick();
+        if (nImg % 5 === 0) {
+          status?.(wantWebp ? `WebP… ${nImg} img` : `Empaquetando… ${nImg} img`);
+          await yieldTick();
+        }
       }
-      await reader.close();
+      if (closeReader) await closeReader();
+      if (!nImg) {
+        try { await writer.close(); } catch (_) {}
+        throw new Error('Sin imágenes legibles');
+      }
       const out = await writer.close();
-      status?.(`CBZ WebP listo (${formatBytes?.(out.size) || out.size + ' B'}, ${nImg} img)`);
+      status?.(`CBZ listo (${formatBytes?.(out.size) || out.size + ' B'}, ${nImg} img)` + (wantWebp ? ' WebP' : ''));
       return out;
     }
 
+    // ZIP / CBZ
+    if (isZipHeader(u8) || /\.cbz$/i.test(name)) {
+      if (!wantWebp) {
+        status?.('Ya es ZIP/CBZ');
+        return new Blob([u8], { type: 'application/zip' });
+      }
+      status?.('Reempaquetando CBZ → WebP…');
+      const reader = new zip.ZipReader(new zip.BlobReader(new Blob([u8], { type: 'application/zip' })));
+      return packImagesFromEntries(
+        () => reader.getEntries(),
+        () => reader.close(),
+      );
+    }
+
+    // RAR / CBR
     if (!isRarHeader(u8) && !/\.cbr$/i.test(name)) {
-      // Intentar como ZIP por si acaso
       if (isZipHeader(u8)) return new Blob([u8], { type: 'application/zip' });
       throw new Error('Formato no soportado (usa CBZ o CBR)');
     }
@@ -247,14 +272,6 @@ export function createUploadTool(d) {
       wasmBinary: await (await fetch(rarWasm)).arrayBuffer(),
       data: dataAb,
     });
-    const mimeOf = (n) => {
-      const e = (n.split(/[/\\]/).pop() || n).toLowerCase().match(/\.(jpe?g|png|webp|gif|avif)$/);
-      if (!e) return 'application/octet-stream';
-      const ext = e[1].toLowerCase();
-      if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
-      return 'image/' + ext;
-    };
-
     const writer = new zip.ZipWriter(new zip.BlobWriter('application/zip'));
     let nImg = 0;
     for (const x of ex.extract().files) {
@@ -270,16 +287,14 @@ export function createUploadTool(d) {
       copy.set(src);
       let pageBlob = new Blob([copy.buffer], { type: mimeOf(base) });
       let outName = base;
-      if (asWebp) {
+      if (wantWebp) {
         pageBlob = await blobToWebp(pageBlob);
-        outName = base.replace(/\.[^.]+$/, '.webp');
+        outName = base.replace(/\.[^.]+$/i, '.webp');
       }
       nImg++;
       await writer.add(outName, new zip.BlobReader(pageBlob), { level: 0 });
-      if (nImg % 5 === 0) status?.(`Empaquetando… ${nImg} img`);
-      await yieldTick();
-      if (nImg % 3 === 0) {
-        status?.(`Empaquetando… ${nImg} img`);
+      if (nImg % 5 === 0) {
+        status?.(wantWebp ? `WebP… ${nImg} img` : `Empaquetando… ${nImg} img`);
         await yieldTick();
       }
     }
@@ -288,7 +303,7 @@ export function createUploadTool(d) {
       throw new Error('CBR sin imágenes legibles');
     }
     const out = await writer.close();
-    status?.(`CBZ listo (${formatBytes?.(out.size) || out.size + ' B'}, ${nImg} img)`);
+    status?.(`CBZ listo (${formatBytes?.(out.size) || out.size + ' B'}, ${nImg} img)` + (wantWebp ? ' WebP' : ''));
     return out;
   }
 
@@ -494,7 +509,7 @@ export function createUploadTool(d) {
 
       const body = el('div', 'info-body');
       body.append(el('p', 'cover-pick-hint',
-        'Elige un CBZ/CBR del dispositivo. Si el canal no existe se crea (archivado) con el formato Canal:Editorial::Comics::tgstorage. También puedes subir a un canal ya existente.'
+        'Elige un CBZ/CBR del dispositivo. Si el canal no existe se crea (archivado) con el formato Canal:Editorial::Comics::tgstorage.'
       ));
 
       const lib = Array.isArray(getLIB()) ? getLIB() : [];
@@ -505,8 +520,8 @@ export function createUploadTool(d) {
         (channelsByGroup[g] ||= []).push(c);
       }
 
-      // --- Controles (declarados antes de los handlers) ---
-      const fileBtn = el('button', 'btn cover-pick-device', '📁  Elegir archivo CBZ / CBR');
+      // Controles
+      const fileBtn = el('button', 'btn cover-pick-device', 'Elegir archivo CBZ / CBR');
       const fileInput = el('input');
       fileInput.type = 'file';
       fileInput.accept = '.cbz,.cbr,application/zip,application/x-rar-compressed,*/*';
@@ -517,7 +532,7 @@ export function createUploadTool(d) {
       const editorialSel = el('select', 'edit-input upload-select');
       const optNewEd = el('option');
       optNewEd.value = '__new__';
-      optNewEd.textContent = '＋ Nueva editorial…';
+      optNewEd.textContent = '+ Nueva editorial…';
       editorialSel.append(optNewEd);
       for (const g of editorials) {
         const o = el('option');
@@ -549,15 +564,20 @@ export function createUploadTool(d) {
       numberInp.placeholder = 'Número / Special / Extra / Anual';
       const infoInp = el('input', 'edit-input');
       infoInp.type = 'text';
-      infoInp.placeholder = 'Info opcional (ej. Dos caras)';
+      infoInp.placeholder = 'Info opcional';
       const preview = el('p', 'upload-preview', '');
+
+      const asWebpChk = el('input');
+      asWebpChk.type = 'checkbox';
+      asWebpChk.id = 'upload-as-webp';
+      const webpRow = el('label', 'repack-check');
+      webpRow.append(asWebpChk, document.createTextNode(' Convertir páginas a WebP (añade [WebP] al nombre)'));
 
       const status = el('p', 'sync-status', '');
       const actions = el('div', 'edit-actions');
       const cancel = el('button', 'btn', 'Cancelar');
       const goBtn = el('button', 'btn edit-save', 'Subir');
 
-      // --- Funciones (después de todos los controles) ---
       const updatePreview = () => {
         const ed = editorialSel.value === '__new__' ? editorialInp.value.trim() : editorialSel.value;
         let chName = '';
@@ -572,10 +592,8 @@ export function createUploadTool(d) {
           number: numberInp.value,
           info: infoInp.value,
         });
-        preview.textContent = `Archivo: ${fname}`;
+        preview.textContent = 'Archivo: ' + fname;
         preview._fname = fname;
-        preview._channel = chName;
-        preview._editorial = ed || 'Sin editorial';
       };
 
       const rebuildChannels = () => {
@@ -585,7 +603,7 @@ export function createUploadTool(d) {
         channelSel.replaceChildren();
         const optNewCh = el('option');
         optNewCh.value = '__new__';
-        optNewCh.textContent = '＋ Nuevo canal…';
+        optNewCh.textContent = '+ Nuevo canal…';
         channelSel.append(optNewCh);
         const list = (channelsByGroup[g] || []).slice().sort((a, b) =>
           (natural || ((x, y) => String(x).localeCompare(String(y))))(a.name, b.name)
@@ -607,48 +625,18 @@ export function createUploadTool(d) {
         updatePreview();
       };
 
-      // --- Handlers ---
       fileBtn.onclick = () => fileInput.click();
       fileInput.onchange = () => {
-        pickedFile = fileInput.files?.[0] || null;
+        pickedFile = fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
         fileLabel.textContent = pickedFile
-          ? `${pickedFile.name} (${formatBytes?.(pickedFile.size) || pickedFile.size + ' B'})`
+          ? (pickedFile.name + ' (' + (formatBytes?.(pickedFile.size) || pickedFile.size + ' B') + ')')
           : 'Ningún archivo seleccionado';
-        if (pickedFile) {
-          const base = String(pickedFile.name).replace(/\.cb[zr]$/i, '').replace(/_/g, ' ');
-          if (!seriesInp.value) {
-            const m = base.match(/^(.+?)\s+#?(\d+[a-z]?|Special|Especial|Extra|Anual|Annual)\b/i)
-              || base.match(/^(.+?)\s+(\d+[a-z]?)\s*-/i);
-            if (m) {
-              const chPrefix = (channelSel.value === '__new__'
-                ? channelInp.value
-                : ([...channelSel.options].find((o) => o.value === channelSel.value)?._ch?.name || '')
-              ).trim();
-              let ser = m[1];
-              if (chPrefix) {
-                const esc = chPrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                ser = ser.replace(new RegExp('^' + esc + '\\s*-\\s*', 'i'), '').trim() || ser;
-              }
-              seriesInp.value = ser;
-              numberInp.value = m[2];
-              const rest = base.slice(m[0].length).replace(/^\s*-\s*/, '').trim();
-              if (rest && !infoInp.value) infoInp.value = rest;
-            } else {
-              seriesInp.value = base;
-            }
-            updatePreview();
-          }
-        }
       };
-
       editorialSel.onchange = () => {
         editorialInp.hidden = editorialSel.value !== '__new__';
         rebuildChannels();
       };
-      editorialInp.oninput = () => {
-        if (editorialSel.value === '__new__') rebuildChannels();
-        else updatePreview();
-      };
+      editorialInp.oninput = () => { if (editorialSel.value === '__new__') rebuildChannels(); else updatePreview(); };
       channelSel.onchange = () => {
         channelInp.hidden = channelSel.value !== '__new__';
         updatePreview();
@@ -668,22 +656,15 @@ export function createUploadTool(d) {
           alert('Selecciona un archivo');
           return;
         }
-        const ed = editorialSel.value === '__new__'
-          ? editorialInp.value.trim()
-          : editorialSel.value;
+        const ed = editorialSel.value === '__new__' ? editorialInp.value.trim() : editorialSel.value;
         let chName = channelSel.value === '__new__'
           ? channelInp.value.trim()
-          : ([...channelSel.options].find((o) => o.value === channelSel.value)?._ch?.name
-            || [...channelSel.options].find((o) => o.value === channelSel.value)?.textContent || '');
+          : (([...channelSel.options].find((o) => o.value === channelSel.value)?._ch?.name)
+            || ([...channelSel.options].find((o) => o.value === channelSel.value)?.textContent) || '');
         chName = String(chName || '').trim();
-        if (!ed) {
-          alert('Indica la editorial');
-          return;
-        }
-        if (!chName) {
-          alert('Indica el canal');
-          return;
-        }
+        if (!ed) { alert('Indica la editorial'); return; }
+        if (!chName) { alert('Indica el canal'); return; }
+
         updatePreview();
         let outName = preview._fname || composeFileName({
           channel: chName,
@@ -694,16 +675,17 @@ export function createUploadTool(d) {
         outName = outName.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
         if (!/\.cbz$/i.test(outName)) outName = outName.replace(/\.cb[zr]$/i, '') + '.cbz';
         if (!/\.cbz$/i.test(outName)) outName += '.cbz';
-        const asWebp = !!asWebpChk?.checked;
-        if (asWebp && !/\[WebP\]/i.test(outName)) {
+
+        const wantWebp = !!(asWebpChk && asWebpChk.checked);
+        if (wantWebp && !/\[WebP\]/i.test(outName)) {
           outName = outName.replace(/\.cbz$/i, ' [WebP].cbz');
         }
 
-        if (!confirm(`¿Subir como «${outName}» al canal «${chName}» (${ed})?`)) return;
+        if (!confirm('¿Subir como «' + outName + '» al canal «' + chName + '» (' + ed + ')?')) return;
 
         const fileRef = pickedFile;
         const runJob = async (ctx) => {
-          const st = (msg) => { ctx.log(msg); logLine(msg); };
+          const st = (msg) => { try { ctx.log(msg); } catch (_) {} try { logLine(msg); } catch (_) {} };
           abort = false;
           st('Preparando canal…');
           ctx.setProgress(10);
@@ -712,9 +694,9 @@ export function createUploadTool(d) {
           if (ctx.isAborted?.()) throw Object.assign(new Error('cancelado'), { cancelled: true });
           const ch = await ensureChannel(chName, ed, st);
           ctx.setProgress(20);
-          st(asWebp ? 'Convirtiendo a CBZ WebP…' : 'Convirtiendo a CBZ si hace falta…');
+          st(wantWebp ? 'Convirtiendo a CBZ WebP…' : 'Convirtiendo a CBZ si hace falta…');
           await yieldTick();
-          let blob = await localFileToCbzBlob(fileRef, st, { asWebp });
+          let blob = await localFileToCbzBlob(fileRef, st, { asWebp: wantWebp });
           ctx.setProgress(55);
           await ctx.waitWhilePaused?.();
           st('Subiendo a Telegram…');
@@ -722,9 +704,7 @@ export function createUploadTool(d) {
           blob = null;
           ctx.setProgress(90);
           st('Actualizando listado…');
-          try { await fetchFiles(ch); } catch (e) {
-            st('Listado: ' + (e?.message || e));
-          }
+          try { await fetchFiles(ch); } catch (e) { st('Listado: ' + (e?.message || e)); }
           ctx.setProgress(100);
           st('✓ Subido correctamente');
         };
@@ -736,10 +716,10 @@ export function createUploadTool(d) {
         const logEl = document.getElementById('upload-log');
         if (logEl) logEl.replaceChildren();
         setFill(0);
-        logLine(`Archivo: ${fileRef.name}`);
-        logLine(`Destino: ${chName} · ${ed}`);
-        logLine(`Nombre final: ${outName}`);
-        if (asWebp) logLine('Modo WebP activado');
+        logLine('Archivo: ' + fileRef.name);
+        logLine('Destino: ' + chName + ' · ' + ed);
+        logLine('Nombre final: ' + outName);
+        if (wantWebp) logLine('Modo WebP activado');
 
         if (jobQueue && typeof jobQueue.enqueue === 'function') {
           jobQueue.enqueue({
@@ -783,30 +763,19 @@ export function createUploadTool(d) {
         }
       };
 
-      // --- Montar DOM (todos los campos del formulario) ---
+      // Montar DOM
       body.append(el('div', 'info-sec', 'Archivo'));
       body.append(fileBtn, fileInput, fileLabel);
-
       body.append(el('div', 'info-sec', 'Editorial'));
       body.append(editorialSel, editorialInp);
-
       body.append(el('div', 'info-sec', 'Canal'));
       body.append(channelSel, channelInp);
-
       body.append(el('div', 'info-sec', 'Título del archivo'));
       body.append(seriesInp, numberInp, infoInp, preview);
-
-      const webpRow = el('label', 'repack-check');
-      const asWebpChk = el('input');
-      asWebpChk.type = 'checkbox';
-      asWebpChk.id = 'upload-as-webp';
-      webpRow.append(asWebpChk, document.createTextNode(' Convertir páginas a WebP (añade [WebP] al nombre)'));
       body.append(webpRow);
-
       body.append(status);
       actions.append(cancel, goBtn);
       body.append(actions);
-
       box.append(head, body);
       frame.append(box);
 
