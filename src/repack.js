@@ -11,7 +11,8 @@ export function createRepackTool(d) {
     fetchFiles, getMsg,
     downloadRarBytes, sniff, TgReader,
     natural, formatBytes,
-    parseComicName, comicDisplayName,
+    getIsHome,
+    parseComicName, comicDisplay, comicDisplayName,
   } = d;
   const getClient = () => d.client;
   const getReady = () => d.ready;
@@ -31,22 +32,35 @@ export function createRepackTool(d) {
       .replace(/\s+/g, ' ')
       .trim();
   }
-
-  /** Nombre CBZ sugerido al subir */
+  /**
+   * Nombre CBZ sugerido al subir.
+   * Prioridad: título mostrado en la webapp (comicDisplayName + fallback de listado)
+   * → parseo de nombre → limpio del archivo.
+   */
   function suggestUploadName(ch, f) {
     const raw = f?.name || 'comic.cbr';
     const cleaned = cleanFileBase(raw);
     const chName = (ch?.name || '').trim();
 
+    // Mismo criterio que las tarjetas / info del cómic
+    let listFallback = cleaned;
+    try {
+      if (typeof comicDisplay === 'function') {
+        const d = comicDisplay(raw, chName);
+        if (d && String(d).trim()) listFallback = String(d).trim();
+      }
+    } catch (_) {}
+
     try {
       if (typeof comicDisplayName === 'function') {
-        const preferred = comicDisplayName(ch, f, null);
-        if (preferred && String(preferred).trim()) {
-          return cleanFileBase(preferred) + '.cbz';
+        const shown = comicDisplayName(ch, f, listFallback);
+        if (shown && String(shown).trim()) {
+          return cleanFileBase(shown) + '.cbz';
         }
       }
     } catch (_) {}
 
+    // Si no hay título de UI, intentar parseo estructurado
     let parsed = null;
     try {
       if (typeof parseComicName === 'function') {
@@ -323,6 +337,7 @@ export function createRepackTool(d) {
       const panel = document.getElementById('repack-panel');
       if (panel) {
         panel.hidden = false;
+        delete panel.dataset.userHidden;
         panel.classList.remove('minimized');
       }
       chip.hidden = true;
@@ -334,7 +349,10 @@ export function createRepackTool(d) {
   function showProgressPanel() {
     let panel = document.getElementById('repack-panel');
     if (panel) {
-      panel.hidden = false;
+      // No mostrar encima del lector u otras vistas
+      const allow = typeof getIsHome === 'function' ? !!getIsHome() : !document.getElementById('rd');
+      panel.hidden = !allow;
+      delete panel.dataset.userHidden;
       panel.classList.remove('minimized');
       const chip = document.getElementById('repack-chip');
       if (chip) chip.hidden = true;
@@ -348,9 +366,12 @@ export function createRepackTool(d) {
     btnMin.type = 'button';
     btnMin.onclick = () => {
       panel.hidden = true;
+      panel.dataset.userHidden = '1';
       panel.classList.remove('minimized');
       const chip = ensureRestoreChip();
-      chip.hidden = false;
+      // Solo mostrar chip en home
+      const home = typeof getIsHome === 'function' ? !!getIsHome() : true;
+      chip.hidden = !home || !!document.getElementById('rd');
     };
     titleRow.append(title, btnMin);
     const bar = el('div', 'repack-panel-bar');
@@ -617,5 +638,60 @@ export function createRepackTool(d) {
     });
   }
 
-  return { showRepackFrame, isRunning: () => running };
+  function hideFloatingUi() {
+    const panel = document.getElementById('repack-panel');
+    const chip = document.getElementById('repack-chip');
+    if (panel) panel.hidden = true;
+    if (chip) chip.hidden = true;
+  }
+
+  /** Solo visible en home y fuera del lector. Si hay trabajo en curso, chip en home. */
+  function syncFloatingUi() {
+    const home = typeof getIsHome === 'function' ? !!getIsHome() : (stackSafeHome());
+    const reading = !!document.getElementById('rd');
+    if (reading || !home) {
+      hideFloatingUi();
+      return;
+    }
+    // En home: si hay panel y está corriendo, mostrar chip si el panel estaba oculto a propósito
+    const panel = document.getElementById('repack-panel');
+    const chip = document.getElementById('repack-chip');
+    if (running) {
+      if (panel && !panel.dataset.userHidden) {
+        panel.hidden = false;
+        if (chip) chip.hidden = true;
+      } else if (chip) {
+        chip.hidden = false;
+      } else if (panel) {
+        // panel existe pero userHidden
+        if (chip) chip.hidden = false;
+      }
+    } else {
+      // Sin trabajo: no mostrar restos
+      hideFloatingUi();
+    }
+  }
+
+  function stackSafeHome() {
+    try {
+      return !document.getElementById('rd');
+    } catch {
+      return true;
+    }
+  }
+
+  // Al abrir/cerrar el lector
+  try {
+    window.addEventListener('tgcomic:reader', (ev) => {
+      if (ev?.detail?.open) hideFloatingUi();
+      else syncFloatingUi();
+    });
+  } catch (_) {}
+
+  return {
+    showRepackFrame,
+    isRunning: () => running,
+    hideFloatingUi,
+    syncFloatingUi,
+  };
 }
