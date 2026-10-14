@@ -698,6 +698,20 @@ export function createUploadTool(d) {
         }
       };
 
+      // --- Montar DOM (todos los campos del formulario) ---
+      body.append(el('div', 'info-sec', 'Archivo'));
+      body.append(fileBtn, fileInput, fileLabel);
+
+      body.append(el('div', 'info-sec', 'Editorial'));
+      body.append(editorialSel, editorialInp);
+
+      body.append(el('div', 'info-sec', 'Canal'));
+      body.append(channelSel, channelInp);
+
+      body.append(el('div', 'info-sec', 'Título del archivo'));
+      body.append(seriesInp, numberInp, infoInp, preview);
+
+      body.append(status);
       actions.append(cancel, goBtn);
       body.append(actions);
 
