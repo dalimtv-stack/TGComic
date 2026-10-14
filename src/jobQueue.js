@@ -123,9 +123,10 @@ export function createJobQueue({ el, pref }) {
     const j = jobs.find((x) => x.id === id);
     if (!j) return;
     if (typeof j._run !== 'function') {
-      j.status = 'interrupted';
-      j.error = 'Reinicia la acción (archivo no disponible tras recargar)';
+      // No se puede reintentar sin el File en memoria: eliminar de la cola
+      jobs = jobs.filter((x) => x.id !== id);
       emit();
+      alert('Ese trabajo ya no se puede reintentar (se perdió al recargar). Vuelve a Subir / Recargar el archivo.');
       return;
     }
     j.status = 'pending';
@@ -234,10 +235,13 @@ export function createJobQueue({ el, pref }) {
       else pause();
       btnPause.textContent = paused ? 'Reanudar' : 'Pausar';
     };
+    const btnClear = el('button', 'btn', 'Limpiar fallos');
+    btnClear.type = 'button';
+    btnClear.onclick = () => clearFailed();
     const btnClose = el('button', 'btn', 'Cerrar');
     btnClose.type = 'button';
     btnClose.onclick = () => { panel.hidden = true; };
-    actions.append(btnPause, btnClose);
+    actions.append(btnPause, btnClear, btnClose);
     panel.append(head, bar, eta, list, log, actions);
     document.body.append(panel);
     return panel;
@@ -316,11 +320,22 @@ export function createJobQueue({ el, pref }) {
   }
 
   load();
-  // Mark orphaned running as interrupted on load
+  // Mark orphaned running as interrupted; quitar zombies irrecuperables
+  jobs = jobs.filter((j) => {
+    if (j.status === 'running') j.status = 'interrupted';
+    // Errores viejos de código (asWebp) o interrupted sin runner: no sirven
+    if (j.status === 'error' && /asWebp/i.test(String(j.error || ''))) return false;
+    return true;
+  });
   for (const j of jobs) {
     if (j.status === 'running') j.status = 'interrupted';
   }
   save();
+
+  function clearFailed() {
+    jobs = jobs.filter((x) => x.status !== 'error' && x.status !== 'interrupted');
+    emit();
+  }
 
   return {
     enqueue,
@@ -328,6 +343,7 @@ export function createJobQueue({ el, pref }) {
     resume,
     retry,
     remove,
+    clearFailed,
     failedJobs,
     getState,
     onChange,

@@ -631,6 +631,51 @@ export function createUploadTool(d) {
         fileLabel.textContent = pickedFile
           ? (pickedFile.name + ' (' + (formatBytes?.(pickedFile.size) || pickedFile.size + ' B') + ')')
           : 'Ningún archivo seleccionado';
+        if (!pickedFile) return;
+
+        let base = String(pickedFile.name || '')
+          .replace(/\.cb[zr]$/i, '')
+          .replace(/_/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+        base = base.replace(/\s*\[WebP\]\s*$/i, '').trim();
+        const bracketInfo = [];
+        base = base.replace(/\s*\[([^\]]+)\]/g, (_, inner) => {
+          if (!/^webp$/i.test(inner)) bracketInfo.push(inner);
+          return '';
+        }).replace(/\s+/g, ' ').trim();
+
+        let chName = '';
+        if (channelSel.value === '__new__') chName = channelInp.value.trim();
+        else {
+          const opt = [...channelSel.options].find((o) => o.value === channelSel.value);
+          chName = (opt && opt._ch && opt._ch.name) || (opt && opt.textContent) || '';
+        }
+        if (chName) {
+          try {
+            const esc = chName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            base = base.replace(new RegExp('^' + esc + '\\s*-\\s*', 'i'), '').trim();
+          } catch (_) {}
+        }
+
+        let series = '', number = '', info = '';
+        let m = base.match(/^(.+?)\s+#?(\d+[a-z]?|Special|Especial|Extra|Anual|Annual)\b(?:\s*-\s*(.+))?$/i);
+        if (!m) m = base.match(/^(.+?)\s+(\d+[a-z]?)\s*-\s*(.+)$/i);
+        if (m) {
+          series = (m[1] || '').trim();
+          number = (m[2] || '').trim();
+          info = (m[3] || '').trim();
+        } else {
+          series = base;
+        }
+        if (bracketInfo.length) {
+          info = info ? (info + ' ' + bracketInfo.join(' ')).trim() : bracketInfo.join(' ');
+        }
+
+        if (series) seriesInp.value = series;
+        if (number) numberInp.value = number;
+        if (info) infoInp.value = info;
+        updatePreview();
       };
       editorialSel.onchange = () => {
         editorialInp.hidden = editorialSel.value !== '__new__';
