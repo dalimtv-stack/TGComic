@@ -197,7 +197,8 @@ export function createUploadTool(d) {
     return u8 && u8.length >= 2 && u8[0] === 0x50 && u8[1] === 0x4b;
   }
 
-  async function localFileToCbzBlob(file, status) {
+  async function localFileToCbzBlob(file, status, opts = {}) {
+    const asWebp = !!(opts && opts.asWebp);
     status?.('Leyendo archivo…');
     const ab = await file.arrayBuffer();
     const u8 = new Uint8Array(ab);
