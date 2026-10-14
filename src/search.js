@@ -26,6 +26,7 @@ export async function buildSearchIndex(deps) {
     channelDisplayName,
     seriesDisplayName,
     groupSeries,
+    seriesOverrideFor,
     comicDisplay,
     comicDisplayName,
     openSeries,
@@ -70,7 +71,8 @@ export async function buildSearchIndex(deps) {
       files = [];
     }
 
-    for (const { label: seriesLabel, files: fs } of groupSeries(files, ch.name)) {
+    const override = seriesOverrideFor ? seriesOverrideFor(ch) : undefined;
+    for (const { label: seriesLabel, files: fs } of groupSeries(files, ch.name, override)) {
       const seriesShown = seriesDisplayName(ch, seriesLabel);
       if (fs.length > 1) {
         items.push({

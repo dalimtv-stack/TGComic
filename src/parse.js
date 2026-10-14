@@ -157,11 +157,18 @@ export function seriesBase(name, channelName) {
   return '';
 }
 // Agrupa por serie; los especiales sin número que empiezan igual se unen
-export function groupSeries(files, channelName) {
+/**
+ * @param {Array} files
+ * @param {string} channelName
+ * @param {(f: any) => string|null|undefined} [seriesOverride]  serie forzada por cómic
+ */
+export function groupSeries(files, channelName, seriesOverride) {
   const by = new Map(), loose = [];
   for (const f of files) {
+    const forced = seriesOverride?.(f);
+    const forcedSeries = forced != null && String(forced).trim() ? String(forced).trim() : '';
     const p = parseComicName(f.name, channelName);
-    const b = p?.series || seriesBase(f.name, channelName);
+    const b = forcedSeries || p?.series || seriesBase(f.name, channelName);
     const c = p ? comicDisplay(f.name, channelName) : clean(f.name);
     if (b) {
       const k = b.toLowerCase();

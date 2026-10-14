@@ -18,6 +18,14 @@ import {
   markSeriesRead, markSeriesUnread,
   getLastRead, setLastRead, getRecentReads, getContinueList,
 } from './progress.js';
+import {
+  ungroupMap, setUngroupMode,
+  seriesDisplayName, setSeriesDisplayName,
+  comicDisplayName, setComicDisplayName,
+  getComicSeriesOverride, setComicSeries, seriesOverrideFor,
+  channelDisplayName, setChannelDisplayName,
+  groupDisplayName, setGroupDisplayName,
+} from './meta.js';
 
 const apiId = Number(import.meta.env.VITE_API_ID);
 const apiHash = import.meta.env.VITE_API_HASH;
@@ -210,7 +218,13 @@ async function fetchFiles(ch) {
   for await (const m of client.iterMessages(peerOf(ch), { filter: new Api.InputMessagesFilterDocument(), limit: 100000 })) {
     const name = m.document?.attributes?.find((a) => a.className === 'DocumentAttributeFilename')?.fileName;
     if (!name || !/\.cb[zr]$/i.test(name)) continue;
-    out.push({ id: m.id, name, size: Number(m.document.size.toString()) });
+    const caption = String(m.message || '').trim();
+    out.push({
+      id: m.id,
+      name,
+      size: Number(m.document.size.toString()),
+      caption: caption || undefined,
+    });
   }
   out.sort((a, b) => natural(a.name, b.name));
   await kv.set('f:' + ch.id, out);
@@ -932,7 +946,8 @@ function showComicInfo(ch, f, displayTitle) {
   try {
     document.querySelector('.info-frame.comic-info')?.remove();
     const parsed = parseComicName(f?.name || '', ch?.name);
-    let series = parsed?.series || seriesBase(f?.name || '', ch?.name) || '—';
+    let series = (ch && f ? getComicSeriesOverride(ch, f) : null)
+      || parsed?.series || seriesBase(f?.name || '', ch?.name) || '—';
     if (series !== '—' && ch) series = seriesDisplayName(ch, series);
     const parsedTitle = comicDisplay(f?.name || '', ch?.name) || '—';
     const title = (displayTitle && String(displayTitle).trim())
@@ -969,6 +984,7 @@ function showComicInfo(ch, f, displayTitle) {
     body.append(row('Canal', ch ? channelDisplayName(ch) : '—'));
     body.append(row('Editorial', ch?.group || '—'));
     body.append(row('Nombre archivo', fname || '—'));
+    if (f?.caption) body.append(row('Descripción TG', f.caption));
     body.append(row('Formato archivo', fmt));
     body.append(row('Tamaño', formatBytes(f?.size)));
     body.append(row('Número de páginas', pagesLabel));
@@ -1053,110 +1069,94 @@ function sheet(title, opts) {
   bg.append(box);
   document.body.append(bg);
 }
-const ugKey = (ch) => 'ungroup:' + ch.id;
-/** Mapa serie → 'short' | 'full' (legado: array → full) */
-function ungroupMap(ch) {
-  try {
-    const raw = JSON.parse(localStorage.getItem(ugKey(ch)) || '{}');
-    if (Array.isArray(raw)) {
-      const m = {};
-      for (const k of raw) m[String(k).toLowerCase()] = 'full';
-      return m;
-    }
-    return raw && typeof raw === 'object' ? raw : {};
-  } catch {
-    return {};
+function existingSeriesLabels(ch, files) {
+  const labels = new Set();
+  for (const { label } of groupSeries(files || [], ch.name, seriesOverrideFor(ch))) {
+    if (label) labels.add(label);
   }
-}
-function setUngroupMode(ch, label, mode, after) {
-  const m = ungroupMap(ch);
-  const k = label.toLowerCase();
-  if (!mode) delete m[k];
-  else m[k] = mode;
-  try { localStorage.setItem(ugKey(ch), JSON.stringify(m)); } catch (_) {}
-  try { sync.schedulePush(); } catch (_) {}
-  after?.();
-}
-/** Renombres de serie por canal (clave = nombre original en minúsculas) */
-const snKey = (ch) => 'seriesName:' + ch.id;
-function seriesRenameMap(ch) {
+  // Incluir overrides ya guardados
   try {
-    const raw = JSON.parse(localStorage.getItem(snKey(ch)) || '{}');
-    return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
-  } catch { return {}; }
+    const m = JSON.parse(localStorage.getItem('comicSeries:' + ch.id) || '{}');
+    for (const v of Object.values(m || {})) if (v) labels.add(String(v));
+  } catch (_) {}
+  return [...labels].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 }
-function seriesDisplayName(ch, originalLabel) {
-  const m = seriesRenameMap(ch);
-  return m[String(originalLabel || '').toLowerCase()] || originalLabel;
-}
-function setSeriesDisplayName(ch, originalLabel, newName, after) {
-  const m = seriesRenameMap(ch);
-  const k = String(originalLabel || '').toLowerCase();
-  const n = String(newName || '').trim();
-  if (!k) return after?.();
-  if (!n || n.toLowerCase() === k) delete m[k];
-  else m[k] = n;
-  try { localStorage.setItem(snKey(ch), JSON.stringify(m)); } catch (_) {}
-  try { sync.schedulePush(); } catch (_) {}
-  after?.();
-}
-/** Renombres de título de cómic por canal (clave = file.id) */
-const comicNameKey = (ch) => 'comicName:' + ch.id;
-function comicRenameMap(ch) {
-  try {
-    const raw = JSON.parse(localStorage.getItem(comicNameKey(ch)) || '{}');
-    return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
-  } catch { return {}; }
-}
-function comicDisplayName(ch, f, fallback) {
-  if (!ch || !f) return fallback || '';
-  const m = comicRenameMap(ch);
-  const custom = m[String(f.id)];
-  if (custom != null && String(custom).trim()) return String(custom).trim();
-  return fallback || '';
-}
-function setComicDisplayName(ch, f, newName, after) {
-  if (!ch || !f?.id) return after?.();
-  const m = comicRenameMap(ch);
-  const k = String(f.id);
-  const n = String(newName || '').trim();
-  if (!n) delete m[k];
-  else m[k] = n;
-  try { localStorage.setItem(comicNameKey(ch), JSON.stringify(m)); } catch (_) {}
-  try { sync.schedulePush(); } catch (_) {}
-  after?.();
-}
+
+/** Editar título y serie del cómic (agrupa en la serie si existe) */
 function showEditComicTitle(ch, f, currentLabel, after) {
   document.querySelector('.info-frame.edit-comic')?.remove();
-  const fallback = comicDisplay(f?.name || '', ch?.name) || clean(f?.name || '') || '';
-  const current = comicDisplayName(ch, f, currentLabel || fallback);
+  const fallbackTitle = comicDisplay(f?.name || '', ch?.name) || clean(f?.name || '') || '';
+  const currentTitle = comicDisplayName(ch, f, currentLabel || fallbackTitle);
+  const parsed = parseComicName(f?.name || '', ch?.name);
+  const parsedSeries = parsed?.series || seriesBase(f?.name || '', ch?.name) || '';
+  const override = getComicSeriesOverride(ch, f);
+  const currentSeries = override != null ? override : parsedSeries;
+
   const frame = el('div', 'info-frame edit-comic');
   const box = el('div', 'info-box');
   const head = el('div', 'info-head');
-  head.append(el('span', '', 'Editar título'));
+  head.append(el('span', '', 'Editar cómic'));
   const close = el('button', 'btn info-close', '×');
   close.onclick = () => frame.remove();
   head.append(close);
   const body = el('div', 'info-body');
-  body.append(el('div', 'info-sec', 'Título del cómic'));
-  const input = el('input', 'edit-input');
-  input.type = 'text';
-  input.value = current;
-  input.autocomplete = 'off';
-  body.append(input);
-  const hint = el('p', 'cover-pick-hint', 'Deja vacío y guarda para restaurar el título original.');
-  body.append(hint);
+
+  body.append(el('div', 'info-sec', 'Título'));
+  const inputTitle = el('input', 'edit-input');
+  inputTitle.type = 'text';
+  inputTitle.value = currentTitle;
+  inputTitle.autocomplete = 'off';
+  inputTitle.placeholder = 'Título visible';
+  body.append(inputTitle);
+  body.append(el('p', 'cover-pick-hint', 'Vacío = restaurar el del nombre de archivo. Útil si Telegram cambió espacios o guiones.'));
+
+  body.append(el('div', 'info-sec', 'Serie'));
+  const inputSeries = el('input', 'edit-input');
+  inputSeries.type = 'text';
+  inputSeries.value = currentSeries;
+  inputSeries.autocomplete = 'off';
+  inputSeries.placeholder = 'Nombre de la serie';
+  inputSeries.setAttribute('list', 'series-suggest');
+  const dl = el('datalist');
+  dl.id = 'series-suggest';
+  body.append(inputSeries, dl);
+  body.append(el('p', 'cover-pick-hint', 'Si la serie ya existe en el canal, el cómic se agrupará con ella. Vacío = quitar serie forzada y usar el nombre del archivo.'));
+
+  // Cargar sugerencias de series del canal
+  (async () => {
+    try {
+      const files = (await kv.get('f:' + ch.id)) || [];
+      for (const lab of existingSeriesLabels(ch, files)) {
+        const o = el('option');
+        o.value = lab;
+        dl.append(o);
+      }
+    } catch (_) {}
+  })();
+
+  if (f?.caption) {
+    body.append(el('div', 'info-sec', 'Descripción Telegram'));
+    body.append(el('p', 'cover-pick-hint', f.caption.slice(0, 500)));
+  }
+
   const actions = el('div', 'edit-actions');
   const cancel = el('button', 'btn', 'Cancelar');
   cancel.onclick = () => frame.remove();
   const save = el('button', 'btn edit-save', 'Guardar');
   save.onclick = () => {
-    const v = input.value.trim();
-    // Vacío → borrar personalización; si coincide con el original parseado, también
-    const toSave = (!v || v === fallback) ? '' : v;
-    setComicDisplayName(ch, f, toSave, () => {
-      frame.remove();
-      after?.();
+    const titleV = inputTitle.value.trim();
+    const seriesV = inputSeries.value.trim();
+    const titleSave = (!titleV || titleV === fallbackTitle) ? '' : titleV;
+    // Serie: si coincide con la parseada y no había override, no guardar override
+    let seriesSave = seriesV;
+    if (!seriesV) seriesSave = '';
+    else if (!override && seriesV.toLowerCase() === parsedSeries.toLowerCase()) seriesSave = '';
+
+    setComicDisplayName(ch, f, titleSave, () => {
+      setComicSeries(ch, f, seriesSave, () => {
+        frame.remove();
+        after?.();
+      });
     });
   };
   actions.append(cancel, save);
@@ -1165,8 +1165,9 @@ function showEditComicTitle(ch, f, currentLabel, after) {
   frame.append(box);
   frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
   document.body.append(frame);
-  setTimeout(() => { input.focus(); input.select(); }, 50);
+  setTimeout(() => { inputTitle.focus(); inputTitle.select(); }, 50);
 }
+
 function showSeriesInfo(ch, seriesLabel, files) {
   try {
     document.querySelector('.info-frame.series-info')?.remove();
@@ -1362,29 +1363,6 @@ function showSeriesCoverPicker(ch, seriesLabel, files, after) {
   document.body.append(frame);
 }
 
-/** Nombres y portadas de canal (por id de Telegram) */
-const cnKey = 'channelNames';
-function channelRenameMap() {
-  try {
-    const raw = JSON.parse(localStorage.getItem(cnKey) || '{}');
-    return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
-  } catch { return {}; }
-}
-function channelDisplayName(ch) {
-  if (!ch) return '—';
-  const m = channelRenameMap();
-  return m[String(ch.id)] || ch.name || '—';
-}
-function setChannelDisplayName(ch, newName, after) {
-  const m = channelRenameMap();
-  const id = String(ch.id);
-  const n = String(newName || '').trim();
-  if (!n || n === ch.name) delete m[id];
-  else m[id] = n;
-  try { localStorage.setItem(cnKey, JSON.stringify(m)); } catch (_) {}
-  try { sync.schedulePush(); } catch (_) {}
-  after?.();
-}
 const channelCoverKey = (ch) => `cc:${ch.id}`;
 async function getChannelCoverBlob(ch, files) {
   try {
@@ -1471,30 +1449,6 @@ async function getGithubChannelArtBlob(ch) {
   return null;
 }
 
-/** Editoriales (groups): nombre y portada */
-const gnKey = 'groupNames';
-function groupRenameMap() {
-  try {
-    const raw = JSON.parse(localStorage.getItem(gnKey) || '{}');
-    return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
-  } catch { return {}; }
-}
-function groupDisplayName(name) {
-  const n = String(name || '');
-  const m = groupRenameMap();
-  return m[n.toLowerCase()] || n || '—';
-}
-function setGroupDisplayName(originalName, newName, after) {
-  const m = groupRenameMap();
-  const k = String(originalName || '').toLowerCase();
-  const n = String(newName || '').trim();
-  if (!k) return after?.();
-  if (!n || n.toLowerCase() === k || n === originalName) delete m[k];
-  else m[k] = n;
-  try { localStorage.setItem(gnKey, JSON.stringify(m)); } catch (_) {}
-  try { sync.schedulePush(); } catch (_) {}
-  after?.();
-}
 const groupCoverKey = (name) => `gc:${artNorm(String(name || ''))}`;
 async function clearGroupCover(name) {
   try { await kv.del(groupCoverKey(name)); } catch (_) {}
@@ -1777,7 +1731,7 @@ async function showChannelInfo(ch) {
     for (const f of files) bytes += Number(f.size) || 0;
     let seriesCount = 0;
     try {
-      const groups = groupSeries(files, ch.name);
+      const groups = groupSeries(files, ch.name, seriesOverrideFor(ch));
       seriesCount = groups.filter((g) => g.files.length > 1).length;
     } catch (_) {}
     const frame = el('div', 'info-frame channel-info');
@@ -1985,6 +1939,7 @@ function groupsView() {
       channelDisplayName,
       seriesDisplayName,
       groupSeries,
+      seriesOverrideFor,
       comicDisplay,
       comicDisplayName,
       openSeries: (ch, seriesLabel, fs) => seriesView(ch, seriesLabel, fs),
@@ -2385,14 +2340,15 @@ function filesView(ch) {
         };
       };
 
-      for (const { label: seriesLabel, files: fs } of groupSeries(files, ch.name)) {
+      for (const { label: seriesLabel, files: fs } of groupSeries(files, ch.name, seriesOverrideFor(ch))) {
         const seriesShown = seriesDisplayName(ch, seriesLabel);
         if (fs.length === 1) {
           const f = fs[0];
           // Si el parseo detectó serie aunque sea 1 archivo, permitir editar nombre de serie
           const p = parseComicName(f.name, ch.name);
-          const soloSeries = p?.series || seriesLabel;
-          const hasSeriesName = !!(p?.series);
+          const ov = getComicSeriesOverride(ch, f);
+          const soloSeries = ov || p?.series || seriesLabel;
+          const hasSeriesName = !!(ov || p?.series);
           items.push(makeComicItem(
             f,
             comicDisplay(f.name, ch.name),
@@ -2504,7 +2460,7 @@ async function resolveQueue(ch, f) {
   try {
     let files = (await kv.get('f:' + ch.id)) || [];
     if (!files.length) files = await fetchFiles(ch);
-    for (const { files: fs } of groupSeries(files, ch.name)) {
+    for (const { files: fs } of groupSeries(files, ch.name, seriesOverrideFor(ch))) {
       if (fs.some((x) => x.id === f.id)) return fs.length > 1 ? fs : files;
     }
     return files;

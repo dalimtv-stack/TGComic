@@ -19,6 +19,7 @@ const SYNC_PREFIXES = [
   'pagefmt:',
   'seriesName:',
   'comicName:',
+  'comicSeries:',
   'ungroup:',
   'read:',
 ];
