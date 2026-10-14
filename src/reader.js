@@ -275,13 +275,26 @@ export function createReader(state, d) {
         observers._wheel = onWheel;
         const onOrientPage = () => {
           resetMobileViewport();
-          rd.style.width = window.innerWidth + 'px';
-          rd.style.height = window.innerHeight + 'px';
+          const w = Math.round(window.visualViewport?.width || window.innerWidth);
+          const h = Math.round(window.visualViewport?.height || window.innerHeight);
+          rd.style.width = w + 'px';
+          rd.style.height = h + 'px';
           rd.className = 'page fit-' + pref('fit', 'screen');
-          if (img) { const s = img.src; img.src = ''; img.src = s; }
+          if (img) {
+            img.style.width = '';
+            img.style.height = '';
+            img.style.maxWidth = '';
+            img.style.maxHeight = '';
+            const s = img.src; img.src = ''; img.src = s;
+          }
         };
         let rt = 0;
-        const onOrientPageD = () => { clearTimeout(rt); rt = setTimeout(onOrientPage, 120); };
+        const onOrientPageD = () => {
+          clearTimeout(rt);
+          rt = setTimeout(onOrientPage, 80);
+          setTimeout(onOrientPage, 250);
+          setTimeout(onOrientPage, 500);
+        };
         addEventListener('resize', onOrientPageD);
         addEventListener('orientationchange', onOrientPageD);
         observers._resize = onOrientPageD;
@@ -362,20 +375,38 @@ export function createReader(state, d) {
         };
 
         /** Aplica estilos de imagen según eje + ajuste */
+        /** Escala la imagen para caber en el viewport (también agranda si es pequeña). */
+        const fitContainSize = (nw, nh, maxW, maxH) => {
+          const w0 = Math.max(1, nw || 1);
+          const h0 = Math.max(1, nh || 1);
+          const scale = Math.min(maxW / w0, maxH / h0);
+          return {
+            w: Math.max(1, Math.round(w0 * scale)),
+            h: Math.max(1, Math.round(h0 * scale)),
+          };
+        };
+
         const applyImg = (im, slot) => {
           const screen = fitMode() === 'screen';
           im.style.display = 'block';
           im.style.margin = '0 auto';
           im.style.objectFit = 'contain';
           im.style.objectPosition = 'center';
+          // Limpiar tamaños previos (evita "zoom" al rotar)
+          im.style.width = '';
+          im.style.height = '';
+          im.style.maxWidth = '';
+          im.style.maxHeight = '';
           if (horiz) {
             if (screen) {
-              // Escalar hasta llenar (también imágenes pequeñas), sin recortar
-              im.style.width = '100%';
-              im.style.height = '100%';
-              im.style.maxWidth = '100%';
-              im.style.maxHeight = '100%';
+              const { w, h } = fitContainSize(im.naturalWidth, im.naturalHeight, vw(), vh());
+              im.style.width = w + 'px';
+              im.style.height = h + 'px';
+              im.style.maxWidth = 'none';
+              im.style.maxHeight = 'none';
               im.style.flexShrink = '0';
+              slot.dataset.fitW = String(w);
+              slot.dataset.fitH = String(h);
               slot.style.overflow = 'hidden';
               slot.style.display = 'flex';
               slot.style.alignItems = 'center';
@@ -391,21 +422,28 @@ export function createReader(state, d) {
               slot.style.overflowX = 'hidden';
               slot.style.overflowY = 'auto';
               slot.style.webkitOverflowScrolling = 'touch';
+              delete slot.dataset.fitW;
+              delete slot.dataset.fitH;
             }
             slot.style.height = '100%';
             slot.style.maxHeight = '100%';
 
           } else {
             if (screen) {
-              im.style.width = '100%';
-              im.style.maxWidth = '100%';
-              im.style.height = 'auto';
-              im.style.maxHeight = vh() + 'px';
+              const { w, h } = fitContainSize(im.naturalWidth, im.naturalHeight, vw(), vh());
+              im.style.width = w + 'px';
+              im.style.height = h + 'px';
+              im.style.maxWidth = 'none';
+              im.style.maxHeight = 'none';
+              slot.dataset.fitW = String(w);
+              slot.dataset.fitH = String(h);
             } else {
               im.style.width = '100%';
               im.style.maxWidth = '100%';
               im.style.height = 'auto';
               im.style.maxHeight = 'none';
+              delete slot.dataset.fitW;
+              delete slot.dataset.fitH;
             }
             slot.style.overflow = 'hidden';
             slot.style.width = '100%';
@@ -417,10 +455,14 @@ export function createReader(state, d) {
 
         const measure = (im, slot) => {
           if (horiz) {
-            // El eje de scroll horizontal es el ancho de página (= viewport en Ancho)
             if (fitMode() === 'width') return Math.max(1, vw());
+            // Pantalla: ancho real de la imagen escalada (hueco uniforme = solo GAP)
+            const fw = +slot.dataset.fitW || 0;
+            if (fw > 0) return fw;
             return Math.max(1, Math.round(im.getBoundingClientRect().width) || im.offsetWidth || sizes[0]);
           }
+          const fh = +slot.dataset.fitH || 0;
+          if (fitMode() === 'screen' && fh > 0) return fh;
           return Math.max(1, Math.round(im.getBoundingClientRect().height) || im.offsetHeight || sizes[0]);
         };
 
@@ -441,13 +483,11 @@ export function createReader(state, d) {
               const tall = imgH > viewH + 4;
               slot.dataset.tall = tall ? '1' : '0';
               if (tall) {
-                // Más alta que la pantalla: scroll desde el flujo normal (no recentrar)
                 slot.style.display = 'block';
                 slot.style.overflowY = 'auto';
                 slot.style.alignItems = '';
                 slot.style.justifyContent = '';
               } else {
-                // Cabe entera: centrada
                 slot.style.display = 'flex';
                 slot.style.alignItems = 'center';
                 slot.style.justifyContent = 'center';
@@ -561,11 +601,15 @@ export function createReader(state, d) {
           const w = vw(), h = vh();
           rd.style.width = w + 'px';
           rd.style.height = h + 'px';
-          // Reaplicar a todas las cargadas
+          // Reaplicar tamaños con el viewport actual (corrige zoom al rotar)
           for (let i = 0; i < pages.length; i++) {
             const im = slots[i].querySelector('img');
-            if (im) place(i, im);
-            else {
+            if (im) {
+              // Quitar estilos inline previos antes de recalcular
+              im.style.width = '';
+              im.style.height = '';
+              place(i, im);
+            } else {
               const e = estSize();
               sizes[i] = e;
               if (horiz) {
@@ -581,11 +625,18 @@ export function createReader(state, d) {
           }
           requestAnimationFrame(() => {
             jumpTo(n);
-            setTimeout(() => jumpTo(n), 200);
+            setTimeout(() => jumpTo(n), 180);
+            setTimeout(() => jumpTo(n), 400);
           });
         };
         let resizeT = 0;
-        const onOrient = () => { clearTimeout(resizeT); resizeT = setTimeout(onResize, 80); };
+        const onOrient = () => {
+          clearTimeout(resizeT);
+          // iOS tarda en asentar visualViewport tras girar
+          resizeT = setTimeout(onResize, 60);
+          setTimeout(onResize, 220);
+          setTimeout(onResize, 480);
+        };
         addEventListener('resize', onOrient);
         addEventListener('orientationchange', onOrient);
         if (window.visualViewport) {
