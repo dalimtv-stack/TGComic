@@ -101,6 +101,7 @@ export function createReader(state, d) {
       const continuous = vert || horiz;
       let token = 0, observers = [];
       const rd = el('div'); rd.id = 'rd';
+      try { window.dispatchEvent(new CustomEvent('tgcomic:reader', { detail: { open: true } })); } catch (_) {}
       // Barra superior: título + estado de modo
       const top = el('div', 'bar topbar');
       const modeName = { page: 'Página', vertical: 'Vertical', horizontal: 'Horizontal' };
@@ -794,7 +795,7 @@ export function createReader(state, d) {
         document.onkeydown = null;
         document.body.style.overflow = '';
         document.querySelector('.mosaic')?.remove();
-        rd.remove();
+        rd.remove(); try { window.dispatchEvent(new CustomEvent('tgcomic:reader', { detail: { open: false } })); } catch (_) {};
       };
     };
     let unmount = mount();
