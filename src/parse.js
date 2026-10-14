@@ -206,3 +206,59 @@ export function issueLabel(series, f, channelName) {
   return r || c;
 }
 
+
+
+/**
+ * Parsea el caption del mensaje de Telegram.
+ * Formato esperado (líneas "Clave: valor"):
+ *   Título original: ...
+ *   Serie: ...
+ *   Guionista: ...
+ *   Dibujante: ...
+ *   Fecha: ...
+ */
+export function parseComicCaption(text) {
+  const out = {};
+  if (!text || !String(text).trim()) return out;
+  const keyMap = {
+    'titulo original': 'originalTitle',
+    'título original': 'originalTitle',
+    'titulo': 'originalTitle',
+    'título': 'originalTitle',
+    'title': 'originalTitle',
+    'original title': 'originalTitle',
+    'serie': 'series',
+    'series': 'series',
+    'guionista': 'writer',
+    'writer': 'writer',
+    'script': 'writer',
+    'guión': 'writer',
+    'guion': 'writer',
+    'dibujante': 'artist',
+    'artist': 'artist',
+    'artista': 'artist',
+    'arte': 'artist',
+    'fecha': 'date',
+    'fecha de publicacion': 'date',
+    'fecha de publicación': 'date',
+    'publicacion': 'date',
+    'publicación': 'date',
+    'date': 'date',
+    'published': 'date',
+    'year': 'date',
+    'año': 'date',
+  };
+  const lines = String(text).replace(/\r\n/g, '\n').split('\n');
+  for (const line of lines) {
+    const m = line.match(/^\s*([^:：\n]+)[:：]\s*(.+?)\s*$/);
+    if (!m) continue;
+    const rawKey = m[1].trim().toLowerCase().normalize('NFC');
+    // Quitar acentos solo para lookup flexible
+    const keyFold = rawKey.normalize('NFD').replace(/\p{M}/gu, '');
+    const v = m[2].trim();
+    if (!v) continue;
+    const field = keyMap[rawKey] || keyMap[keyFold];
+    if (field) out[field] = v;
+  }
+  return out;
+}
