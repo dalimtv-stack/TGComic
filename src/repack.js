@@ -11,6 +11,7 @@ export function createRepackTool(d) {
     fetchFiles, getMsg, pageBlob,
     downloadRarBytes, sniff, TgReader, pagesOf,
     natural, formatBytes,
+    parseComicName, comicDisplay, comicDisplayName, stripExt,
   } = d;
   const getClient = () => d.client;
   const getReady = () => d.ready;
@@ -22,6 +23,69 @@ export function createRepackTool(d) {
   const isCbrName = (name) => /\.cbr$/i.test(name || '');
   const toCbzName = (name) => String(name || 'comic.cbr').replace(/\.cbr$/i, '.cbz');
   const yieldTick = () => new Promise((r) => setTimeout(r, 0));
+
+  /** Limpia nombre de archivo: _ → espacios, sin dobles espacios */
+  function cleanFileBase(name) {
+    return String(name || '')
+      .replace(/\.cb[zr]$/i, '')
+      .replace(/_/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  /**
+   * Sugiere nombre CBZ legible:
+   * [Canal] - [Serie] #[n] - [Info].cbz cuando el parseo lo permite.
+   * Si no, limpia el nombre original (_ → espacio).
+   */
+  function suggestUploadName(ch, f) {
+    const raw = f?.name || 'comic.cbr';
+    const cleaned = cleanFileBase(raw);
+    const chName = (ch?.name || '').trim();
+
+    // Título personalizado en local (si existe)
+    let preferred = null;
+    try {
+      if (typeof comicDisplayName === 'function') {
+        preferred = comicDisplayName(ch, f, null);
+      }
+    } catch (_) {}
+
+    let parsed = null;
+    try {
+      if (typeof parseComicName === 'function') {
+        parsed = parseComicName(cleaned + '.cbz', chName)
+          || parseComicName(raw, chName);
+      }
+    } catch (_) {}
+
+    if (parsed?.series && parsed?.number != null) {
+      const series = parsed.series;
+      const num = String(parsed.number);
+      const info = (parsed.info || '').trim();
+      // Preferir formato sin repetir canal si el canal ya contextualiza
+      let body;
+      if (info) body = `${series} #${num} - ${info}`;
+      else body = `${series} #${num}`;
+      // Si el nombre original traía el canal como prefijo, mantener convención completa
+      const hadChannelPrefix = chName && new RegExp('^' + chName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*-', 'i').test(cleaned);
+      const base = hadChannelPrefix ? `${chName} - ${body}` : body;
+      return base + '.cbz';
+    }
+
+    if (preferred && String(preferred).trim()) {
+      return cleanFileBase(preferred) + '.cbz';
+    }
+
+    try {
+      if (typeof comicDisplay === 'function') {
+        const d = comicDisplay(cleaned + '.cbz', chName) || comicDisplay(raw, chName);
+        if (d && d.trim()) return cleanFileBase(d) + '.cbz';
+      }
+    } catch (_) {}
+
+    return cleaned + '.cbz';
+  }
 
   async function downloadWholeMessage(msg, size, status) {
     const client = getClient();
@@ -346,7 +410,8 @@ export function createRepackTool(d) {
     try {
       cbz = await convertToCbzBlob(ch, f, status);
       if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
-      const outName = toCbzName(f.name);
+      const outName = item.outName || toCbzName(cleanFileBase(f.name) + '.cbr');
+      status(`Nombre de subida: ${outName}`);
       await uploadCbz(ch, outName, cbz, f.caption || '', status);
       cbz = null;
       status('Subido a Telegram');
@@ -402,6 +467,62 @@ export function createRepackTool(d) {
     running = false;
     abort = false;
     resetStopButton();
+  }
+
+
+  function showNameReview(selected, deleteOriginal) {
+    document.querySelector('.info-frame.repack-names')?.remove();
+    const frame = el('div', 'info-frame repack-names');
+    const box = el('div', 'info-box');
+    const head = el('div', 'info-head');
+    head.append(el('span', '', 'Nombres al subir'));
+    const close = el('button', 'btn info-close', '×');
+    close.onclick = () => frame.remove();
+    head.append(close);
+    const body = el('div', 'info-body');
+    body.append(el('p', 'cover-pick-hint',
+      'Revisa o edita el nombre final (.cbz). Se proponen espacios en lugar de _ y el formato Serie #n cuando se puede detectar.'
+    ));
+
+    const inputs = [];
+    for (const item of selected) {
+      const suggested = suggestUploadName(item.ch, item.f);
+      const row = el('div', 'repack-name-row');
+      row.append(el('div', 'repack-name-from', item.f.name || ''));
+      const inp = el('input', 'edit-input repack-name-input');
+      inp.type = 'text';
+      inp.value = suggested;
+      inp.autocomplete = 'off';
+      inp._item = item;
+      inputs.push(inp);
+      row.append(inp);
+      row.append(el('small', '', item.ch.name || ''));
+      body.append(row);
+    }
+
+    const actions = el('div', 'edit-actions');
+    const cancel = el('button', 'btn', 'Cancelar');
+    cancel.onclick = () => frame.remove();
+    const goBtn = el('button', 'btn edit-save', 'Subir');
+    goBtn.onclick = () => {
+      const ready = inputs.map((inp) => {
+        let name = String(inp.value || '').trim();
+        if (!name) name = suggestUploadName(inp._item.ch, inp._item.f);
+        if (!/\.cbz$/i.test(name)) name = name.replace(/\\.cb[zr]$/i, '') + '.cbz';
+        // Normalizar espacios
+        name = name.replace(/_/g, ' ').replace(/\\s+/g, ' ').trim();
+        if (!/\.cbz$/i.test(name)) name += '.cbz';
+        return { ...inp._item, outName: name };
+      });
+      frame.remove();
+      runQueue(ready, deleteOriginal);
+    };
+    actions.append(cancel, goBtn);
+    body.append(actions);
+    box.append(head, body);
+    frame.append(box);
+    frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+    document.body.append(frame);
   }
 
   function showRepackFrame() {
@@ -489,7 +610,7 @@ export function createRepackTool(d) {
       }
       if (selected.length > 1 && !confirm(`Vas a procesar ${selected.length} archivos seguidos en el móvil. ¿Seguro? Mejor de uno en uno.`)) return;
       frame.remove();
-      runQueue(selected, delCb.checked);
+      showNameReview(selected, delCb.checked);
     };
     collectCandidates().then((list) => {
       candidates = list;
