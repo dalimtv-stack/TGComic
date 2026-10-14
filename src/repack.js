@@ -113,13 +113,50 @@ export function createRepackTool(d) {
   async function uploadCbz(ch, fileName, blob, caption) {
     await getReady();
     const peer = peerOf(ch);
-    const file = new File([blob], fileName, { type: 'application/zip' });
-    await getClient().sendFile(peer, {
-      file,
+    const client = getClient();
+    const buf = new Uint8Array(await blob.arrayBuffer());
+    const attrs = [new Api.DocumentAttributeFilename({ fileName })];
+    const baseOpts = {
       caption: caption || '',
       forceDocument: true,
-      workers: 4,
-    });
+      workers: 1,
+      attributes: attrs,
+    };
+
+    // 1) CustomFile (API correcta de gramJS en browser)
+    const tryCustom = async () => {
+      let CustomFile;
+      try {
+        ({ CustomFile } = await import('telegram/Utils'));
+      } catch (_) {
+        try { ({ CustomFile } = await import('telegram/Utils.js')); } catch (__) {}
+      }
+      if (!CustomFile) throw new Error('CustomFile no disponible');
+      const fileArg = new CustomFile(fileName, buf.byteLength, fileName, buf);
+      return client.sendFile(peer, { ...baseOpts, file: fileArg });
+    };
+
+    // 2) Buffer polyfill
+    const tryBuffer = async () => {
+      const B = globalThis.Buffer;
+      if (!B) throw new Error('Buffer no disponible');
+      return client.sendFile(peer, { ...baseOpts, file: B.from(buf) });
+    };
+
+    // 3) Uint8Array crudo
+    const tryRaw = async () => client.sendFile(peer, { ...baseOpts, file: buf });
+
+    let lastErr;
+    for (const fn of [tryCustom, tryBuffer, tryRaw]) {
+      try {
+        await fn();
+        return;
+      } catch (e) {
+        lastErr = e;
+        console.warn('[repack] upload attempt failed', fn.name, e);
+      }
+    }
+    throw lastErr || new Error('No se pudo subir el archivo');
   }
 
   async function deleteMessage(ch, msgId) {
@@ -156,13 +193,48 @@ export function createRepackTool(d) {
     return list;
   }
 
+  function ensureRestoreChip() {
+    let chip = document.getElementById('repack-chip');
+    if (chip) return chip;
+    chip = el('button', 'repack-chip', 'Recarga CBR');
+    chip.id = 'repack-chip';
+    chip.type = 'button';
+    chip.title = 'Mostrar progreso de recarga';
+    chip.onclick = () => {
+      const panel = document.getElementById('repack-panel');
+      if (panel) {
+        panel.hidden = false;
+        panel.classList.remove('minimized');
+      }
+      chip.hidden = true;
+    };
+    document.body.append(chip);
+    return chip;
+  }
+
   function showProgressPanel() {
     let panel = document.getElementById('repack-panel');
-    if (panel) return panel;
+    if (panel) {
+      panel.hidden = false;
+      panel.classList.remove('minimized');
+      const chip = document.getElementById('repack-chip');
+      if (chip) chip.hidden = true;
+      return panel;
+    }
     panel = el('div', 'repack-panel');
     panel.id = 'repack-panel';
-    panel.innerHTML = '';
+    const titleRow = el('div', 'repack-panel-head');
     const title = el('div', 'repack-panel-title', 'Recarga CBR / externos');
+    const btnMin = el('button', 'btn repack-min', 'Ocultar');
+    btnMin.type = 'button';
+    btnMin.onclick = () => {
+      panel.classList.add('minimized');
+      panel.hidden = true;
+      const chip = ensureRestoreChip();
+      chip.hidden = false;
+      chip.textContent = running ? 'Recarga…' : 'Recarga CBR';
+    };
+    titleRow.append(title, btnMin);
     const log = el('div', 'repack-panel-log');
     log.id = 'repack-log';
     const bar = el('div', 'repack-panel-bar');
@@ -171,13 +243,29 @@ export function createRepackTool(d) {
     bar.append(fill);
     const actions = el('div', 'repack-panel-actions');
     const btnStop = el('button', 'btn', 'Detener');
-    btnStop.onclick = () => { abort = true; btnStop.disabled = true; btnStop.textContent = 'Deteniendo…'; };
-    const btnClose = el('button', 'btn', 'Ocultar');
-    btnClose.onclick = () => { panel.classList.add('minimized'); };
-    actions.append(btnStop, btnClose);
-    panel.append(title, bar, log, actions);
+    btnStop.id = 'repack-stop';
+    btnStop.type = 'button';
+    btnStop.onclick = () => {
+      if (!running) return;
+      abort = true;
+      btnStop.disabled = true;
+      btnStop.textContent = 'Deteniendo…';
+      logLine('Parada solicitada; se detendrá al terminar el paso actual…');
+    };
+    actions.append(btnStop);
+    panel.append(titleRow, bar, log, actions);
     document.body.append(panel);
     return panel;
+  }
+
+  function resetStopButton() {
+    const btnStop = document.getElementById('repack-stop');
+    if (btnStop) {
+      btnStop.disabled = false;
+      btnStop.textContent = 'Detener';
+    }
+    const chip = document.getElementById('repack-chip');
+    if (chip && !running) chip.textContent = 'Recarga CBR';
   }
 
   function logLine(text) {
@@ -261,8 +349,9 @@ export function createRepackTool(d) {
     logLine(`Fin. OK: ${ok} · Fallos: ${fail}`);
     running = false;
     abort = false;
-    const stop = document.querySelector('#repack-panel .repack-panel-actions .btn');
-    if (stop) { stop.disabled = false; stop.textContent = 'Detener'; }
+    resetStopButton();
+    const chip = document.getElementById('repack-chip');
+    if (chip) chip.textContent = 'Recarga CBR';
   }
 
   function showRepackFrame() {
