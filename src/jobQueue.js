@@ -302,7 +302,23 @@ export function createJobQueue({ el, pref }) {
     if (fill) fill.style.width = `${pct}%`;
   }
 
+  function isReaderOpen() {
+    return !!document.getElementById('rd');
+  }
+
+  function hideQueueUi() {
+    const panel = document.getElementById('job-queue-panel');
+    const chip = document.getElementById('job-queue-chip');
+    if (panel) panel.hidden = true;
+    if (chip) chip.hidden = true;
+  }
+
   function paintPanel() {
+    // Nunca mostrar basura sobre el lector de cómics
+    if (isReaderOpen()) {
+      hideQueueUi();
+      return;
+    }
     const panel = document.getElementById('job-queue-panel');
     if (!panel || panel.hidden) {
       const active = jobs.some((x) => x.status === 'pending' || x.status === 'running');
@@ -371,6 +387,7 @@ export function createJobQueue({ el, pref }) {
   }
 
   function show() {
+    if (isReaderOpen()) return; // no molestar en el visor
     const panel = ensurePanel();
     panel.hidden = false;
     const chip = document.getElementById('job-queue-chip');
@@ -396,6 +413,13 @@ export function createJobQueue({ el, pref }) {
     emit();
   }
 
+  try {
+    window.addEventListener('tgcomic:reader', (ev) => {
+      if (ev?.detail?.open) hideQueueUi();
+      else paintPanel();
+    });
+  } catch (_) {}
+
   return {
     enqueue,
     pause,
@@ -407,6 +431,7 @@ export function createJobQueue({ el, pref }) {
     getState,
     onChange,
     show,
+    hideQueueUi,
     etaLabel,
     avgMsPerJob,
   };
