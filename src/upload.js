@@ -24,6 +24,9 @@ export function createUploadTool(d) {
   const getReady = () => d.ready;
   const getLIB = () => d.LIB;
   const setLIB = (v) => { if (typeof d.setLIB === 'function') d.setLIB(v); };
+  if (typeof el !== 'function') {
+    throw new Error('createUploadTool: falta el()');
+  }
 
   let busy = false;
 
@@ -309,9 +312,10 @@ export function createUploadTool(d) {
   }
 
   function showUploadFrame() {
+    try {
     document.querySelector('.info-frame.upload-frame')?.remove();
     const frame = el('div', 'info-frame upload-frame');
-    const box = el('div', 'info-box cover-pick-box');
+    const box = el('div', 'info-box');
     const head = el('div', 'info-head');
     head.append(el('span', '', 'Subir cómic'));
     const close = el('button', 'btn info-close', '×');
@@ -544,10 +548,18 @@ export function createUploadTool(d) {
     body.append(actions);
     box.append(head, body);
     frame.append(box);
+    // Evitar que el mismo toque/clic que abrió el menú cierre el frame al instante
+    let armed = false;
+    setTimeout(() => { armed = true; }, 350);
     frame.addEventListener('click', (ev) => {
-      if (ev.target === frame && !busy) frame.remove();
+      if (!armed || busy) return;
+      if (ev.target === frame) frame.remove();
     });
     document.body.append(frame);
+    } catch (e) {
+      console.error('[upload] showUploadFrame', e);
+      alert('No se pudo abrir el formulario de subida: ' + (e?.message || e));
+    }
   }
 
   return {
