@@ -1244,11 +1244,34 @@ async function setSeriesCoverBlob(ch, seriesLabel, blob) {
     try { await kv.set(seriesCoverKey(ch, seriesLabel), blob); } catch (_) {}
   }
 }
+function seriesReadProgress(ch, files) {
+  const list = Array.isArray(files) ? files : [];
+  if (!list.length) return null;
+  let done = 0;
+  for (const f of list) {
+    if (isComicRead(ch.id, f.id)) done++;
+  }
+  if (done === 0) return null;
+  const pct = Math.round((done / list.length) * 100);
+  return { done, tot: list.length, pct };
+}
+
 function seriesCoverNode(ch, seriesLabel, files, badge) {
   const d = el('div', 'cover'), ltr = el('span', '', (seriesDisplayName(ch, seriesLabel) || seriesLabel || '?').slice(0, 1).toUpperCase());
   d.append(ltr);
   if (badge != null && badge !== '') {
     d.append(el('span', 'badge series', String(badge)));
+  }
+  // Progreso de lectura de la serie (como en cómics)
+  const sprog = seriesReadProgress(ch, files);
+  if (sprog) {
+    const bar = el('div', 'prog');
+    const fill = el('div', 'prog-fill');
+    fill.style.width = sprog.pct + '%';
+    bar.append(fill);
+    d.append(bar);
+    const pb = el('span', 'prog-badge', sprog.pct >= 95 ? '✓' : sprog.pct + '%');
+    d.append(pb);
   }
   d._load = async () => {
     const b = await getSeriesCoverBlob(ch, seriesLabel, files);
@@ -1265,7 +1288,7 @@ function showEditSeries(ch, seriesLabel, files, after) {
   const title = seriesDisplayName(ch, seriesLabel);
   const list = Array.isArray(files) ? files : [];
   sheet(title, [
-    ['Editar nombre de la serie', () => showEditSeriesName(ch, seriesLabel, after)],
+    ['Editar nombre de la serie a la que pertenece', () => showEditSeriesName(ch, seriesLabel, after)],
     ['Seleccionar portada de la serie', () => showSeriesCoverPicker(ch, seriesLabel, list, after)],
   ]);
 }
@@ -2328,15 +2351,15 @@ function filesView(ch) {
         const unread = !isComicRead(ch.id, f.id);
         const opts = [
           ['Información', () => showComicInfo(ch, f, label)],
-          ['Editar título', () => showEditComicTitle(ch, f, label, redraw)],
-          unread
-            ? ['Marcar como leído', () => markComicRead(ch, f, redraw)]
-            : ['Marcar como no leído', () => markComicUnread(ch, f, redraw)],
+          ['Editar datos del comic', () => showEditComicTitle(ch, f, label, redraw)],
         ];
         if (seriesLabel && groupState) {
           opts.push(['Editar serie', () => showEditSeries(ch, seriesLabel, seriesFiles || [], redraw)]);
         }
-        // Serie desagrupada o agrupada: poder marcar toda la serie desde un número
+        opts.push(unread
+          ? ['Marcar comic como leído', () => markComicRead(ch, f, redraw)]
+          : ['Marcar comic como no leído', () => markComicUnread(ch, f, redraw)]);
+        // Solo la acción que proceda para la serie completa
         if (seriesLabel && seriesFiles && seriesFiles.length > 1) {
           const anyUnread = seriesFiles.some((x) => !isComicRead(ch.id, x.id));
           opts.push(anyUnread
@@ -2345,7 +2368,7 @@ function filesView(ch) {
         }
         if (groupState === 'short' || groupState === 'full') {
           opts.push(['Volver a agrupar la serie', () => setUngroupMode(ch, seriesLabel, null, redraw)]);
-        } else if (groupState === 'grouped') {
+        } else if (groupState === 'grouped' && seriesFiles && seriesFiles.length > 1) {
           opts.push(['Desagrupar serie', () => setUngroupMode(ch, seriesLabel, 'short', redraw)]);
           opts.push(['Desagrupar serie (con nombre)', () => setUngroupMode(ch, seriesLabel, 'full', redraw)]);
         }
@@ -2357,7 +2380,20 @@ function filesView(ch) {
           cover: () => comicCover(ch, f),
           go: () => openComic(ch, f, cur),
           longPress: () => sheet(label, opts),
-          menu: groupState ? () => sheet(seriesDisplayName(ch, seriesLabel), opts.filter((o) => o[0] !== 'Información')) : undefined,
+          menu: (groupState && seriesLabel) ? () => sheet(seriesDisplayName(ch, seriesLabel), [
+            ['Editar serie', () => showEditSeries(ch, seriesLabel, seriesFiles || [], redraw)],
+            ...(seriesFiles && seriesFiles.length > 1
+              ? [seriesFiles.some((x) => !isComicRead(ch.id, x.id))
+                  ? ['Marcar serie como leída', () => markSeriesRead(ch, seriesFiles, redraw)]
+                  : ['Marcar serie como no leída', () => markSeriesUnread(ch, seriesFiles, redraw)]]
+              : []),
+            ...(groupState === 'grouped' && seriesFiles?.length > 1
+              ? [['Desagrupar serie', () => setUngroupMode(ch, seriesLabel, 'short', redraw)],
+                 ['Desagrupar serie (con nombre)', () => setUngroupMode(ch, seriesLabel, 'full', redraw)]]
+              : groupState === 'short' || groupState === 'full'
+                ? [['Volver a agrupar la serie', () => setUngroupMode(ch, seriesLabel, null, redraw)]]
+                : []),
+          ]) : undefined,
         };
       };
 
@@ -2381,11 +2417,11 @@ function filesView(ch) {
             const it = items[items.length - 1];
             it.longPress = () => sheet(it.label, [
               ['Información', () => showComicInfo(ch, f, it.label)],
-              ['Editar título', () => showEditComicTitle(ch, f, it.label, redraw)],
+              ['Editar datos del comic', () => showEditComicTitle(ch, f, it.label, redraw)],
               ['Editar serie', () => showEditSeries(ch, soloSeries, fs, redraw)],
               !isComicRead(ch.id, f.id)
-                ? ['Marcar como leído', () => markComicRead(ch, f, redraw)]
-                : ['Marcar como no leído', () => markComicUnread(ch, f, redraw)],
+                ? ['Marcar comic como leído', () => markComicRead(ch, f, redraw)]
+                : ['Marcar comic como no leído', () => markComicUnread(ch, f, redraw)],
             ]);
             it.menu = undefined;
           }
@@ -2401,7 +2437,7 @@ function filesView(ch) {
           const seriesUnread = fs.some((f) => !isComicRead(ch.id, f.id));
           const seriesOpts = [
             ['Información', () => showSeriesInfo(ch, seriesLabel, fs)],
-            ['Editar', () => showEditSeries(ch, seriesLabel, fs, redraw)],
+            ['Editar serie', () => showEditSeries(ch, seriesLabel, fs, redraw)],
             seriesUnread
               ? ['Marcar serie como leída', () => markSeriesRead(ch, fs, redraw)]
               : ['Marcar serie como no leída', () => markSeriesUnread(ch, fs, redraw)],
@@ -2445,18 +2481,20 @@ function seriesView(ch, s, files) {
           : issueLabel(s, f, ch.name);
         const displayLabel = comicDisplayName(ch, f, baseLabel);
         const unread = !isComicRead(ch.id, f.id);
+        const seriesUnread = files.some((x) => !isComicRead(ch.id, x.id));
         const opts = [
           ['Información', () => showComicInfo(ch, f, displayLabel)],
-          ['Editar título', () => showEditComicTitle(ch, f, displayLabel, redraw)],
-          unread
-            ? ['Marcar como leído', () => markComicRead(ch, f, redraw)]
-            : ['Marcar como no leído', () => markComicUnread(ch, f, redraw)],
+          ['Editar datos del comic', () => showEditComicTitle(ch, f, displayLabel, redraw)],
           ['Editar serie', () => showEditSeries(ch, s, files, () => {
             titleEl.textContent = seriesDisplayName(ch, s);
             redraw();
           })],
-          ['Marcar serie como leída', () => markSeriesRead(ch, files, redraw)],
-          ['Marcar serie como no leída', () => markSeriesUnread(ch, files, redraw)],
+          unread
+            ? ['Marcar comic como leído', () => markComicRead(ch, f, redraw)]
+            : ['Marcar comic como no leído', () => markComicUnread(ch, f, redraw)],
+          seriesUnread
+            ? ['Marcar serie como leída', () => markSeriesRead(ch, files, redraw)]
+            : ['Marcar serie como no leída', () => markSeriesUnread(ch, files, redraw)],
           ['Desagrupar serie', () => setUngroupMode(ch, s, 'short', () => history.back())],
           ['Desagrupar serie (con nombre)', () => setUngroupMode(ch, s, 'full', () => history.back())],
         ];
