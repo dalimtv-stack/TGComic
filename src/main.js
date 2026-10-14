@@ -30,6 +30,9 @@ import { createReader } from './reader.js';
 import { createCovers } from './covers.js';
 import { createRepackTool } from './repack.js';
 import { createUploadTool } from './upload.js';
+import { createPageCache } from './pageCache.js';
+import { createJobQueue } from './jobQueue.js';
+import { exportLibraryData, importLibraryData, downloadJson } from './dataPort.js';
 
 const apiId = Number(import.meta.env.VITE_API_ID);
 const apiHash = import.meta.env.VITE_API_HASH;
@@ -121,6 +124,17 @@ const sizeOfVal = (v) => {
   }
   return 0;
 };
+
+const earlyPref = (k, d = '') => {
+  try {
+    const v = localStorage.getItem(k);
+    return v == null ? d : v;
+  } catch { return d; }
+};
+
+const pageCache = createPageCache({ kv, pref: earlyPref });
+let jobQueue = null;
+
 async function collectAppStats() {
   const entries = await kv.entries();
   let covers = 0, art = 0, other = 0, coverN = 0, artN = 0;
@@ -163,10 +177,40 @@ async function collectAppStats() {
     }
   }
 
+  let pageCacheBytes = 0, pageCacheCount = 0, pageCacheLimitMB = 500;
+  try {
+    const pcs = await pageCache.stats();
+    pageCacheBytes = pcs.bytes || 0;
+    pageCacheCount = pcs.count || 0;
+    pageCacheLimitMB = pcs.limitMB || 500;
+  } catch (_) {}
+
+  let lastSync = '';
+  try {
+    const s = localStorage.getItem('sync:meta');
+    if (s) {
+      const j = JSON.parse(s);
+      lastSync = j?.updatedAt || j?.lastAt || '';
+    }
+  } catch (_) {}
+
+  let failedUploads = 0;
+  try {
+    if (jobQueue) failedUploads = jobQueue.failedJobs().length;
+    else {
+      const raw = JSON.parse(localStorage.getItem('jobQueue:v1') || '[]');
+      failedUploads = Array.isArray(raw)
+        ? raw.filter((j) => j.status === 'error' || j.status === 'interrupted').length
+        : 0;
+    }
+  } catch (_) {}
+
   return {
     idbTotal, covers, art, other, coverN, artN,
     lsBytes, sessionBytes, sessionOk, lsKeyCount: lsKeys.length,
     channels, comics, telegramBytes,
+    pageCacheBytes, pageCacheCount, pageCacheLimitMB,
+    lastSync, failedUploads,
   };
 }
 
@@ -482,14 +526,69 @@ function showInfoFrame() {
     body.append(row('Caché total (IndexedDB)', formatBytes(s.idbTotal)));
     body.append(row('Carátulas de cómics', `${formatBytes(s.covers)} · ${s.coverN} ítems`));
     body.append(row('Editoriales y canales', `${formatBytes(s.art)} · ${s.artN} ítems`));
+    body.append(row('Caché de páginas (lectura)', `${formatBytes(s.pageCacheBytes)} · ${s.pageCacheCount} pág. · máx. ${s.pageCacheLimitMB} MB`));
     body.append(row('Otros datos en caché', formatBytes(s.other)));
+    body.append(row('Caché total estimada (IDB)', formatBytes(s.idbTotal)));
     body.append(el('div', 'info-sec', 'Sesión y preferencias'));
     body.append(row('Sesión de Telegram', s.sessionOk ? `Guardada · ${formatBytes(s.sessionBytes)}` : 'No guardada'));
     body.append(row('localStorage (prefs, progreso…)', `${formatBytes(s.lsBytes)} · ${s.lsKeyCount} claves`));
+    body.append(row('Última sincronización', s.lastSync
+      ? (typeof sync.formatSyncDate === 'function' ? (sync.formatSyncDate(s.lastSync) || s.lastSync) : s.lastSync)
+      : '—'));
+    body.append(row('Subidas / recargas fallidas', String(s.failedUploads || 0)));
     body.append(el('div', 'info-sec', 'Biblioteca'));
     body.append(row('Canales', String(s.channels)));
     body.append(row('Cómics (listados)', String(s.comics)));
     body.append(row('Tamaño en Telegram', formatBytes(s.telegramBytes)));
+    body.append(el('div', 'info-sec', 'Datos locales'));
+    const expRow = el('div', 'edit-actions');
+    const btnExp = el('button', 'btn', 'Exportar JSON');
+    btnExp.type = 'button';
+    btnExp.onclick = async () => {
+      try {
+        btnExp.disabled = true;
+        btnExp.textContent = 'Exportando…';
+        const data = await exportLibraryData({ kv, includeCovers: true });
+        downloadJson(data, `tgcomic-meta-${new Date().toISOString().slice(0, 10)}.json`);
+      } catch (e) {
+        alert('Exportación: ' + (e?.message || e));
+      } finally {
+        btnExp.disabled = false;
+        btnExp.textContent = 'Exportar JSON';
+      }
+    };
+    const btnImp = el('button', 'btn', 'Importar JSON');
+    btnImp.type = 'button';
+    const impInput = el('input');
+    impInput.type = 'file';
+    impInput.accept = 'application/json,.json';
+    impInput.hidden = true;
+    btnImp.onclick = () => impInput.click();
+    impInput.onchange = async () => {
+      const f = impInput.files?.[0];
+      if (!f) return;
+      try {
+        const text = await f.text();
+        const data = JSON.parse(text);
+        const r = await importLibraryData(data, { kv });
+        alert(`Importado: ${r.localStorage} claves, ${r.covers} portadas. Recarga la página.`);
+      } catch (e) {
+        alert('Importación: ' + (e?.message || e));
+      }
+      impInput.value = '';
+    };
+    const btnClrPc = el('button', 'btn', 'Vaciar caché páginas');
+    btnClrPc.type = 'button';
+    btnClrPc.onclick = async () => {
+      if (!confirm('¿Borrar todas las páginas en caché de lectura?')) return;
+      await pageCache.clearAll();
+      alert('Caché de páginas vaciada');
+    };
+    const btnQueue = el('button', 'btn', 'Ver cola');
+    btnQueue.type = 'button';
+    btnQueue.onclick = () => { try { jobQueue?.show?.(); } catch (_) {} };
+    expRow.append(btnExp, btnImp, impInput, btnClrPc, btnQueue);
+    body.append(expRow);
   }).catch((err) => {
     body.replaceChildren(el('div', 'info-loading', 'No se pudo calcular: ' + (err?.message || err)));
   });
@@ -557,6 +656,24 @@ function showViewerConfig() {
     () => (pref('fit', 'screen') === 'width' ? 'width' : 'screen'),
     (v) => setPref('fit', v)
   );
+
+  section('Caché de páginas (lectura)');
+  const pcWrap = el('div', 'cfg-group');
+  const pcLab = el('p', 'sync-status', 'Máximo de caché de páginas (MB)');
+  const pcInp = el('input', 'edit-input');
+  pcInp.type = 'number';
+  pcInp.min = '50';
+  pcInp.max = '4000';
+  pcInp.step = '50';
+  pcInp.value = pref('pageCacheMaxMB', '500');
+  pcInp.onchange = () => {
+    let v = Math.max(50, Math.min(4000, +pcInp.value || 500));
+    pcInp.value = String(v);
+    setPref('pageCacheMaxMB', String(v));
+  };
+  const pcHint = el('p', 'cover-pick-hint', 'Por defecto 500 MB. Las páginas vistas se guardan para no re-descargarlas.');
+  pcWrap.append(pcLab, pcInp, pcHint);
+  body.append(pcWrap);
 
   box.append(head, body);
   frame.append(box);
@@ -2486,6 +2603,8 @@ function seriesView(ch, s, files) {
 }
 
 // ---------- Lector (módulo reader.js) ----------
+jobQueue = createJobQueue({ el, pref: earlyPref });
+
 const readerApi = createReader(
   {
     get cleanup() { return cleanup; },
@@ -2508,6 +2627,7 @@ const readerApi = createReader(
     msg, alive, cancelled,
     show, go,
     modeBtn,
+    pageCache,
   }
 );
 const { openComic } = readerApi;
@@ -2515,6 +2635,7 @@ const { openComic } = readerApi;
 // ---------- Recarga CBR / externos ----------
 const repackTool = createRepackTool({
   el,
+  jobQueue,
   get client() { return client; },
   Api, bigInt,
   get LIB() { return LIB; },
@@ -2549,6 +2670,7 @@ let uploadTool = {
 try {
   uploadTool = createUploadTool({
     el,
+    jobQueue,
     get client() { return client; },
     Api, bigInt,
     get LIB() { return LIB; },

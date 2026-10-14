@@ -247,3 +247,7 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 .continue-fold{margin:.5rem .75rem .35rem}
 .continue-fold-body{padding:.35rem 0 .55rem;background:var(--card);border-radius:0 0 14px 14px}
 .continue-fold-body .continue-track{padding-left:.65rem;padding-right:.65rem}
+
+.job-queue-eta{font-size:.8rem;color:var(--mut);padding:0 2px 6px}
+.upload-preview{font-size:.85rem;color:var(--acc);margin:.35rem 0;word-break:break-word}
+.upload-select{width:100%;margin:.25rem 0}

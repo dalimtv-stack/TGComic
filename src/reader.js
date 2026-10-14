@@ -17,7 +17,22 @@ export function createReader(state, d) {
     msg, alive, cancelled,
     show, go,
     modeBtn,
+    pageCache,
   } = d;
+
+  function networkPreloadRadius() {
+    try {
+      const c = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+      if (c?.saveData) return 1;
+      const t = String(c?.effectiveType || '').toLowerCase();
+      if (t.includes('2g') || t === 'slow-2g') return 1;
+      if (t.includes('3g')) return 1;
+      // 4g / wifi / unknown
+      return 2;
+    } catch {
+      return 2;
+    }
+  }
 
   async function resolveQueue(ch, f) {
     try {
@@ -74,17 +89,58 @@ export function createReader(state, d) {
       if (fmt) setPageFormat(chId, f.id, fmt);
     }
     let n = Math.min(chId != null ? getPageIndex(chId, f.id) : 0, pages.length - 1);
-    const urls = new Map();
+    const urls = new Map(); // i → Promise<string objectURL>
+    const blobFor = async (i) => {
+      if (i < 0 || i >= pages.length) return null;
+      // Caché persistente
+      if (pageCache && chId != null) {
+        try {
+          const hit = await pageCache.get(chId, f.id, i);
+          if (hit) return hit;
+        } catch (_) {}
+      }
+      const b = await pageBlob(pages[i]);
+      if (b && pageCache && chId != null) {
+        pageCache.set(chId, f.id, i, b).catch(() => {});
+      }
+      return b;
+    };
     const load = (i) => {
       if (i < 0 || i >= pages.length) return null;
       if (!urls.has(i)) {
-        const p = pageBlob(pages[i]).then((b) => URL.createObjectURL(b));
+        const p = blobFor(i).then((b) => {
+          if (!b) throw new Error('sin blob');
+          return URL.createObjectURL(b);
+        });
         p.catch(() => urls.delete(i));
         urls.set(i, p);
       }
       return urls.get(i);
     };
-    const drop = (i) => { urls.get(i)?.then((u) => URL.revokeObjectURL(u), () => {}); urls.delete(i); };
+    const drop = (i) => {
+      const p = urls.get(i);
+      if (p) {
+        p.then((u) => { try { URL.revokeObjectURL(u); } catch (_) {} }, () => {});
+        urls.delete(i);
+      }
+    };
+    const dropAll = () => {
+      for (const i of [...urls.keys()]) drop(i);
+      urls.clear();
+    };
+    const preloadAround = async (center, token, mine) => {
+      const r = networkPreloadRadius();
+      const order = [];
+      for (let d = 1; d <= r; d++) {
+        order.push(center + d, center - d);
+      }
+      // +1 extra en wifi agresivo ya cubierto por r=2
+      for (const i of order) {
+        if (token !== mine) return;
+        if (i < 0 || i >= pages.length) continue;
+        try { await load(i); } catch (_) {}
+      }
+    };
     const hasNext = !!(ctx?.list && ctx.idx >= 0 && ctx.idx < ctx.list.length - 1);
     const openNext = () => {
       if (!hasNext) return;
@@ -231,8 +287,9 @@ export function createReader(state, d) {
             await im.decode().catch(() => {});
             if (mine !== token) return;
             img.replaceWith(im); img = im; rd.scrollTo(0, 0);
-            for (const i2 of [...urls.keys()]) if (i2 < n - 2 || i2 > n + 4) drop(i2);
-            for (const k of [1, 2, 3]) { if (token !== mine) return; await Promise.resolve(load(n + k)).catch(() => {}); }
+            const keep = networkPreloadRadius() + 1;
+            for (const i2 of [...urls.keys()]) if (i2 < n - keep || i2 > n + keep + 1) drop(i2);
+            await preloadAround(n, token, mine);
           } catch (err) { cnt.textContent = 'Error'; console.error(err); }
         };
         goToPage = (i) => turn(i);
@@ -799,7 +856,11 @@ export function createReader(state, d) {
       };
     };
     let unmount = mount();
-    return () => { unmount(); Promise.resolve(zr.close()).catch(() => {}); };
+    return () => {
+      try { unmount(); } catch (_) {}
+      try { dropAll(); } catch (_) {}
+      try { Promise.resolve(zr.close()).catch(() => {}); } catch (_) {}
+    };
   }
 
 

@@ -25,6 +25,23 @@ export function createRepackTool(d) {
   const toCbzName = (name) => String(name || 'comic.cbr').replace(/\.cbr$/i, '.cbz');
   const yieldTick = () => new Promise((r) => setTimeout(r, 0));
 
+  async function blobToWebp(blob, quality = 0.82) {
+    if (!blob || !blob.size) return blob;
+    if ((blob.type || '').includes('webp')) return blob;
+    try {
+      const bmp = await createImageBitmap(blob);
+      const cv = document.createElement('canvas');
+      cv.width = bmp.width;
+      cv.height = bmp.height;
+      cv.getContext('2d').drawImage(bmp, 0, 0);
+      bmp.close?.();
+      const out = await new Promise((res) => cv.toBlob(res, 'image/webp', quality));
+      return out || blob;
+    } catch {
+      return blob;
+    }
+  }
+
   function cleanFileBase(name) {
     return String(name || '')
       .replace(/\.cb[zr]$/i, '')
@@ -109,7 +126,8 @@ export function createRepackTool(d) {
   }
 
   /** Si ya es ZIP: no reextraer; solo cambiar extensión al subir. */
-  async function convertToCbzBlob(ch, f, status) {
+  async function convertToCbzBlob(ch, f, status, opts = {}) {
+    const asWebp = !!opts.asWebp;
     const msg = await getMsg(ch, f);
     if (!msg?.media) throw new Error('Sin media en el mensaje');
 
@@ -172,7 +190,13 @@ export function createRepackTool(d) {
       copy.set(src);
       const pageBlob = new Blob([copy.buffer], { type: mimeOf(base) });
       nImg++;
-      await writer.add(base, new zip.BlobReader(pageBlob), { level: 0 });
+      let outBlob = pageBlob;
+      let outName = base;
+      if (typeof asWebp !== 'undefined' && asWebp) {
+        outBlob = await blobToWebp(pageBlob);
+        outName = base.replace(/\.([^.]+)$/, '.webp');
+      }
+      await writer.add(outName, new zip.BlobReader(outBlob), { level: 0 });
       status(`Empaquetando… ${nImg} img`);
       if (nImg % 2 === 0) await yieldTick();
     }
@@ -424,7 +448,7 @@ export function createRepackTool(d) {
     if (fill) fill.style.width = Math.max(0, Math.min(100, pct)) + '%';
   }
 
-  async function processOne(item, deleteOriginal) {
+  async function processOne(item, deleteOriginal, asWebp = false) {
     const { ch, f } = item;
     const label = f.name || ('#' + f.id);
     const status = (t) => logLine(`[${label}] ${t}`);
@@ -434,11 +458,15 @@ export function createRepackTool(d) {
     }
     let cbz = null;
     try {
-      cbz = await convertToCbzBlob(ch, f, status);
+      cbz = await convertToCbzBlob(ch, f, status, { asWebp: asWebp || !!item.asWebp });
       if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
       let outName = item.outName || toCbzName(cleanFileBase(f.name) + '.cbr');
       outName = String(outName).trim().replace(/_/g, ' ').replace(/\s+/g, ' ');
       if (!/\.cbz$/i.test(outName)) outName = outName.replace(/\.cb[zr]$/i, '') + '.cbz';
+      const useWebp = asWebp || !!item.asWebp;
+      if (useWebp && !/\[WebP\]/i.test(outName)) {
+        outName = outName.replace(/\.cbz$/i, ' [WebP].cbz');
+      }
       status(`Nombre de subida: ${outName}`);
       await uploadCbz(ch, outName, cbz, f.caption || '', status);
       cbz = null;
@@ -454,7 +482,7 @@ export function createRepackTool(d) {
     }
   }
 
-  async function runQueue(selected, deleteOriginal) {
+  async function runQueue(selected, deleteOriginal, asWebp = false) {
     if (running) {
       alert('Ya hay una recarga en curso');
       return;
@@ -468,14 +496,42 @@ export function createRepackTool(d) {
     if (log) log.replaceChildren();
     const total = selected.length;
     let done = 0, ok = 0, fail = 0;
-    logLine(`Cola: ${total} archivo(s).`);
+    logLine(`Cola: ${total} archivo(s).` + (asWebp ? ' WebP ON' : ''));
+
+    const work = async (item, ctx) => {
+      const st = (m) => {
+        logLine(`[${item.f.name}] ${m}`);
+        ctx?.log?.(m);
+      };
+      // processOne uses logLine via status closure — call with flags
+      await processOne({ ...item, asWebp }, deleteOriginal, asWebp);
+    };
+
+    if (jobQueue && typeof jobQueue.enqueue === 'function' && selected.length) {
+      for (const item of selected) {
+        jobQueue.enqueue({
+          type: 'repack',
+          label: item.outName || item.f?.name || 'repack',
+          run: async (ctx) => {
+            await work(item, ctx);
+            ctx.setProgress(100);
+          },
+        });
+      }
+      try { jobQueue.show(); } catch (_) {}
+      running = false;
+      logLine('Tareas añadidas a la cola global.');
+      resetStopButton();
+      return;
+    }
+
     for (const item of selected) {
       if (abort) {
         logLine('Detenido por el usuario');
         break;
       }
       try {
-        await processOne(item, deleteOriginal);
+        await processOne({ ...item, asWebp }, deleteOriginal, asWebp);
         ok++;
       } catch (e) {
         if (e?.cancelled) {
@@ -498,7 +554,7 @@ export function createRepackTool(d) {
   }
 
   /** Pantalla para renombrar cada archivo antes de subir */
-  function showNameReview(selected, deleteOriginal) {
+  function showNameReview(selected, deleteOriginal, asWebp = false) {
     document.querySelector('.info-frame.repack-names')?.remove();
     const frame = el('div', 'info-frame repack-names');
     const box = el('div', 'info-box');
@@ -511,6 +567,9 @@ export function createRepackTool(d) {
     body.append(el('p', 'cover-pick-hint',
       'Edita el nombre final de cada archivo (.cbz). Se proponen espacios en lugar de _ cuando se puede.'
     ));
+    if (asWebp) {
+      body.append(el('p', 'cover-pick-hint', 'WebP activado: se añadirá [WebP] al nombre y las páginas se convertirán.'));
+    }
 
     const inputs = [];
     for (const item of selected) {
@@ -542,7 +601,7 @@ export function createRepackTool(d) {
         return { ...inp._item, outName: name };
       });
       frame.remove();
-      runQueue(ready, deleteOriginal);
+      runQueue(ready, deleteOriginal, asWebp);
     };
     actions.append(cancel, goBtn);
     body.append(actions);
@@ -574,6 +633,12 @@ export function createRepackTool(d) {
     delCb.checked = true;
     delLabel.append(delCb, document.createTextNode(' Borrar el original tras subir OK'));
     body.append(delLabel);
+
+    const webpLabel = el('label', 'repack-check');
+    const webpCb = el('input');
+    webpCb.type = 'checkbox';
+    webpLabel.append(webpCb, document.createTextNode(' Convertir páginas a WebP (añade [WebP] al nombre)'));
+    body.append(webpLabel);
 
     const listHost = el('div', 'repack-list');
     body.append(listHost);
@@ -626,7 +691,7 @@ export function createRepackTool(d) {
       if (selected.length > 1 && !confirm(`Vas a procesar ${selected.length} archivos. ¿Seguro? Mejor de uno en uno en móvil.`)) return;
       frame.remove();
       // Siempre pedir/editar nombres antes de subir
-      showNameReview(selected, delCb.checked);
+      showNameReview(selected, delCb.checked, !!webpCb.checked);
     };
     collectCandidates().then((list) => {
       candidates = list;
@@ -695,3 +760,4 @@ export function createRepackTool(d) {
     syncFloatingUi,
   };
 }
+

@@ -19,6 +19,7 @@ export function createUploadTool(d) {
     kv, peerOf,
     fetchFiles, refreshLibrary,
     natural, formatBytes,
+    jobQueue,
   } = d;
   const getClient = () => d.client;
   const getReady = () => d.ready;
@@ -32,6 +33,23 @@ export function createUploadTool(d) {
   let abort = false;
 
   const yieldTick = () => new Promise((r) => setTimeout(r, 0));
+
+  async function blobToWebp(blob, quality = 0.82) {
+    if (!blob || !blob.size) return blob;
+    if ((blob.type || '').includes('webp')) return blob;
+    try {
+      const bmp = await createImageBitmap(blob);
+      const cv = document.createElement('canvas');
+      cv.width = bmp.width;
+      cv.height = bmp.height;
+      cv.getContext('2d').drawImage(bmp, 0, 0);
+      bmp.close?.();
+      const out = await new Promise((res) => cv.toBlob(res, 'image/webp', quality));
+      return out || blob;
+    } catch {
+      return blob;
+    }
+  }
 
   function ensureUploadChip() {
     let chip = document.getElementById('upload-chip');
@@ -186,8 +204,32 @@ export function createUploadTool(d) {
     const name = file.name || 'comic';
 
     if (isZipHeader(u8) || /\.cbz$/i.test(name)) {
-      status?.('Ya es ZIP/CBZ');
-      return new Blob([u8], { type: 'application/zip' });
+      if (!asWebp) {
+        status?.('Ya es ZIP/CBZ');
+        return new Blob([u8], { type: 'application/zip' });
+      }
+      status?.('Reempaquetando CBZ → WebP…');
+      const reader = new zip.ZipReader(new zip.BlobReader(new Blob([u8], { type: 'application/zip' })));
+      const entries = await reader.getEntries();
+      const writer = new zip.ZipWriter(new zip.BlobWriter('application/zip'));
+      let nImg = 0;
+      for (const e of entries) {
+        if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
+        if (e.directory) continue;
+        const base = (e.filename || '').split(/[/\]/).pop() || e.filename;
+        if (!/\.(jpe?g|png|webp|gif|avif)$/i.test(base)) continue;
+        let pageBlob = await e.getData(new zip.BlobWriter());
+        pageBlob = await blobToWebp(pageBlob);
+        const outName = base.replace(/\.[^.]+$/, '.webp');
+        nImg++;
+        await writer.add(outName, new zip.BlobReader(pageBlob), { level: 0 });
+        if (nImg % 5 === 0) status?.(`WebP… ${nImg} img`);
+        await yieldTick();
+      }
+      await reader.close();
+      const out = await writer.close();
+      status?.(`CBZ WebP listo (${formatBytes?.(out.size) || out.size + ' B'}, ${nImg} img)`);
+      return out;
     }
 
     if (!isRarHeader(u8) && !/\.cbr$/i.test(name)) {
@@ -225,9 +267,16 @@ export function createUploadTool(d) {
       if (!src.byteLength) continue;
       const copy = new Uint8Array(src.byteLength);
       copy.set(src);
-      const pageBlob = new Blob([copy.buffer], { type: mimeOf(base) });
+      let pageBlob = new Blob([copy.buffer], { type: mimeOf(base) });
+      let outName = base;
+      if (asWebp) {
+        pageBlob = await blobToWebp(pageBlob);
+        outName = base.replace(/\.[^.]+$/, '.webp');
+      }
       nImg++;
-      await writer.add(base, new zip.BlobReader(pageBlob), { level: 0 });
+      await writer.add(outName, new zip.BlobReader(pageBlob), { level: 0 });
+      if (nImg % 5 === 0) status?.(`Empaquetando… ${nImg} img`);
+      await yieldTick();
       if (nImg % 3 === 0) {
         status?.(`Empaquetando… ${nImg} img`);
         await yieldTick();
@@ -643,11 +692,41 @@ export function createUploadTool(d) {
         outName = outName.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
         if (!/\.cbz$/i.test(outName)) outName = outName.replace(/\.cb[zr]$/i, '') + '.cbz';
         if (!/\.cbz$/i.test(outName)) outName += '.cbz';
+        const asWebp = !!asWebpChk?.checked;
+        if (asWebp && !/\[WebP\]/i.test(outName)) {
+          outName = outName.replace(/\.cbz$/i, ' [WebP].cbz');
+        }
 
         if (!confirm(`¿Subir como «${outName}» al canal «${chName}» (${ed})?`)) return;
 
         const fileRef = pickedFile;
-        // Cerrar formulario y mostrar panel de log (como Recarga CBR)
+        const runJob = async (ctx) => {
+          const st = (msg) => { ctx.log(msg); logLine(msg); };
+          abort = false;
+          st('Preparando canal…');
+          ctx.setProgress(10);
+          await yieldTick();
+          await ctx.waitWhilePaused?.();
+          if (ctx.isAborted?.()) throw Object.assign(new Error('cancelado'), { cancelled: true });
+          const ch = await ensureChannel(chName, ed, st);
+          ctx.setProgress(20);
+          st(asWebp ? 'Convirtiendo a CBZ WebP…' : 'Convirtiendo a CBZ si hace falta…');
+          await yieldTick();
+          let blob = await localFileToCbzBlob(fileRef, st, { asWebp });
+          ctx.setProgress(55);
+          await ctx.waitWhilePaused?.();
+          st('Subiendo a Telegram…');
+          await uploadCbz(ch, outName, blob, '', st);
+          blob = null;
+          ctx.setProgress(90);
+          st('Actualizando listado…');
+          try { await fetchFiles(ch); } catch (e) {
+            st('Listado: ' + (e?.message || e));
+          }
+          ctx.setProgress(100);
+          st('✓ Subido correctamente');
+        };
+
         frame.remove();
         busy = true;
         abort = false;
@@ -655,46 +734,50 @@ export function createUploadTool(d) {
         const logEl = document.getElementById('upload-log');
         if (logEl) logEl.replaceChildren();
         setFill(0);
-        logLine(`Archivo: ${fileRef.name} (${formatBytes?.(fileRef.size) || fileRef.size + ' B'})`);
+        logLine(`Archivo: ${fileRef.name}`);
         logLine(`Destino: ${chName} · ${ed}`);
         logLine(`Nombre final: ${outName}`);
-        const st = (msg) => logLine(msg);
+        if (asWebp) logLine('Modo WebP activado');
 
-        try {
-          st('Preparando canal…');
-          await yieldTick();
-          const ch = await ensureChannel(chName, ed, st);
-          if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
-          setFill(15);
-          st('Convirtiendo a CBZ si hace falta…');
-          await yieldTick();
-          let blob = await localFileToCbzBlob(fileRef, st);
-          if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
-          setFill(55);
-          st(`CBZ listo · subiendo a Telegram…`);
-          await yieldTick();
-          await uploadCbz(ch, outName, blob, '', st);
-          blob = null;
-          if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
-          setFill(90);
-          st('Actualizando listado del canal…');
-          try { await fetchFiles(ch); } catch (e) {
-            st('Listado: ' + (e?.message || e));
-          }
-          setFill(100);
-          st('✓ Subido correctamente');
-        } catch (e) {
-          if (e?.cancelled) st('Cancelado');
-          else {
-            console.error('[upload]', e);
-            st('ERROR: ' + (e?.message || e));
-          }
-        } finally {
+        if (jobQueue && typeof jobQueue.enqueue === 'function') {
+          jobQueue.enqueue({
+            type: 'upload',
+            label: outName,
+            run: async (ctx) => {
+              try {
+                await runJob(ctx);
+              } finally {
+                busy = false;
+                const btnStop = document.getElementById('upload-stop');
+                if (btnStop) btnStop.textContent = 'Cerrar';
+                setFill(100);
+                syncFloatingUi();
+              }
+            },
+          });
+          try { jobQueue.show(); } catch (_) {}
           busy = false;
-          abort = false;
-          const btnStop = document.getElementById('upload-stop');
-          if (btnStop) btnStop.textContent = 'Cerrar';
-          syncFloatingUi();
+        } else {
+          try {
+            await runJob({
+              log: logLine,
+              setProgress: setFill,
+              waitWhilePaused: async () => {},
+              isAborted: () => abort,
+            });
+          } catch (e) {
+            if (e?.cancelled) logLine('Cancelado');
+            else {
+              console.error('[upload]', e);
+              logLine('ERROR: ' + (e?.message || e));
+            }
+          } finally {
+            busy = false;
+            abort = false;
+            const btnStop = document.getElementById('upload-stop');
+            if (btnStop) btnStop.textContent = 'Cerrar';
+            syncFloatingUi();
+          }
         }
       };
 
@@ -710,6 +793,13 @@ export function createUploadTool(d) {
 
       body.append(el('div', 'info-sec', 'Título del archivo'));
       body.append(seriesInp, numberInp, infoInp, preview);
+
+      const webpRow = el('label', 'repack-check');
+      const asWebpChk = el('input');
+      asWebpChk.type = 'checkbox';
+      asWebpChk.id = 'upload-as-webp';
+      webpRow.append(asWebpChk, document.createTextNode(' Convertir páginas a WebP (añade [WebP] al nombre)'));
+      body.append(webpRow);
 
       body.append(status);
       actions.append(cancel, goBtn);
