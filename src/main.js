@@ -866,19 +866,13 @@ function art(kind, name, ch) {
     return false;
   };
 
-  // Sin imagen en GitHub → portada del primer cómic del canal
+  // Sin imagen en GitHub → portada de algún cómic del canal
   const fallbackComic = async () => {
     if (kind !== 'channels' || !ch) return false;
     try {
-      let files = (await kv.get('f:' + ch.id)) || [];
-      if (!files.length) {
-        try { files = await fetchFiles(ch); } catch (_) { return false; }
-      }
-      if (!files.length) return false;
-      const f = files[0];
-      const b = await getCover(ch, f);
+      const b = await firstAvailableCover(ch, null);
       if (!b) return false;
-      await kv.set(key, { blob: b, url: `comic:${ch.id}:${f.id}`, fromComic: true });
+      await kv.set(key, { blob: b, url: `comic:${ch.id}:auto`, fromComic: true });
       if (d.isConnected) showBlob(b);
       return true;
     } catch (_) {
@@ -1270,14 +1264,35 @@ function showSeriesInfo(ch, seriesLabel, files) {
     alert('No se pudo mostrar la información');
   }
 }
+
+/** Primera portada de cómic disponible (prueba varios si el 1º falla, p.ej. CBR sin abrir). */
+async function firstAvailableCover(ch, files) {
+  let list = Array.isArray(files) ? files : [];
+  if (!list.length && ch?.id) {
+    try {
+      list = (await kv.get('f:' + ch.id)) || [];
+    } catch (_) { list = []; }
+  }
+  if (!list.length && ch?.id) {
+    try { list = await fetchFiles(ch); } catch (_) { list = []; }
+  }
+  for (const f of list) {
+    if (!f?.id) continue;
+    try {
+      const b = await getCover(ch, f);
+      if (b instanceof Blob && b.size) return b;
+    } catch (_) {}
+  }
+  return null;
+}
+
 const seriesCoverKey = (ch, label) => `sc:${ch.id}:${String(label || '').toLowerCase()}`;
 async function getSeriesCoverBlob(ch, seriesLabel, files) {
   try {
     const b = await kv.get(seriesCoverKey(ch, seriesLabel));
-    if (b instanceof Blob) return b;
+    if (b instanceof Blob && b.size) return b;
   } catch (_) {}
-  if (files?.[0]) return getCover(ch, files[0]);
-  return null;
+  return firstAvailableCover(ch, files);
 }
 async function setSeriesCoverBlob(ch, seriesLabel, blob) {
   if (!blob) return;
@@ -1456,11 +1471,9 @@ const channelCoverKey = (ch) => `cc:${ch.id}`;
 async function getChannelCoverBlob(ch, files) {
   try {
     const b = await kv.get(channelCoverKey(ch));
-    if (b instanceof Blob) return b;
+    if (b instanceof Blob && b.size) return b;
   } catch (_) {}
-  // Portada GitHub / fallback cómic vía art no aplica aquí; usar primer cómic si hay
-  if (files?.[0]) return getCover(ch, files[0]);
-  return null;
+  return firstAvailableCover(ch, files);
 }
 async function setChannelCoverBlob(ch, blob) {
   if (!blob) return;
@@ -1496,45 +1509,50 @@ function applyCoverProgress(node, prog) {
 }
 
 function channelCoverNode(ch, files) {
-  // Si hay portada personalizada se muestra; si no, el mismo flujo que antes (GitHub / cómic)
   const host = el('div', 'cover');
   const letter = el('span', '', (channelDisplayName(ch) || '?').slice(0, 1).toUpperCase());
   host.append(letter);
   const prog = channelReadProgress(ch, files);
   if (prog) applyCoverProgress(host, prog);
+
+  const showOnHost = (blob) => {
+    if (!blob || !host.isConnected) return;
+    const img = new Image();
+    img.onload = () => {
+      if (!host.isConnected) return;
+      host.replaceChildren(img);
+      if (prog) applyCoverProgress(host, prog);
+    };
+    img.src = URL.createObjectURL(blob);
+  };
+
   host._load = async () => {
+    // 1) Portada manual del canal
     try {
       const custom = await kv.get(channelCoverKey(ch));
-      if (custom instanceof Blob) {
-        const img = new Image();
-        img.onload = () => {
-          host.replaceChildren(img);
-          if (prog) applyCoverProgress(host, prog);
-        };
-        img.src = URL.createObjectURL(custom);
+      if (custom instanceof Blob && custom.size) {
+        showOnHost(custom);
         return;
       }
     } catch (_) {}
-    // Sin personalizada → comportamiento original (GitHub / fallback)
-    const artNode = art('channels', ch.name, ch);
-    if (prog) {
-      // Pintar progreso sobre el nodo de arte cuando cargue
-      const prevLoad = artNode._load;
-      artNode._load = async () => {
-        await prevLoad?.();
-        applyCoverProgress(artNode, prog);
-      };
-      // Si ya tiene contenido, aplicar ya
-      if (artNode.querySelector('img')) applyCoverProgress(artNode, prog);
-    }
-    if (host.parentNode) {
-      host.replaceWith(artNode);
-      artNode._load?.();
-    } else {
-      host.replaceChildren();
-      host.append(artNode);
-      artNode._load?.();
-    }
+
+    // 2) Arte GitHub / public/channels
+    try {
+      const gh = await getGithubChannelArtBlob(ch);
+      if (gh instanceof Blob && gh.size) {
+        showOnHost(gh);
+        return;
+      }
+    } catch (_) {}
+
+    // 3) Primer cómic del canal con portada disponible (no solo el 1º archivo)
+    try {
+      const comic = await firstAvailableCover(ch, files);
+      if (comic) {
+        showOnHost(comic);
+        return;
+      }
+    } catch (_) {}
   };
   io.observe(host);
   return host;
