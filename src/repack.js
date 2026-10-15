@@ -13,6 +13,7 @@ export function createRepackTool(d) {
     natural, formatBytes,
     getIsHome,
     parseComicName, comicDisplay, comicDisplayName,
+    seriesDisplayName, getComicSeriesOverride,
   } = d;
   const getClient = () => d.client;
   const getReady = () => d.ready;
@@ -105,37 +106,62 @@ export function createRepackTool(d) {
     const cleaned = cleanFileBase(raw);
     const chName = (ch?.name || '').trim();
 
-    let listFallback = cleaned;
-    try {
-      if (typeof comicDisplay === 'function') {
-        const d = comicDisplay(raw, chName);
-        if (d && String(d).trim()) listFallback = String(d).trim();
-      }
-    } catch (_) {}
-
-    let base = '';
+    // 1) Título de cómic editado a mano (prioridad total sobre el parseo)
     try {
       if (typeof comicDisplayName === 'function') {
-        const shown = comicDisplayName(ch, f, listFallback);
-        if (shown && String(shown).trim()) base = cleanFileBase(shown);
+        const custom = comicDisplayName(ch, f, '');
+        if (custom && String(custom).trim()) {
+          const base = cleanFileBase(custom);
+          return includeChannel ? ensureChannelInName(base, chName) : stripChannelFromName(base, chName);
+        }
       }
     } catch (_) {}
 
-    if (!base) {
-      let parsed = null;
+    // 2) Serie efectiva: override manual o parseo del nombre
+    let parsed = null;
+    try {
+      if (typeof parseComicName === 'function') {
+        parsed = parseComicName(cleaned + '.cbz', chName) || parseComicName(raw, chName);
+      }
+    } catch (_) {}
+
+    let seriesRaw = '';
+    try {
+      if (typeof getComicSeriesOverride === 'function') {
+        const ov = getComicSeriesOverride(ch, f);
+        if (ov && String(ov).trim()) seriesRaw = String(ov).trim();
+      }
+    } catch (_) {}
+    if (!seriesRaw && parsed?.series) seriesRaw = String(parsed.series).trim();
+
+    // Aplicar renombre de serie si existe
+    let series = seriesRaw;
+    try {
+      if (series && typeof seriesDisplayName === 'function') {
+        const shown = seriesDisplayName(ch, seriesRaw);
+        if (shown && String(shown).trim()) series = String(shown).trim();
+      }
+    } catch (_) {}
+
+    const num = parsed?.number != null && String(parsed.number).length
+      ? String(parsed.number).trim()
+      : '';
+    const info = String(parsed?.info || '').trim();
+
+    let base = '';
+    if (series && num) {
+      base = info ? (series + ' #' + num + ' - ' + info) : (series + ' #' + num);
+    } else if (series) {
+      base = info ? (series + ' - ' + info) : series;
+    } else {
+      // Fallback listado / nombre limpio
       try {
-        if (typeof parseComicName === 'function') {
-          parsed = parseComicName(cleaned + '.cbz', chName) || parseComicName(raw, chName);
+        if (typeof comicDisplay === 'function') {
+          const d = comicDisplay(raw, chName);
+          if (d && String(d).trim()) base = cleanFileBase(d);
         }
       } catch (_) {}
-      if (parsed && parsed.series && parsed.number != null && String(parsed.number).length) {
-        const series = String(parsed.series).trim();
-        const num = String(parsed.number).trim();
-        const info = String(parsed.info || '').trim();
-        base = info ? (series + ' #' + num + ' - ' + info) : (series + ' #' + num);
-      } else {
-        base = cleaned;
-      }
+      if (!base) base = cleaned;
     }
 
     if (includeChannel) return ensureChannelInName(base, chName);
@@ -996,4 +1022,3 @@ export function createRepackTool(d) {
     syncFloatingUi,
   };
 }
-
