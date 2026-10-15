@@ -570,7 +570,26 @@ export function createRepackTool(d) {
     if (fill) fill.style.width = Math.max(0, Math.min(100, pct)) + '%';
   }
 
-  async function processOne(item, deleteOriginal, asWebp = false, onStatus, webpOpts = {}) {
+  /** Aviso en el canal de Telegram para poder subir a mano en el mismo sitio */
+  async function postErrorPlaceholder(ch, fileName, errMsg) {
+    if (!ch) return;
+    try {
+      await getReady();
+      const client = getClient();
+      const peer = peerOf(ch);
+      const name = String(fileName || 'archivo.cbz').trim() || 'archivo.cbz';
+      const detail = String(errMsg || 'error desconocido').slice(0, 800);
+      const text =
+        '⚠️ Fallo al subir «' + name + '»\n' +
+        detail + '\n\n' +
+        'Sube el archivo manualmente en este canal para mantener el orden.';
+      await client.sendMessage(peer, { message: text });
+    } catch (e) {
+      console.warn('[repack] no se pudo dejar aviso en el canal', e);
+    }
+  }
+
+  async function processOne(item, deleteOriginal, asWebp = false, onStatus, webpOpts = {}, onProgress) {
     const { ch, f } = item;
     const label = f.name || ('#' + f.id);
     const status = (t) => {
@@ -578,32 +597,61 @@ export function createRepackTool(d) {
       try { logLine(msg); } catch (_) {}
       try { onStatus?.(msg); } catch (_) {}
     };
+    const prog = (p) => { try { onProgress?.(p); } catch (_) {} };
+
     status(`Inicio (${formatBytes?.(f.size) || f.size + ' B'})`);
+    prog(5);
     if (f.size > 40 * 1024 * 1024) {
       status('AVISO: archivo grande; en móvil puede fallar por memoria');
     }
     let cbz = null;
+    let outName = item.outName || toCbzName(cleanFileBase(f.name) + '.cbr');
     try {
       const useWebp = !!(item && item.asWebp) || !!asWebp;
       const wOpts = (item && item.webpOpts) || webpOpts || {};
-      cbz = await convertToCbzBlob(ch, f, status, { asWebp: useWebp, webpOpts: wOpts });
+      prog(10);
+      const statusWithProg = (t) => {
+        status(t);
+        // Estimar avance por fase a partir del texto
+        const s = String(t || '');
+        if (/Descargando/i.test(s)) {
+          const m = s.match(/(\d{1,3})\s*%/);
+          prog(m ? 10 + Math.round((Number(m[1]) || 0) * 0.35) : 20);
+        } else if (/Extrayendo|Empaquetando|WebP|Reempaquetando/i.test(s)) {
+          prog(50);
+        } else if (/Subiendo/i.test(s)) {
+          const m = s.match(/(\d{1,3})\s*%/);
+          prog(m ? 70 + Math.round((Number(m[1]) || 0) * 0.25) : 75);
+        } else if (/Preparando subida/i.test(s)) {
+          prog(68);
+        }
+      };
+      cbz = await convertToCbzBlob(ch, f, statusWithProg, { asWebp: useWebp, webpOpts: wOpts });
       if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
-      let outName = item.outName || toCbzName(cleanFileBase(f.name) + '.cbr');
       outName = String(outName).trim().replace(/_/g, ' ').replace(/\s+/g, ' ');
       if (!/\.cbz$/i.test(outName)) outName = outName.replace(/\.cb[zr]$/i, '') + '.cbz';
       if (useWebp && !/\[WebP\]/i.test(outName)) {
         outName = outName.replace(/\.cbz$/i, ' [WebP].cbz');
       }
       status(`Nombre de subida: ${outName}`);
-      await uploadCbz(ch, outName, cbz, f.caption || '', status);
+      prog(65);
+      await uploadCbz(ch, outName, cbz, f.caption || '', statusWithProg);
       cbz = null;
       status('Subido a Telegram');
+      prog(95);
       if (deleteOriginal) {
         status('Borrando original…');
         await deleteMessage(ch, f.id);
         status('Original borrado');
       }
       try { await fetchFiles(ch); } catch (_) {}
+      prog(100);
+    } catch (e) {
+      if (!e?.cancelled && !abort) {
+        status('ERROR: ' + (e?.message || e));
+        await postErrorPlaceholder(ch, outName || f.name, e?.message || e);
+      }
+      throw e;
     } finally {
       cbz = null;
     }
@@ -624,7 +672,10 @@ export function createRepackTool(d) {
       const onStatus = (m) => {
         try { ctx?.log?.(m); } catch (_) {}
       };
-      await processOne({ ...item, asWebp, webpOpts }, deleteOriginal, asWebp, onStatus, webpOpts);
+      const onProgress = (p) => {
+        try { ctx?.setProgress?.(p); } catch (_) {}
+      };
+      await processOne({ ...item, asWebp, webpOpts }, deleteOriginal, asWebp, onStatus, webpOpts, onProgress);
     };
 
     if (jobQueue && typeof jobQueue.enqueue === 'function' && selected.length) {
@@ -661,7 +712,7 @@ export function createRepackTool(d) {
         break;
       }
       try {
-        await processOne({ ...item, asWebp, webpOpts }, deleteOriginal, asWebp, null, webpOpts);
+        await processOne({ ...item, asWebp, webpOpts }, deleteOriginal, asWebp, null, webpOpts, setFill);
         ok++;
       } catch (e) {
         if (e?.cancelled) {
