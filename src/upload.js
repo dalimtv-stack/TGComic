@@ -849,29 +849,69 @@ export function createUploadTool(d) {
         if (!confirm('¿Subir como «' + outName + '» al canal «' + chName + '» (' + ed + ')?')) return;
 
         const fileRef = pickedFile;
+        const postErrorPlaceholder = async (ch, fileName, errMsg) => {
+          if (!ch) return;
+          try {
+            await getReady();
+            const client = getClient();
+            const peer = peerOf(ch);
+            const name = String(fileName || 'archivo.cbz').trim() || 'archivo.cbz';
+            const detail = String(errMsg || 'error desconocido').slice(0, 800);
+            const text =
+              '⚠️ Fallo al subir «' + name + '»\n' +
+              detail + '\n\n' +
+              'Sube el archivo manualmente en este canal para mantener el orden.';
+            await client.sendMessage(peer, { message: text });
+          } catch (e) {
+            console.warn('[upload] no se pudo dejar aviso en el canal', e);
+          }
+        };
+
         const runJob = async (ctx) => {
-          const st = (msg) => { try { ctx.log(msg); } catch (_) {} try { logLine(msg); } catch (_) {} };
-          abort = false;
-          st('Preparando canal…');
-          ctx.setProgress(10);
-          await yieldTick();
-          await ctx.waitWhilePaused?.();
-          if (ctx.isAborted?.()) throw Object.assign(new Error('cancelado'), { cancelled: true });
-          const ch = await ensureChannel(chName, ed, st);
-          ctx.setProgress(20);
-          st(wantWebp ? 'Convirtiendo a CBZ WebP…' : 'Convirtiendo a CBZ si hace falta…');
-          await yieldTick();
-          let blob = await localFileToCbzBlob(fileRef, st, { asWebp: wantWebp, webpOpts });
-          ctx.setProgress(55);
-          await ctx.waitWhilePaused?.();
-          st('Subiendo a Telegram…');
-          await uploadCbz(ch, outName, blob, '', st);
-          blob = null;
-          ctx.setProgress(90);
-          st('Actualizando listado…');
-          try { await fetchFiles(ch); } catch (e) { st('Listado: ' + (e?.message || e)); }
-          ctx.setProgress(100);
-          st('✓ Subido correctamente');
+          let ch = null;
+          const st = (msg) => {
+            try { ctx.log(msg); } catch (_) {}
+            try { logLine(msg); } catch (_) {}
+            const s = String(msg || '');
+            if (/Empaquetando|WebP|Extrayendo/i.test(s)) {
+              try { ctx.setProgress?.(45); } catch (_) {}
+            }
+            const m = s.match(/(\d{1,3})\s*%\s*$/);
+            if (m) {
+              const pct = Number(m[1]) || 0;
+              if (/Subiendo/i.test(s)) try { ctx.setProgress?.(70 + Math.round(pct * 0.25)); } catch (_) {}
+              else if (/Descargando|Leyendo/i.test(s)) try { ctx.setProgress?.(15 + Math.round(pct * 0.2)); } catch (_) {}
+            }
+          };
+          try {
+            abort = false;
+            st('Preparando canal…');
+            ctx.setProgress(10);
+            await yieldTick();
+            await ctx.waitWhilePaused?.();
+            if (ctx.isAborted?.()) throw Object.assign(new Error('cancelado'), { cancelled: true });
+            ch = await ensureChannel(chName, ed, st);
+            ctx.setProgress(20);
+            st(wantWebp ? 'Convirtiendo a CBZ WebP…' : 'Convirtiendo a CBZ si hace falta…');
+            await yieldTick();
+            let blob = await localFileToCbzBlob(fileRef, st, { asWebp: wantWebp, webpOpts });
+            ctx.setProgress(55);
+            await ctx.waitWhilePaused?.();
+            st('Subiendo a Telegram…');
+            await uploadCbz(ch, outName, blob, '', st);
+            blob = null;
+            ctx.setProgress(90);
+            st('Actualizando listado…');
+            try { await fetchFiles(ch); } catch (e) { st('Listado: ' + (e?.message || e)); }
+            ctx.setProgress(100);
+            st('✓ Subido correctamente');
+          } catch (e) {
+            if (!e?.cancelled && !abort) {
+              st('ERROR: ' + (e?.message || e));
+              await postErrorPlaceholder(ch, outName, e?.message || e);
+            }
+            throw e;
+          }
         };
 
         frame.remove();
