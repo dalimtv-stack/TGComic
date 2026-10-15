@@ -162,6 +162,15 @@ export function createJobQueue({ el, pref }) {
         // Actualizar última línea si es el mismo progreso (… 12%) en vez de spamear
         const stripPct = (s) => String(s).replace(/\s*\d{1,3}\s*%\s*$/, '').trim();
         const isPct = /\d{1,3}\s*%\s*$/.test(text);
+        if (isPct) {
+          const m = text.match(/(\d{1,3})\s*%\s*$/);
+          if (m) {
+            const pct = Math.min(100, Math.max(0, Number(m[1]) || 0));
+            // Mapear % de subida/descarga a un tramo de la barra global
+            next.progress = Math.max(next.progress || 0, pct);
+            setBar(next.progress);
+          }
+        }
         if (isPct && next.log.length) {
           const last = next.log[next.log.length - 1];
           if (stripPct(last) === stripPct(text)) {
@@ -373,20 +382,27 @@ export function createJobQueue({ el, pref }) {
     }
     if (eta) eta.textContent = etaLabel() || (paused ? 'En pausa' : '');
 
-    const running = jobs.find((x) => x.status === 'running');
+    const runningJob = jobs.find((x) => x.status === 'running');
     if (curStatus) {
-      if (running) {
-        curStatus.textContent = running.label + ' · ' + Math.round(running.progress || 0) + '%';
+      if (runningJob) {
+        // El detalle está en el log; aquí solo el nombre breve (la barra lleva el %)
+        curStatus.textContent = runningJob.label || 'Procesando…';
       } else if (paused) {
         curStatus.textContent = 'En pausa';
       } else {
-        const next = jobs.find((x) => x.status === 'pending');
-        curStatus.textContent = next ? ('Siguiente: ' + next.label) : 'Ninguno';
+        const nextJ = jobs.find((x) => x.status === 'pending');
+        curStatus.textContent = nextJ ? ('Siguiente: ' + nextJ.label) : 'Ninguno';
       }
     }
 
-    // Rellenar barra con progreso del running
-    if (running) setBar(running.progress || 0);
+    // Barra: progreso del job en curso, o avance global de la cola
+    if (runningJob) {
+      setBar(runningJob.progress || 0);
+    } else {
+      const total = jobs.filter((x) => x.status === 'done' || x.status === 'error' || x.status === 'pending' || x.status === 'running' || x.status === 'interrupted').length;
+      const done = jobs.filter((x) => x.status === 'done').length;
+      if (total > 0 && done > 0) setBar(Math.round((done / total) * 100));
+    }
 
     if (!list) return;
     list.replaceChildren();
