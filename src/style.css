@@ -320,6 +320,8 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
   -webkit-overflow-scrolling:touch;
   overscroll-behavior:contain;
   touch-action:pan-y;
+  padding-bottom:12px;
+  box-sizing:border-box;
 }
 .job-fold-scroll{
   max-height:min(110px, 18vh);overflow:auto;
@@ -334,10 +336,10 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 }
 @media (hover:hover) and (pointer:fine){
   .repack-panel{
-    min-width:280px;min-height:160px;
-    max-width:min(92vw,720px);
-    max-height:calc(100dvh - 24px);
-    max-height:calc(100vh - 24px);
+    min-width:280px;min-height:280px;
+    max-width:calc(100vw - 16px);
+    max-height:calc(100dvh - 64px);
+    max-height:calc(100vh - 64px);
     padding-top:16px;
   }
   .repack-resize-handle{

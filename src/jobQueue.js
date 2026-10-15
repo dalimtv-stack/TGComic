@@ -123,6 +123,18 @@ export function createJobQueue({ el, pref }) {
     pump();
   }
 
+  /** Cancela el trabajo en curso (si el runner respeta isAborted) y no arranca el siguiente hasta Reanudar si sigue en pausa. */
+  function cancelCurrent() {
+    const cur = jobs.find((j) => j.status === 'running');
+    if (cur) {
+      cur.status = 'cancelled';
+      cur.finishedAt = Date.now();
+      cur.error = 'Cancelado';
+      try { currentAbort?.(); } catch (_) {}
+    }
+    emit();
+  }
+
   function retry(id) {
     const j = jobs.find((x) => x.id === id);
     if (!j) return;
@@ -243,15 +255,15 @@ export function createJobQueue({ el, pref }) {
       const startX = e.clientX, startY = e.clientY;
       const startW = panel.offsetWidth, startH = panel.offsetHeight;
       // Más ancho; altura limitada para no tapar el menú ☰ superior
-      const maxW = Math.max(280, window.innerWidth - 16);
-      const topReserve = 56; // menú superior
-      const maxH = Math.max(180, window.innerHeight - topReserve - 12);
+      const maxW = Math.max(320, window.innerWidth - 16);
+      const topReserve = 56;
+      const maxH = Math.max(280, window.innerHeight - topReserve - 12);
+      const minW = 280, minH = 280; // límite inferior como antes
       const onMove = (ev) => {
-        // Anclado abajo-derecha: arrastrar el asa (arriba-izq) hacia fuera crece
         const dw = startX - ev.clientX;
         const dh = startY - ev.clientY;
-        const w = Math.min(maxW, Math.max(280, startW + dw));
-        const h = Math.min(maxH, Math.max(160, startH + dh));
+        const w = Math.min(maxW, Math.max(minW, startW + dw));
+        const h = Math.min(maxH, Math.max(minH, startH + dh));
         panel.style.width = w + 'px';
         panel.style.height = h + 'px';
         panel.style.maxHeight = h + 'px';
@@ -346,6 +358,13 @@ export function createJobQueue({ el, pref }) {
       else pause();
       btnPause.textContent = paused ? 'Reanudar' : 'Pausar';
     };
+    const btnCancel = el('button', 'btn', 'Cancelar actual');
+    btnCancel.id = 'job-queue-cancel';
+    btnCancel.type = 'button';
+    btnCancel.onclick = () => {
+      if (!confirm('¿Cancelar el trabajo en curso?')) return;
+      cancelCurrent();
+    };
     const btnClear = el('button', 'btn', 'Limpiar completados');
     btnClear.id = 'job-queue-clear';
     btnClear.type = 'button';
@@ -353,7 +372,7 @@ export function createJobQueue({ el, pref }) {
     const btnClose = el('button', 'btn', 'Cerrar');
     btnClose.type = 'button';
     btnClose.onclick = () => { panel.hidden = true; };
-    actions.append(btnPause, btnClear, btnClose);
+    actions.append(btnPause, btnCancel, btnClear, btnClose);
 
     const onFoldToggle = () => requestAnimationFrame(() => layoutJobLogs(panel));
     curFold.addEventListener('toggle', onFoldToggle);
@@ -406,6 +425,8 @@ export function createJobQueue({ el, pref }) {
       scrollEl.style.maxHeight = inner + 'px';
       scrollEl.style.minHeight = '60px';
       scrollEl.style.flex = 'none';
+      scrollEl.style.paddingBottom = '12px';
+      scrollEl.style.boxSizing = 'border-box';
     };
     applyFold(cur, log, half);
     applyFold(pend, list, half);

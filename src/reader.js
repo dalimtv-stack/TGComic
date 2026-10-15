@@ -82,7 +82,7 @@ export function createReader(state, d) {
 
   function reader(f, pages, zr, ctx) {
     const chId = ctx?.ch?.id;
-    const savePage = (i) => { if (chId != null) setPageIndex(chId, f.id, i); };
+    const savePage = (i) => { if (chId != null) { setPageIndex(chId, f.id, i); try { setLastRead(ch, f); } catch (_) {} } };
     if (chId != null) {
       setPagesTotal(chId, f.id, pages.length);
       const fmt = detectPageFormats(pages);

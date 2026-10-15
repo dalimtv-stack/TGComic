@@ -479,7 +479,7 @@ export function createRepackTool(d) {
     const list = [];
     const channels = Array.isArray(getLIB()) ? getLIB() : [];
     for (const ch of channels) {
-      let files = (await kv.get('f:' + ch.id)) || [];
+      let files = []; try { files = await fetchFiles(ch); } catch (_) { try { files = (await kv.get('f:' + ch.id)) || []; } catch (__) { files = []; } }
       if (!files.length) {
         try { files = await fetchFiles(ch); } catch (_) { continue; }
       }
@@ -673,7 +673,8 @@ export function createRepackTool(d) {
     }
   }
 
-  async function processOne(item, deleteOriginal, asWebp = false, onStatus, webpOpts = {}, onProgress) {
+  async function processOne(item, deleteOriginal, asWebp = false, onStatus, webpOpts = {}, onProgress, jobCtx) {
+    const pauseGate = async () => { try { await jobCtx?.waitWhilePaused?.(); } catch (_) {} };
     const { ch, f } = item;
     const label = f.name || ('#' + f.id);
     const status = (t) => {
@@ -683,6 +684,7 @@ export function createRepackTool(d) {
     };
     const prog = (p) => { try { onProgress?.(p); } catch (_) {} };
 
+    await pauseGate();
     status(`Inicio (${formatBytes?.(f.size) || f.size + ' B'})`);
     prog(5);
     if (f.size > 40 * 1024 * 1024) {
@@ -711,7 +713,8 @@ export function createRepackTool(d) {
         }
       };
       cbz = await convertToCbzBlob(ch, f, statusWithProg, { asWebp: useWebp, webpOpts: wOpts });
-      if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
+      await pauseGate();
+      if (abort || jobCtx?.isAborted?.()) throw Object.assign(new Error('cancelado'), { cancelled: true });
       outName = String(outName).trim().replace(/_/g, ' ').replace(/\s+/g, ' ');
       if (!/\.cbz$/i.test(outName)) outName = outName.replace(/\.cb[zr]$/i, '') + '.cbz';
       if (useWebp && !/\[WebP\]/i.test(outName)) {
@@ -719,6 +722,8 @@ export function createRepackTool(d) {
       }
       status(`Nombre de subida: ${outName}`);
       prog(65);
+      await pauseGate();
+      if (jobCtx?.isAborted?.()) throw Object.assign(new Error('cancelado'), { cancelled: true });
       await uploadCbz(ch, outName, cbz, f.caption || '', statusWithProg);
       cbz = null;
       status('Subido a Telegram');
@@ -759,7 +764,7 @@ export function createRepackTool(d) {
       const onProgress = (p) => {
         try { ctx?.setProgress?.(p); } catch (_) {}
       };
-      await processOne({ ...item, asWebp, webpOpts }, deleteOriginal, asWebp, onStatus, webpOpts, onProgress);
+      await processOne({ ...item, asWebp, webpOpts }, deleteOriginal, asWebp, onStatus, webpOpts, onProgress, ctx);
     };
 
     if (jobQueue && typeof jobQueue.enqueue === 'function' && selected.length) {
@@ -1226,14 +1231,104 @@ export function createRepackTool(d) {
     });
   } catch (_) {}
 
-  /** Un cómic → formulario de nombres con WebP forzado (no se puede desmarcar). */
+  /** Formulario tipo «Subir cómic» pero solo WebP forzado sobre un archivo existente. */
   function offerWebpVersion(ch, f) {
     if (!ch || !f) return;
-    showNameReview([{ ch, f }], false, true, {
-      quality: 0.62,
-      resize: true,
-      maxEdge: 2400,
-    });
+    document.querySelector('.info-frame.webp-version')?.remove();
+    const frame = el('div', 'info-frame webp-version');
+    const box = el('div', 'info-box');
+    const head = el('div', 'info-head');
+    head.append(el('span', '', 'Añadir versión WebP'));
+    const close = el('button', 'btn info-close', '×');
+    close.onclick = () => frame.remove();
+    head.append(close);
+    const body = el('div', 'info-body');
+
+    body.append(el('p', 'cover-pick-hint',
+      'Se descargará el archivo, se convertirán las páginas a WebP y se subirá una copia al mismo canal con [WebP] en el nombre.'
+    ));
+    const srcRow = el('div', 'info-row');
+    srcRow.append(el('span', 'info-label', 'Original'), el('span', 'info-value', f.name || ''));
+    body.append(srcRow);
+    const chRow = el('div', 'info-row');
+    chRow.append(el('span', 'info-label', 'Canal'), el('span', 'info-value', ch.name || ''));
+    body.append(chRow);
+
+    const webpLock = el('label', 'repack-check');
+    const webpCb = el('input');
+    webpCb.type = 'checkbox';
+    webpCb.checked = true;
+    webpCb.disabled = true;
+    webpLock.append(webpCb, document.createTextNode(' Convertir páginas a WebP (añade [WebP] al nombre)'));
+    body.append(webpLock);
+
+    const qualityLab = el('label', 'sync-label', 'Calidad WebP (0–1)');
+    const qualityInp = el('input', 'edit-input');
+    qualityInp.type = 'text';
+    qualityInp.value = '0.62';
+    qualityInp.placeholder = '0.62';
+    body.append(qualityLab, qualityInp);
+
+    const resizeRow = el('label', 'repack-check');
+    const resizeCb = el('input');
+    resizeCb.type = 'checkbox';
+    resizeCb.checked = true;
+    resizeRow.append(resizeCb, document.createTextNode(' Redimensionar (lado mayor máx. 2400 px)'));
+    body.append(resizeRow);
+
+    const includeChChk = el('input');
+    includeChChk.type = 'checkbox';
+    includeChChk.checked = true;
+    const includeChRow = el('label', 'repack-check');
+    includeChRow.append(includeChChk, document.createTextNode(' Incluir nombre del canal en el archivo'));
+    body.append(includeChRow);
+
+    body.append(el('label', 'sync-label', 'Nombre al subir'));
+    const nameInp = el('input', 'edit-input');
+    nameInp.type = 'text';
+    nameInp.autocomplete = 'off';
+    const suggested = suggestUploadName(ch, f, true);
+    nameInp.value = /\[WebP\]/i.test(suggested)
+      ? suggested
+      : suggested.replace(/\.cbz$/i, ' [WebP].cbz');
+    body.append(nameInp);
+
+    includeChChk.onchange = () => {
+      let n = suggestUploadName(ch, f, !!includeChChk.checked);
+      if (!/\[WebP\]/i.test(n)) n = n.replace(/\.cbz$/i, ' [WebP].cbz');
+      nameInp.value = n;
+    };
+
+    const delRow = el('label', 'repack-check');
+    const delCb = el('input');
+    delCb.type = 'checkbox';
+    delCb.checked = false;
+    delRow.append(delCb, document.createTextNode(' Borrar el original tras subir OK'));
+    body.append(delRow);
+
+    const actions = el('div', 'edit-actions');
+    const cancel = el('button', 'btn', 'Cancelar');
+    cancel.onclick = () => frame.remove();
+    const goBtn = el('button', 'btn edit-save', 'Subir versión WebP');
+    goBtn.onclick = () => {
+      let name = String(nameInp.value || '').trim().replace(/_/g, ' ').replace(/\s+/g, ' ');
+      if (!name) name = suggestUploadName(ch, f, !!includeChChk.checked);
+      if (!/\.cbz$/i.test(name)) name = name.replace(/\.cb[zr]$/i, '') + '.cbz';
+      if (!/\.cbz$/i.test(name)) name += '.cbz';
+      if (!/\[WebP\]/i.test(name)) name = name.replace(/\.cbz$/i, ' [WebP].cbz');
+      const webpOpts = {
+        quality: parseFloat(String(qualityInp.value).replace(',', '.')) || 0.62,
+        resize: !!resizeCb.checked,
+        maxEdge: 2400,
+      };
+      frame.remove();
+      runQueue([{ ch, f, outName: name, asWebp: true, webpOpts }], !!delCb.checked, true, webpOpts);
+    };
+    actions.append(cancel, goBtn);
+    body.append(actions);
+    box.append(head, body);
+    frame.append(box);
+    document.body.append(frame);
   }
 
   return {

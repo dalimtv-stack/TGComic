@@ -1172,7 +1172,7 @@ function sheet(title, opts) {
   for (const [label, fn] of opts) { const b = el('button', 'btn', label); b.onclick = () => { close(); fn(); }; box.append(b); }
   const c = el('button', 'btn', 'Cancelar'); c.onclick = close;
   box.append(c);
-  // Submenú: no cerrar al pulsar fuera (solo Cancelar o una opción)
+  bg.onclick = (ev) => { if (ev.target === bg) close(); };
   bg.append(box);
   document.body.append(bg);
 }
@@ -2246,9 +2246,84 @@ function groupsView() {
           }
         } catch (_) {}
 
-        if (!continueList.length || !continueHost.isConnected) return;
-        // Mostrar como máximo 5
-        continueList.splice(5);
+        const renderContinue = (list) => {
+          if (!continueHost.isConnected) return;
+          const show = list.slice(0, 5);
+          if (!show.length) {
+            continueHost.replaceChildren();
+            return;
+          }
+          const foldCont = el('details', 'pubs-fold continue-fold');
+          if (pref('continueOpen', '1') === '1') foldCont.open = true;
+          const sumCont = el('summary', '', 'Seguir leyendo');
+          foldCont.append(sumCont);
+          const contInner = el('div', 'continue-fold-body');
+          const track = el('div', 'continue-track');
+          for (const item of show) {
+            const ch = item.ch, f = item.f;
+            const prog = readProgress(ch.id, f.id);
+            const row = el('button', 'continue-row continue-slide');
+            row.type = 'button';
+            row.onclick = () => openComic(ch, f);
+            const thumb = el('div', 'continue-cover');
+            const letter = el('span', '', stripExt(f.name).slice(0, 1).toUpperCase());
+            thumb.append(letter);
+            getCover(ch, f).then((b) => {
+              if (!b || !thumb.isConnected) return;
+              const img = new Image();
+              img.onload = () => { letter.remove(); thumb.prepend(img); };
+              img.src = URL.createObjectURL(b);
+            }).catch(() => {});
+            const meta = el('div', 'continue-meta');
+            meta.append(el('b', '', comicDisplayName(ch, f, comicDisplay(f.name, ch.name) || clean(f.name))));
+            meta.append(el('small', '', sizeLabel(f, ch)));
+            if (prog) {
+              const bar = el('div', 'continue-prog');
+              const fill = el('div', 'continue-prog-fill');
+              fill.style.width = prog.pct + '%';
+              bar.append(fill);
+              const lab = el('span', 'continue-prog-label', `${prog.cur} / ${prog.tot} · ${prog.pct}%`);
+              meta.append(bar, lab);
+            }
+            row.append(thumb, meta);
+            track.append(row);
+          }
+          contInner.append(track);
+          foldCont.append(contInner);
+          foldCont.addEventListener('toggle', () => setPref('continueOpen', foldCont.open ? '1' : '0'));
+          continueHost.replaceChildren(foldCont);
+        };
+
+        renderContinue(continueList);
+
+        // Segundo plano: refrescar listados de canales con progreso pendiente
+        (async () => {
+          try {
+            const lib = (Array.isArray(LIB) && LIB.length) ? LIB : ((await kv.get('lib')) || []);
+            const byCh = new Map(lib.map((c) => [String(c.id), c]));
+            const unfinished = listUnfinishedProgress();
+            const chIds = [...new Set(unfinished.map((u) => String(u.chId)))];
+            let added = false;
+            for (const cid of chIds) {
+              const ch = byCh.get(cid);
+              if (!ch) continue;
+              try {
+                const files = await fetchFiles(ch);
+                for (const u of unfinished.filter((x) => String(x.chId) === cid)) {
+                  const id = cid + ':' + String(u.msgId);
+                  if (seen.has(id)) continue;
+                  const f = files.find((x) => String(x.id) === String(u.msgId));
+                  if (f) {
+                    addItem({ ch, f: { id: f.id, name: f.name, size: f.size }, at: Date.now() });
+                    added = true;
+                  }
+                }
+              } catch (_) {}
+            }
+            if (added && continueHost.isConnected) renderContinue(continueList);
+          } catch (_) {}
+        })();
+        return; // el render antiguo queda sustituido
         const foldCont = el('details', 'pubs-fold continue-fold');
         if (pref('continueOpen', '1') === '1') foldCont.open = true;
         const sumCont = el('summary', '', 'Seguir leyendo');
@@ -2577,10 +2652,6 @@ function filesView(ch) {
         opts.push(unread
           ? ['Marcar comic como leído', () => markComicRead(ch, f, redraw)]
           : ['Marcar comic como no leído', () => markComicUnread(ch, f, redraw)]);
-        opts.push(['Añadir versión WebP', () => {
-          try { repackTool?.offerWebpVersion?.(ch, f); }
-          catch (e) { alert(e?.message || e); }
-        }]);
         // Solo la acción que proceda para la serie completa
         if (seriesLabel && seriesFiles && seriesFiles.length > 1) {
           const anyUnread = seriesFiles.some((x) => !isComicRead(ch.id, x.id));
@@ -2594,6 +2665,10 @@ function filesView(ch) {
           opts.push(['Desagrupar serie', () => setUngroupMode(ch, seriesLabel, 'short', redraw)]);
           opts.push(['Desagrupar serie (con nombre)', () => setUngroupMode(ch, seriesLabel, 'full', redraw)]);
         }
+        opts.push(['Añadir versión WebP', () => {
+          try { repackTool?.offerWebpVersion?.(ch, f); }
+          catch (e) { alert(e?.message || e); }
+        }]);
         return {
           label,
           sub: sizeLabel(f, ch),
@@ -2715,12 +2790,12 @@ function seriesView(ch, s, files) {
           unread
             ? ['Marcar comic como leído', () => markComicRead(ch, f, redraw)]
             : ['Marcar comic como no leído', () => markComicUnread(ch, f, redraw)],
-          ['Añadir versión WebP', () => { try { repackTool?.offerWebpVersion?.(ch, f); } catch (e) { alert(e?.message || e); } }],
           seriesUnread
             ? ['Marcar serie como leída', () => markSeriesRead(ch, files, redraw)]
             : ['Marcar serie como no leída', () => markSeriesUnread(ch, files, redraw)],
           ['Desagrupar serie', () => setUngroupMode(ch, s, 'short', () => history.back())],
           ['Desagrupar serie (con nombre)', () => setUngroupMode(ch, s, 'full', () => history.back())],
+          ['Añadir versión WebP', () => { try { repackTool?.offerWebpVersion?.(ch, f); } catch (e) { alert(e?.message || e); } }],
         ];
         return {
           label: displayLabel,
