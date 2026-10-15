@@ -174,6 +174,83 @@ export function applySnapshot(snap) {
   }
 }
 
+/**
+ * Fusiona snapshot remoto con el local.
+ * - page: / pages: → se queda el número mayor (más progreso)
+ * - read: → leído si cualquiera lo marca
+ * - recentReads → unión por id de cómic (remoto primero)
+ * - resto (prefs, nombres…) → remoto gana si existe; si no, se conserva local
+ */
+function mergeKeyMaps(localKeys, remoteKeys) {
+  const local = localKeys && typeof localKeys === 'object' ? localKeys : {};
+  const remote = remoteKeys && typeof remoteKeys === 'object' ? remoteKeys : {};
+  const out = { ...local };
+
+  const mergeRecent = (a, b) => {
+    let la = [], lb = [];
+    try { la = JSON.parse(a || '[]'); } catch (_) {}
+    try { lb = JSON.parse(b || '[]'); } catch (_) {}
+    if (!Array.isArray(la)) la = [];
+    if (!Array.isArray(lb)) lb = [];
+    const seen = new Set();
+    const res = [];
+    for (const item of [...lb, ...la]) {
+      if (!item || item.chId == null || item.msgId == null) continue;
+      const id = String(item.chId) + ':' + String(item.msgId);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      res.push(item);
+      if (res.length >= 8) break;
+    }
+    return JSON.stringify(res);
+  };
+
+  for (const [k, rv] of Object.entries(remote)) {
+    if (!k) continue;
+    const lv = out[k];
+    if (lv == null || lv === '') {
+      out[k] = rv;
+      continue;
+    }
+    if (k.startsWith('page:') || k.startsWith('pages:')) {
+      const n = Math.max(Number(lv) || 0, Number(rv) || 0);
+      out[k] = String(n);
+    } else if (k.startsWith('read:')) {
+      out[k] = (String(lv) === '1' || String(rv) === '1') ? '1' : String(rv);
+    } else if (k === 'recentReads') {
+      out[k] = mergeRecent(lv, rv);
+    } else if (k === 'lastRead') {
+      // Conservar el más “rico” o el remoto si local vacío
+      try {
+        const L = JSON.parse(lv || 'null');
+        const R = JSON.parse(rv || 'null');
+        out[k] = (R && (R.chId != null)) ? rv : lv;
+      } catch (_) {
+        out[k] = rv || lv;
+      }
+    } else {
+      // prefs, renombres, etc.: el remoto (nube) actualiza al abrir
+      out[k] = rv;
+    }
+  }
+  return out;
+}
+
+/** Aplica un mapa de claves ya fusionado a localStorage. */
+function writeKeyMap(keys) {
+  try {
+    for (const [k, v] of Object.entries(keys || {})) {
+      if (!k || k === 'tg_session' || k.startsWith('sync:')) continue;
+      const allowed = SYNC_KEYS.includes(k) || SYNC_PREFIXES.some((p) => k.startsWith(p));
+      if (!allowed) continue;
+      if (v == null) localStorage.removeItem(k);
+      else localStorage.setItem(k, String(v));
+    }
+  } catch (e) {
+    console.warn('[sync] write', e);
+  }
+}
+
 export function isLoggedIn() {
   return !!(localStorage.getItem(LS_USER) && localStorage.getItem(LS_PASS));
 }
@@ -317,8 +394,12 @@ export async function pull() {
   const id = await userRowId(u);
   const row = await getRemote(id);
   if (!row?.payload) return false;
-  const snap = await decryptPayload(u, p, row.payload);
-  applySnapshot(snap);
+  const remoteSnap = await decryptPayload(u, p, row.payload);
+  const localSnap = collectSnapshot();
+  const remoteKeys = remoteSnap?.keys && typeof remoteSnap.keys === 'object' ? remoteSnap.keys : {};
+  const localKeys = localSnap?.keys && typeof localSnap.keys === 'object' ? localSnap.keys : {};
+  const merged = mergeKeyMaps(localKeys, remoteKeys);
+  writeKeyMap(merged);
   setMeta(row.updated_at, snapshotByteSize());
   return true;
 }
@@ -360,16 +441,14 @@ function hideBootOverlay() {
 }
 
 /**
- * Llamar al arranque ANTES de mostrar la biblioteca / seguir leyendo.
- * Si hay sesión: pull (+ push del estado fusionado). Si no, no hace nada.
+ * Arranque: pull con fusión (progreso = max, leídos = unión) y luego push del resultado.
  */
 export async function syncOnStartup() {
   if (!configured() || !isLoggedIn()) return { synced: false };
   showBootOverlay('Descargando datos de la nube…');
   try {
     await pull();
-    showBootOverlay('Guardando estado…');
-    // Sube el merge local+remoto solo con contraseña correcta
+    showBootOverlay('Guardando estado fusionado…');
     await push();
     showBootOverlay('Listo');
     return { synced: true };

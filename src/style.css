@@ -279,13 +279,45 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 .upload-select{width:100%;margin:.25rem 0}
 
 /* Cola de tareas: secciones desplegables */
-.job-queue-panel{display:flex;flex-direction:column;gap:8px;max-height:min(70vh, calc(100dvh - 24px));max-height:min(70vh, calc(100vh - 24px))}
+.job-queue-panel{
+  display:flex;flex-direction:column;gap:8px;
+  /* Bajo el menú superior (~52px) y margen inferior */
+  max-height:min(70vh, calc(100dvh - 64px));
+  max-height:min(70vh, calc(100vh - 64px));
+}
+.job-queue-panel > .repack-panel-head,
+.job-queue-panel > .repack-panel-bar,
+.job-queue-panel > .job-queue-eta,
+.job-queue-panel > .repack-panel-actions{flex:0 0 auto}
+/* Las dos secciones de log se parten el espacio libre a partes iguales */
+.job-queue-panel > .job-fold{
+  border-radius:12px;background:#ffffff0a;overflow:hidden;
+  flex:1 1 0;min-height:0;
+  display:flex;flex-direction:column;
+}
+.job-queue-panel > .job-fold:not([open]){
+  flex:0 0 auto;
+}
 .job-fold{border-radius:12px;background:#ffffff0a;overflow:hidden}
-.job-fold>summary{cursor:pointer;padding:10px 12px;font-weight:650;font-size:.9rem;list-style:none;display:flex;align-items:center;justify-content:space-between}
+.job-fold>summary{cursor:pointer;padding:10px 12px;font-weight:650;font-size:.9rem;list-style:none;display:flex;align-items:center;justify-content:space-between;flex:0 0 auto}
 .job-fold>summary::-webkit-details-marker{display:none}
 .job-fold>summary::after{content:'▾';opacity:.6;font-size:.8rem}
 .job-fold:not([open])>summary::after{content:'▸'}
+.job-queue-panel .job-fold-body{
+  padding:0 10px 10px;
+  flex:1 1 0;min-height:0;
+  display:flex;flex-direction:column;overflow:hidden;
+}
 .job-fold-body{padding:0 10px 10px}
+.job-queue-panel .job-fold-scroll,
+.job-queue-panel .repack-panel-log.job-fold-scroll{
+  flex:1 1 0;min-height:0;
+  max-height:none !important;
+  overflow:auto;
+  -webkit-overflow-scrolling:touch;
+  overscroll-behavior:contain;
+  touch-action:pan-y;
+}
 .job-fold-scroll{
   max-height:min(110px, 18vh);overflow:auto;
   -webkit-overflow-scrolling:touch;
@@ -316,6 +348,9 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
     touch-action:none;
   }
   .repack-panel-log{max-height:min(160px, 22vh)}
+  /* job-queue logs: flex 50/50 manda; no forzar max-height fijo */
+  .job-queue-panel .job-fold-scroll,
+  .job-queue-panel .repack-panel-log{max-height:none !important}
   .job-fold-scroll{max-height:min(120px, 18vh);flex:1 1 auto;min-height:48px}
 }
 .job-current-status{font-size:.85rem;color:var(--acc);margin:0 0 6px;word-break:break-word}

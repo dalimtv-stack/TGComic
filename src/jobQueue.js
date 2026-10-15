@@ -238,8 +238,10 @@ export function createJobQueue({ el, pref }) {
       handle.setPointerCapture?.(e.pointerId);
       const startX = e.clientX, startY = e.clientY;
       const startW = panel.offsetWidth, startH = panel.offsetHeight;
-      const maxW = Math.min(window.innerWidth - 24, 720);
-      const maxH = window.innerHeight - 24;
+      // Más ancho; altura limitada para no tapar el menú ☰ superior
+      const maxW = Math.min(window.innerWidth - 16, 1100);
+      const topReserve = 56; // menú superior
+      const maxH = Math.max(180, window.innerHeight - topReserve - 12);
       const onMove = (ev) => {
         // Anclado abajo-derecha: arrastrar el asa (arriba-izq) hacia fuera crece
         const dw = startX - ev.clientX;
