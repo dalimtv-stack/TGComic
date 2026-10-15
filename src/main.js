@@ -137,20 +137,22 @@ let jobQueue = null;
 
 async function collectAppStats() {
   const entries = await kv.entries();
-  let covers = 0, art = 0, other = 0, coverN = 0, artN = 0;
-  let listsBytes = 0, listsN = 0; // f:* listados de archivos por canal + lib
+  let covers = 0, art = 0, coverN = 0, artN = 0;
+  let listsBytes = 0, listsN = 0; // lib + f:* listados
+  let pcBytes = 0, pcN = 0;       // pc:* caché de páginas de lectura
+  let other = 0;                 // resto residual (casi nada si todo está clasificado)
   for (const [k, v] of entries) {
     const sz = sizeOfVal(v);
     if (typeof k !== 'string') { other += sz; continue; }
     if (k.startsWith('c:')) { covers += sz; coverN++; }
-    // Arte GitHub + portadas manuales de canal/serie/editorial
     else if (k.startsWith('art:') || k.startsWith('cc:') || k.startsWith('sc:') || k.startsWith('gc:')) {
       art += sz; artN++;
     }
-    else if (k === 'lib' || k.startsWith('f:')) { listsBytes += sz; listsN++; other += sz; }
+    else if (k === 'lib' || k.startsWith('f:')) { listsBytes += sz; listsN++; }
+    else if (k === 'pc:index' || k.startsWith('pc:')) { pcBytes += sz; pcN++; }
     else other += sz;
   }
-  const idbTotal = covers + art + other;
+  const idbTotal = covers + art + listsBytes + pcBytes + other;
 
   let lsBytes = 0;
   let sessionBytes = 0;
@@ -527,26 +529,75 @@ function showInfoFrame() {
     return r;
   };
 
+  // Clic en el título → copiar todo el texto de la ficha
+  const titleSpan = head.querySelector('span');
+  if (titleSpan) {
+    titleSpan.style.cursor = 'pointer';
+    titleSpan.title = 'Toca para copiar la información';
+  }
+
   collectAppStats().then((s) => {
     body.replaceChildren();
-    body.append(el('div', 'info-sec', 'Caché (este dispositivo)'));
-    body.append(row('Caché total (IndexedDB)', formatBytes(s.idbTotal)));
-    body.append(row('Carátulas de cómics', `${formatBytes(s.covers)} · ${s.coverN} ítems`));
-    body.append(row('Caché Editoriales & Canales', `${formatBytes(s.art)} · ${s.artN} ítems`));
-    body.append(row('Caché de páginas (lectura)', `${formatBytes(s.pageCacheBytes)} · ${s.pageCacheCount} pág. · máx. ${s.pageCacheLimitMB} MB`));
-    body.append(row('Listados de biblioteca', `${formatBytes(s.listsBytes || 0)} · ${s.listsN || 0} claves`));
-    body.append(row('Otros datos en caché', formatBytes(Math.max(0, (s.other || 0) - (s.listsBytes || 0)))));
-    body.append(el('div', 'info-sec', 'Sesión y preferencias'));
-    body.append(row('Sesión de Telegram', s.sessionOk ? `Guardada · ${formatBytes(s.sessionBytes)}` : 'No guardada'));
-    body.append(row('localStorage (prefs, progreso…)', `${formatBytes(s.lsBytes)} · ${s.lsKeyCount} claves`));
-    body.append(row('Última sincronización', s.lastSync
+    const lines = [];
+    const sec = (t) => {
+      body.append(el('div', 'info-sec', t));
+      lines.push('', '## ' + t);
+    };
+    const add = (label, value) => {
+      body.append(row(label, value));
+      lines.push(label + ': ' + value);
+    };
+
+    sec('Caché (este dispositivo)');
+    add('Caché total (IndexedDB)', formatBytes(s.idbTotal));
+    add('Carátulas de cómics', formatBytes(s.covers) + ' · ' + s.coverN + ' ítems');
+    add('Editoriales y canales', formatBytes(s.art) + ' · ' + s.artN + ' ítems');
+    add('Caché de páginas (lectura)', formatBytes(s.pageCacheBytes) + ' · ' + s.pageCacheCount + ' pág. · máx. ' + s.pageCacheLimitMB + ' MB');
+    add('Listados de biblioteca', formatBytes(s.listsBytes || 0) + ' · ' + (s.listsN || 0) + ' claves');
+    // "Otros" eliminado: era residual (pc:* ya sale en páginas; listados en su fila)
+
+    sec('Sesión y preferencias');
+    add('Sesión de Telegram', s.sessionOk ? ('Guardada · ' + formatBytes(s.sessionBytes)) : 'No guardada');
+    add('localStorage (prefs, progreso…)', formatBytes(s.lsBytes) + ' · ' + s.lsKeyCount + ' claves');
+    add('Última sincronización', s.lastSync
       ? (typeof sync.formatSyncDate === 'function' ? (sync.formatSyncDate(s.lastSync) || s.lastSync) : s.lastSync)
-      : '—'));
-    body.append(row('Subidas / recargas fallidas', String(s.failedUploads || 0)));
-    body.append(el('div', 'info-sec', 'Biblioteca'));
-    body.append(row('Canales', String(s.channels)));
-    body.append(row('Cómics (listados)', String(s.comics)));
-    body.append(row('Tamaño en Telegram', formatBytes(s.telegramBytes)));
+      : '—');
+    add('Subidas / recargas fallidas', String(s.failedUploads || 0));
+
+    sec('Biblioteca');
+    add('Canales', String(s.channels));
+    add('Cómics (listados)', String(s.comics));
+    add('Tamaño en Telegram', formatBytes(s.telegramBytes));
+
+    if (titleSpan) {
+      titleSpan.onclick = async (ev) => {
+        ev.stopPropagation();
+        const text = ['Información TGComic', ...lines].filter((x, i) => !(i > 0 && x === '' && lines[i - 1] === '')).join('\n').trim();
+        try {
+          await navigator.clipboard.writeText(text);
+          const prev = titleSpan.textContent;
+          titleSpan.textContent = 'Copiado';
+          setTimeout(() => { titleSpan.textContent = prev || 'Información'; }, 1200);
+        } catch (e) {
+          // Fallback
+          try {
+            const ta = el('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.left = '-9999px';
+            document.body.append(ta);
+            ta.select();
+            document.execCommand('copy');
+            ta.remove();
+            titleSpan.textContent = 'Copiado';
+            setTimeout(() => { titleSpan.textContent = 'Información'; }, 1200);
+          } catch (e2) {
+            alert('No se pudo copiar');
+          }
+        }
+      };
+    }
+
     body.append(el('div', 'info-sec', 'Datos locales'));
     const expRow = el('div', 'edit-actions');
     const btnExp = el('button', 'btn', 'Exportar JSON');
