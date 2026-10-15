@@ -371,8 +371,17 @@ export function createReader(state, d) {
           return false;
         };
 
+        // En móvil el navegador dispara un "click" sintético tras touchend.
+        // Ese click no debe contar como 2º toque (provocaba zoom con un solo tap).
+        const armSuppressClick = () => {
+          suppressClick = true;
+          setTimeout(() => { suppressClick = false; }, 450);
+        };
+
         rd.onclick = (ev) => {
-          if (suppressClick) { suppressClick = false; return; }
+          if (suppressClick) return;
+          // Solo ratón/trackpad real (no click fantasma de touch)
+          if (ev.pointerType === 'touch') return;
           if (ev.target.closest?.('.bar, .edge, .mosaic')) return;
           if (ev.target.tagName !== 'IMG') return;
           onTap(ev.clientX, ev.clientY);
@@ -395,18 +404,16 @@ export function createReader(state, d) {
           const x = e.changedTouches[0].clientX, y = e.changedTouches[0].clientY;
           const dx = x - sx, dy = y - sy;
           sx = null;
+          // Siempre bloquear el click sintético posterior
+          armSuppressClick();
 
           // Con zoom: swipe horizontal → quitar zoom y luego cambiar página
           if (rd.classList.contains('zoom')) {
             if (moved && Math.abs(dx) > 70 && Math.abs(dx) > 1.5 * Math.abs(dy)) {
               clearZoom();
-              // Tras quitar zoom, avanzar/retroceder
               setTimeout(() => turn(dx < 0 ? n + 1 : n - 1), 40);
-              suppressClick = true;
             } else if (!moved) {
-              // toque simple/doble en zoom
-              const dbl = onTap(x, y);
-              if (dbl) suppressClick = true;
+              onTap(x, y); // 1 toque = UI timer; 2 = quitar/poner zoom
             }
             return;
           }
@@ -414,20 +421,17 @@ export function createReader(state, d) {
           if (moved) {
             if (dy > 90 && dy > 1.6 * Math.abs(dx)) {
               history.back();
-              suppressClick = true;
               return;
             }
             if (Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy)) {
               turn(dx < 0 ? n + 1 : n - 1);
-              suppressClick = true;
             }
             return;
           }
 
-          // Toque sin movimiento → doble toque / UI
-          if (e.target?.tagName === 'IMG' || e.target === rd) {
-            const dbl = onTap(x, y);
-            if (dbl) suppressClick = true;
+          // Toque limpio → cuenta para doble toque / UI (no zoom en el primero)
+          if (e.target?.tagName === 'IMG' || e.target === rd || e.target?.closest?.('img')) {
+            onTap(x, y);
           }
         }, { passive: true });
         document.onkeydown = (e) => { if (e.key === 'ArrowRight') turn(n + 1); if (e.key === 'ArrowLeft') turn(n - 1); };
