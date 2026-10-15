@@ -278,7 +278,17 @@ export function createReader(state, d) {
           if (i < 0) return;
           const t = Math.max(0, Math.min(pages.length - 1, i));
           if (t === n && img.src) return;
-          n = t; savePage(n); setCount(); rd.classList.remove('zoom');
+          n = t; savePage(n); setCount();
+          try {
+            rd.classList.remove('zoom');
+            const im0 = rd.querySelector('img');
+            if (im0) {
+              im0.style.removeProperty('width');
+              im0.style.removeProperty('max-width');
+              im0.style.removeProperty('max-height');
+            }
+            rd.scrollTo(0, 0);
+          } catch (_) {}
           const mine = ++token;
           try {
             const u = await load(n);
@@ -295,33 +305,130 @@ export function createReader(state, d) {
         goToPage = (i) => turn(i);
         eL.onclick = () => turn(n - 1);
         eR.onclick = () => turn(n + 1);
-        let last = 0, tapT;
+
+        /** Zoom centrado en el punto del doble toque / doble clic */
+        const clearZoom = () => {
+          rd.classList.remove('zoom');
+          const im = rd.querySelector('img');
+          if (im) {
+            im.style.removeProperty('width');
+            im.style.removeProperty('max-width');
+            im.style.removeProperty('max-height');
+          }
+          try { rd.scrollTo(0, 0); } catch (_) {}
+        };
+
+        const applyZoomAt = (clientX, clientY) => {
+          const im = rd.querySelector('img');
+          if (!im) return;
+          if (rd.classList.contains('zoom')) {
+            clearZoom();
+            return;
+          }
+          const rect = im.getBoundingClientRect();
+          const rw = Math.max(1, rect.width);
+          const rh = Math.max(1, rect.height);
+          const relX = Math.min(1, Math.max(0, (clientX - rect.left) / rw));
+          const relY = Math.min(1, Math.max(0, (clientY - rect.top) / rh));
+          rd.classList.add('zoom');
+          // Tras el layout del 250%, centrar el punto tocado en el viewport del lector
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              const im2 = rd.querySelector('img');
+              if (!im2 || !rd.classList.contains('zoom')) return;
+              const w = im2.offsetWidth || im2.getBoundingClientRect().width;
+              const h = im2.offsetHeight || im2.getBoundingClientRect().height;
+              const tx = relX * w - rd.clientWidth / 2;
+              const ty = relY * h - rd.clientHeight / 2;
+              rd.scrollLeft = Math.max(0, tx);
+              rd.scrollTop = Math.max(0, ty);
+            });
+          });
+        };
+
+        let lastTapT = 0, lastTapX = 0, lastTapY = 0, uiTimer = null, suppressClick = false;
+        const DBL_MS = 420;
+        const DBL_DIST = 56;
+
+        const onTap = (clientX, clientY) => {
+          const t = Date.now();
+          const dt = t - lastTapT;
+          const dist = Math.hypot(clientX - lastTapX, clientY - lastTapY);
+          if (dt > 0 && dt < DBL_MS && dist < DBL_DIST) {
+            clearTimeout(uiTimer);
+            lastTapT = 0;
+            applyZoomAt(clientX, clientY);
+            return true; // double
+          }
+          lastTapT = t;
+          lastTapX = clientX;
+          lastTapY = clientY;
+          clearTimeout(uiTimer);
+          uiTimer = setTimeout(() => {
+            // Un solo toque: alternar barras (si no hay zoom)
+            if (!rd.classList.contains('zoom')) rd.classList.toggle('ui-off');
+          }, DBL_MS);
+          return false;
+        };
+
         rd.onclick = (ev) => {
+          if (suppressClick) { suppressClick = false; return; }
           if (ev.target.closest?.('.bar, .edge, .mosaic')) return;
           if (ev.target.tagName !== 'IMG') return;
-          const t = Date.now();
-          if (t - last < 300) { clearTimeout(tapT); last = 0; rd.classList.toggle('zoom'); }
-          else { last = t; tapT = setTimeout(() => rd.classList.toggle('ui-off'), 300); }
+          onTap(ev.clientX, ev.clientY);
         };
-        let sx = null, sy = 0;
+
+        let sx = null, sy = 0, moved = false;
         rd.addEventListener('touchstart', (e) => {
           if (e.touches.length !== 1) { sx = null; return; }
           const x = e.touches[0].clientX, y = e.touches[0].clientY;
-          // Borde izquierdo iOS: no contar (gesto atrás del sistema)
           if (x < 48) { sx = null; return; }
-          sx = x; sy = y;
+          sx = x; sy = y; moved = false;
+        }, { passive: true });
+        rd.addEventListener('touchmove', (e) => {
+          if (sx == null || !e.touches[0]) return;
+          if (Math.hypot(e.touches[0].clientX - sx, e.touches[0].clientY - sy) > 14) moved = true;
         }, { passive: true });
         rd.addEventListener('touchend', (e) => {
-          if (sx === null || (window.visualViewport?.scale || 1) > 1.05 || rd.classList.contains('zoom')) return;
-          const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy;
+          if (sx === null) return;
+          if ((window.visualViewport?.scale || 1) > 1.05) { sx = null; return; }
+          const x = e.changedTouches[0].clientX, y = e.changedTouches[0].clientY;
+          const dx = x - sx, dy = y - sy;
           sx = null;
-          // Deslizar de arriba hacia abajo → cerrar (como atrás)
-          if (dy > 90 && dy > 1.6 * Math.abs(dx)) {
-            history.back();
+
+          // Con zoom: swipe horizontal → quitar zoom y luego cambiar página
+          if (rd.classList.contains('zoom')) {
+            if (moved && Math.abs(dx) > 70 && Math.abs(dx) > 1.5 * Math.abs(dy)) {
+              clearZoom();
+              // Tras quitar zoom, avanzar/retroceder
+              setTimeout(() => turn(dx < 0 ? n + 1 : n - 1), 40);
+              suppressClick = true;
+            } else if (!moved) {
+              // toque simple/doble en zoom
+              const dbl = onTap(x, y);
+              if (dbl) suppressClick = true;
+            }
             return;
           }
-          // Horizontal → cambiar página
-          if (Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy)) turn(dx < 0 ? n + 1 : n - 1);
+
+          if (moved) {
+            if (dy > 90 && dy > 1.6 * Math.abs(dx)) {
+              history.back();
+              suppressClick = true;
+              return;
+            }
+            if (Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy)) {
+              turn(dx < 0 ? n + 1 : n - 1);
+              suppressClick = true;
+            }
+            return;
+          }
+
+          // Toque sin movimiento → doble toque / UI
+          if (e.target?.tagName === 'IMG' || e.target === rd) {
+            const dbl = onTap(x, y);
+            if (dbl) suppressClick = true;
+          }
         }, { passive: true });
         document.onkeydown = (e) => { if (e.key === 'ArrowRight') turn(n + 1); if (e.key === 'ArrowLeft') turn(n - 1); };
         // Página + Ancho: rueda hace scroll en la hoja; solo al borde cambia de página.
