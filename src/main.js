@@ -138,10 +138,16 @@ let jobQueue = null;
 async function collectAppStats() {
   const entries = await kv.entries();
   let covers = 0, art = 0, other = 0, coverN = 0, artN = 0;
+  let listsBytes = 0, listsN = 0; // f:* listados de archivos por canal + lib
   for (const [k, v] of entries) {
     const sz = sizeOfVal(v);
-    if (typeof k === 'string' && k.startsWith('c:')) { covers += sz; coverN++; }
-    else if (typeof k === 'string' && k.startsWith('art:')) { art += sz; artN++; }
+    if (typeof k !== 'string') { other += sz; continue; }
+    if (k.startsWith('c:')) { covers += sz; coverN++; }
+    // Arte GitHub + portadas manuales de canal/serie/editorial
+    else if (k.startsWith('art:') || k.startsWith('cc:') || k.startsWith('sc:') || k.startsWith('gc:')) {
+      art += sz; artN++;
+    }
+    else if (k === 'lib' || k.startsWith('f:')) { listsBytes += sz; listsN++; other += sz; }
     else other += sz;
   }
   const idbTotal = covers + art + other;
@@ -207,6 +213,7 @@ async function collectAppStats() {
 
   return {
     idbTotal, covers, art, other, coverN, artN,
+    listsBytes, listsN,
     lsBytes, sessionBytes, sessionOk, lsKeyCount: lsKeys.length,
     channels, comics, telegramBytes,
     pageCacheBytes, pageCacheCount, pageCacheLimitMB,
@@ -525,10 +532,10 @@ function showInfoFrame() {
     body.append(el('div', 'info-sec', 'Caché (este dispositivo)'));
     body.append(row('Caché total (IndexedDB)', formatBytes(s.idbTotal)));
     body.append(row('Carátulas de cómics', `${formatBytes(s.covers)} · ${s.coverN} ítems`));
-    body.append(row('Editoriales y canales', `${formatBytes(s.art)} · ${s.artN} ítems`));
+    body.append(row('Caché Editoriales & Canales', `${formatBytes(s.art)} · ${s.artN} ítems`));
     body.append(row('Caché de páginas (lectura)', `${formatBytes(s.pageCacheBytes)} · ${s.pageCacheCount} pág. · máx. ${s.pageCacheLimitMB} MB`));
-    body.append(row('Otros datos en caché', formatBytes(s.other)));
-    body.append(row('Caché total estimada (IDB)', formatBytes(s.idbTotal)));
+    body.append(row('Listados de biblioteca', `${formatBytes(s.listsBytes || 0)} · ${s.listsN || 0} claves`));
+    body.append(row('Otros datos en caché', formatBytes(Math.max(0, (s.other || 0) - (s.listsBytes || 0)))));
     body.append(el('div', 'info-sec', 'Sesión y preferencias'));
     body.append(row('Sesión de Telegram', s.sessionOk ? `Guardada · ${formatBytes(s.sessionBytes)}` : 'No guardada'));
     body.append(row('localStorage (prefs, progreso…)', `${formatBytes(s.lsBytes)} · ${s.lsKeyCount} claves`));
