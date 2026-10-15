@@ -75,7 +75,8 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 #rd.page.zoom img{max-width:none;max-height:none;width:250%;height:auto;margin:0;object-fit:contain;object-position:left top}
 .edge{position:fixed;top:10%;bottom:12%;width:18%;z-index:11}
 .edge.l{left:0}.edge.r{right:0}
-#rd.zoom .edge{display:none}
+/* Con zoom los laterales siguen sirviendo para cambiar de página */
+#rd.zoom .edge{display:block;background:transparent}
 #rd.vert{padding:0;touch-action:pan-y;-webkit-text-size-adjust:100%}
 #rd.vert .slot{display:flex;justify-content:center;align-items:flex-start;width:100%;padding:0;margin:0;overflow:hidden;overflow-anchor:none;background:#000;box-sizing:border-box}
 #rd.vert .slot img{display:block;margin:0 auto;object-fit:contain}

@@ -280,6 +280,8 @@ export function createReader(state, d) {
           if (t === n && img.src) return;
           n = t; savePage(n); setCount();
           try {
+            // clearZoom aún no existe aquí en el source order; limpiar a mano
+            if (typeof zoomLevel !== 'undefined') zoomLevel = 1;
             rd.classList.remove('zoom');
             const im0 = rd.querySelector('img');
             if (im0) {
@@ -306,8 +308,13 @@ export function createReader(state, d) {
         eL.onclick = () => turn(n - 1);
         eR.onclick = () => turn(n + 1);
 
-        /** Zoom centrado en el punto del doble toque / doble clic */
+        /** Zoom variable: doble toque (~2.5×) y pellizco (1×–4×). Pan con un dedo. */
+        let zoomLevel = 1;
+        const ZOOM_DBL = 2.5;
+        const ZOOM_MAX = 4;
+
         const clearZoom = () => {
+          zoomLevel = 1;
           rd.classList.remove('zoom');
           const im = rd.querySelector('img');
           if (im) {
@@ -318,32 +325,55 @@ export function createReader(state, d) {
           try { rd.scrollTo(0, 0); } catch (_) {}
         };
 
-        const applyZoomAt = (clientX, clientY) => {
+        /** level>1 activa zoom; centra el punto (clientX/Y) si se indica */
+        const setZoomLevel = (level, clientX, clientY) => {
           const im = rd.querySelector('img');
           if (!im) return;
-          if (rd.classList.contains('zoom')) {
+          level = Math.max(1, Math.min(ZOOM_MAX, level));
+          if (level <= 1.08) {
             clearZoom();
             return;
           }
-          const rect = im.getBoundingClientRect();
-          const rw = Math.max(1, rect.width);
-          const rh = Math.max(1, rect.height);
-          const relX = Math.min(1, Math.max(0, (clientX - rect.left) / rw));
-          const relY = Math.min(1, Math.max(0, (clientY - rect.top) / rh));
+
+          // Punto del contenido bajo el dedo (coords de documento del scroll)
+          let relX = 0.5, relY = 0.5;
+          if (clientX != null && clientY != null) {
+            const rect = im.getBoundingClientRect();
+            const rw = Math.max(1, rect.width);
+            const rh = Math.max(1, rect.height);
+            relX = Math.min(1, Math.max(0, (clientX - rect.left) / rw));
+            relY = Math.min(1, Math.max(0, (clientY - rect.top) / rh));
+          } else if (rd.classList.contains('zoom')) {
+            const rw = Math.max(1, im.offsetWidth);
+            const rh = Math.max(1, im.offsetHeight);
+            relX = (rd.scrollLeft + rd.clientWidth / 2) / rw;
+            relY = (rd.scrollTop + rd.clientHeight / 2) / rh;
+          }
+
+          zoomLevel = level;
           rd.classList.add('zoom');
-          // Tras el layout del 250%, centrar el punto tocado en el viewport del lector
+          im.style.width = (zoomLevel * 100) + '%';
+          im.style.maxWidth = 'none';
+          im.style.maxHeight = 'none';
+
           requestAnimationFrame(() => {
             requestAnimationFrame(() => {
               const im2 = rd.querySelector('img');
               if (!im2 || !rd.classList.contains('zoom')) return;
-              const w = im2.offsetWidth || im2.getBoundingClientRect().width;
-              const h = im2.offsetHeight || im2.getBoundingClientRect().height;
-              const tx = relX * w - rd.clientWidth / 2;
-              const ty = relY * h - rd.clientHeight / 2;
-              rd.scrollLeft = Math.max(0, tx);
-              rd.scrollTop = Math.max(0, ty);
+              const w = im2.offsetWidth || 1;
+              const h = im2.offsetHeight || 1;
+              rd.scrollLeft = Math.max(0, relX * w - rd.clientWidth / 2);
+              rd.scrollTop = Math.max(0, relY * h - rd.clientHeight / 2);
             });
           });
+        };
+
+        const applyZoomAt = (clientX, clientY) => {
+          if (rd.classList.contains('zoom') && zoomLevel > 1.08) {
+            clearZoom();
+            return;
+          }
+          setZoomLevel(ZOOM_DBL, clientX, clientY);
         };
 
         let lastTapT = 0, lastTapX = 0, lastTapY = 0, uiTimer = null, suppressClick = false;
@@ -358,21 +388,18 @@ export function createReader(state, d) {
             clearTimeout(uiTimer);
             lastTapT = 0;
             applyZoomAt(clientX, clientY);
-            return true; // double
+            return true;
           }
           lastTapT = t;
           lastTapX = clientX;
           lastTapY = clientY;
           clearTimeout(uiTimer);
           uiTimer = setTimeout(() => {
-            // Un solo toque: alternar barras (si no hay zoom)
             if (!rd.classList.contains('zoom')) rd.classList.toggle('ui-off');
           }, DBL_MS);
           return false;
         };
 
-        // En móvil el navegador dispara un "click" sintético tras touchend.
-        // Ese click no debe contar como 2º toque (provocaba zoom con un solo tap).
         const armSuppressClick = () => {
           suppressClick = true;
           setTimeout(() => { suppressClick = false; }, 450);
@@ -380,41 +407,92 @@ export function createReader(state, d) {
 
         rd.onclick = (ev) => {
           if (suppressClick) return;
-          // Solo ratón/trackpad real (no click fantasma de touch)
           if (ev.pointerType === 'touch') return;
           if (ev.target.closest?.('.bar, .edge, .mosaic')) return;
           if (ev.target.tagName !== 'IMG') return;
           onTap(ev.clientX, ev.clientY);
         };
 
+        // Laterales siguen activos con zoom (cambiar página)
+        eL.onclick = () => { clearZoom(); turn(n - 1); };
+        eR.onclick = () => { clearZoom(); turn(n + 1); };
+
         let sx = null, sy = 0, moved = false;
+        let pinch = null; // { d0, z0 }
+
+        const touchDist = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+        const touchCenter = (a, b) => ({
+          x: (a.clientX + b.clientX) / 2,
+          y: (a.clientY + b.clientY) / 2,
+        });
+
         rd.addEventListener('touchstart', (e) => {
+          if (e.touches.length === 2) {
+            sx = null;
+            moved = false;
+            pinch = {
+              d0: Math.max(1, touchDist(e.touches[0], e.touches[1])),
+              z0: Math.max(1, zoomLevel),
+            };
+            clearTimeout(uiTimer);
+            lastTapT = 0;
+            return;
+          }
+          pinch = null;
           if (e.touches.length !== 1) { sx = null; return; }
           const x = e.touches[0].clientX, y = e.touches[0].clientY;
           if (x < 48) { sx = null; return; }
           sx = x; sy = y; moved = false;
         }, { passive: true });
+
         rd.addEventListener('touchmove', (e) => {
+          if (pinch && e.touches.length === 2) {
+            const d = Math.max(1, touchDist(e.touches[0], e.touches[1]));
+            const c = touchCenter(e.touches[0], e.touches[1]);
+            const next = pinch.z0 * (d / pinch.d0);
+            setZoomLevel(next, c.x, c.y);
+            e.preventDefault();
+            return;
+          }
           if (sx == null || !e.touches[0]) return;
           if (Math.hypot(e.touches[0].clientX - sx, e.touches[0].clientY - sy) > 14) moved = true;
-        }, { passive: true });
+        }, { passive: false });
+
         rd.addEventListener('touchend', (e) => {
+          if (e.touches.length >= 2) return;
+          if (e.touches.length === 1) {
+            // un dedo levantado en pellizco: fin del pellizco
+            pinch = null;
+          }
+          if (pinch) {
+            pinch = null;
+            armSuppressClick();
+            if (zoomLevel <= 1.08) clearZoom();
+            return;
+          }
           if (sx === null) return;
           if ((window.visualViewport?.scale || 1) > 1.05) { sx = null; return; }
           const x = e.changedTouches[0].clientX, y = e.changedTouches[0].clientY;
           const dx = x - sx, dy = y - sy;
           sx = null;
-          // Siempre bloquear el click sintético posterior
           armSuppressClick();
 
-          // Con zoom: swipe horizontal → quitar zoom y luego cambiar página
+          // Con zoom: solo pan (moved) o toques; NO swipe de página ni cerrar
           if (rd.classList.contains('zoom')) {
-            if (moved && Math.abs(dx) > 70 && Math.abs(dx) > 1.5 * Math.abs(dy)) {
+            if (moved) return; // pan de la imagen
+            // toque en laterales ~18% → cambiar página (como .edge)
+            const w = window.innerWidth || 1;
+            if (x < w * 0.18) {
               clearZoom();
-              setTimeout(() => turn(dx < 0 ? n + 1 : n - 1), 40);
-            } else if (!moved) {
-              onTap(x, y); // 1 toque = UI timer; 2 = quitar/poner zoom
+              setTimeout(() => turn(n - 1), 30);
+              return;
             }
+            if (x > w * 0.82) {
+              clearZoom();
+              setTimeout(() => turn(n + 1), 30);
+              return;
+            }
+            onTap(x, y);
             return;
           }
 
@@ -429,11 +507,11 @@ export function createReader(state, d) {
             return;
           }
 
-          // Toque limpio → cuenta para doble toque / UI (no zoom en el primero)
           if (e.target?.tagName === 'IMG' || e.target === rd || e.target?.closest?.('img')) {
             onTap(x, y);
           }
         }, { passive: true });
+
         document.onkeydown = (e) => { if (e.key === 'ArrowRight') turn(n + 1); if (e.key === 'ArrowLeft') turn(n - 1); };
         // Página + Ancho: rueda hace scroll en la hoja; solo al borde cambia de página.
         // Página + Pantalla: sin cambios (siempre cabe → rueda cambia página).
