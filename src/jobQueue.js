@@ -157,9 +157,23 @@ export function createJobQueue({ el, pref }) {
 
     const ctx = {
       log: (line) => {
-        next.log = (next.log || []).slice(-200);
-        next.log.push(String(line));
-        appendLogLine(next.id, line);
+        const text = String(line);
+        next.log = next.log || [];
+        // Actualizar última línea si es el mismo progreso (… 12%) en vez de spamear
+        const stripPct = (s) => String(s).replace(/\s*\d{1,3}\s*%\s*$/, '').trim();
+        const isPct = /\d{1,3}\s*%\s*$/.test(text);
+        if (isPct && next.log.length) {
+          const last = next.log[next.log.length - 1];
+          if (stripPct(last) === stripPct(text)) {
+            next.log[next.log.length - 1] = text;
+            appendLogLine(next.id, text, true);
+            save();
+            return;
+          }
+        }
+        next.log.push(text);
+        if (next.log.length > 200) next.log = next.log.slice(-200);
+        appendLogLine(next.id, text, false);
         save();
       },
       setProgress: (p) => {
@@ -260,9 +274,10 @@ export function createJobQueue({ el, pref }) {
       else pause();
       btnPause.textContent = paused ? 'Reanudar' : 'Pausar';
     };
-    const btnClear = el('button', 'btn', 'Limpiar fallos');
+    const btnClear = el('button', 'btn', 'Limpiar completados');
+    btnClear.id = 'job-queue-clear';
     btnClear.type = 'button';
-    btnClear.onclick = () => clearFailed();
+    btnClear.onclick = () => clearSmart();
     const btnClose = el('button', 'btn', 'Cerrar');
     btnClose.type = 'button';
     btnClose.onclick = () => { panel.hidden = true; };
@@ -289,9 +304,14 @@ export function createJobQueue({ el, pref }) {
     return chip;
   }
 
-  function appendLogLine(jobId, line) {
+  function appendLogLine(jobId, line, replaceLast = false) {
     const log = document.getElementById('job-queue-log');
     if (!log) return;
+    if (replaceLast && log.lastElementChild) {
+      log.lastElementChild.textContent = line;
+      log.scrollTop = log.scrollHeight;
+      return;
+    }
     const row = el('div', 'repack-log-line', line);
     log.append(row);
     log.scrollTop = log.scrollHeight;
@@ -335,8 +355,22 @@ export function createJobQueue({ el, pref }) {
     const list = document.getElementById('job-queue-list');
     const eta = document.getElementById('job-queue-eta');
     const btnPause = document.getElementById('job-queue-pause');
+    const btnClear = document.getElementById('job-queue-clear');
     const curStatus = document.getElementById('job-current-status');
     if (btnPause) btnPause.textContent = paused ? 'Reanudar' : 'Pausar';
+    if (btnClear) {
+      const hasDone = jobs.some((x) => x.status === 'done');
+      const hasFail = jobs.some((x) => x.status === 'error' || x.status === 'interrupted');
+      if (hasDone) {
+        btnClear.hidden = false;
+        btnClear.textContent = 'Limpiar completados';
+      } else if (hasFail) {
+        btnClear.hidden = false;
+        btnClear.textContent = 'Limpiar fallos';
+      } else {
+        btnClear.hidden = true;
+      }
+    }
     if (eta) eta.textContent = etaLabel() || (paused ? 'En pausa' : '');
 
     const running = jobs.find((x) => x.status === 'running');
@@ -413,6 +447,18 @@ export function createJobQueue({ el, pref }) {
     emit();
   }
 
+  function clearDone() {
+    jobs = jobs.filter((x) => x.status !== 'done');
+    emit();
+  }
+
+  /** Prioridad: limpiar completados; si no hay, limpiar fallos */
+  function clearSmart() {
+    const hasDone = jobs.some((x) => x.status === 'done');
+    if (hasDone) clearDone();
+    else clearFailed();
+  }
+
   try {
     window.addEventListener('tgcomic:reader', (ev) => {
       if (ev?.detail?.open) hideQueueUi();
@@ -427,6 +473,8 @@ export function createJobQueue({ el, pref }) {
     retry,
     remove,
     clearFailed,
+    clearDone,
+    clearSmart,
     failedJobs,
     getState,
     onChange,
