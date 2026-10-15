@@ -324,7 +324,35 @@ export function createReader(state, d) {
           if (Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy)) turn(dx < 0 ? n + 1 : n - 1);
         }, { passive: true });
         document.onkeydown = (e) => { if (e.key === 'ArrowRight') turn(n + 1); if (e.key === 'ArrowLeft') turn(n - 1); };
+        // Página + Ancho: rueda hace scroll en la hoja; solo al borde cambia de página.
+        // Página + Pantalla: sin cambios (siempre cabe → rueda cambia página).
         const onWheel = (e) => {
+          const fitIsWidth = pref('fit', 'screen') === 'width';
+          if (fitIsWidth) {
+            // Asegurar que #rd pueda hacer scroll con la rueda
+            if (getComputedStyle(rd).overflowY === 'hidden') rd.style.overflowY = 'auto';
+            const overflow = rd.scrollHeight > rd.clientHeight + 2;
+            if (overflow) {
+              const atTop = rd.scrollTop <= 1;
+              const atBottom = rd.scrollTop + rd.clientHeight >= rd.scrollHeight - 2;
+              if (e.deltaY > 10) {
+                if (!atBottom) {
+                  // No preventDefault → el navegador hace scroll en la hoja
+                  return;
+                }
+                e.preventDefault();
+                turn(n + 1);
+                return;
+              }
+              if (e.deltaY < -10) {
+                if (!atTop) return;
+                e.preventDefault();
+                turn(n - 1);
+                return;
+              }
+              return;
+            }
+          }
           e.preventDefault();
           if (e.deltaY > 10) turn(n + 1);
           else if (e.deltaY < -10) turn(n - 1);

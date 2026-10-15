@@ -27,15 +27,19 @@ export function createRepackTool(d) {
   const toCbzName = (name) => String(name || 'comic.cbr').replace(/\.cbr$/i, '.cbz');
   const yieldTick = () => new Promise((r) => setTimeout(r, 0));
 
-  async function blobToWebp(blob, quality = 0.62) {
+  async function blobToWebp(blob, opts = {}) {
     if (!blob || !blob.size) return blob;
     if ((blob.type || '').includes('webp') && blob.size < 1.5 * 1024 * 1024) return blob;
+    const quality = Number(opts.quality);
+    const q = Number.isFinite(quality) && quality > 0 && quality <= 1 ? quality : 0.62;
+    const doResize = opts.resize !== false;
+    const maxEdge = Number(opts.maxEdge) > 0 ? Number(opts.maxEdge) : 2400;
     let bmp = null;
     try {
       bmp = await createImageBitmap(blob);
-      // Limitar lado mayor para no tumbar el móvil (OOM → recarga de la app)
-      const maxEdge = 2400;
-      const scale = Math.min(1, maxEdge / Math.max(bmp.width, bmp.height));
+      const scale = doResize
+        ? Math.min(1, maxEdge / Math.max(bmp.width, bmp.height))
+        : 1;
       const w = Math.max(1, Math.round(bmp.width * scale));
       const h = Math.max(1, Math.round(bmp.height * scale));
       const cv = document.createElement('canvas');
@@ -46,10 +50,9 @@ export function createRepackTool(d) {
       try { bmp.close?.(); } catch (_) {}
       bmp = null;
       const out = await new Promise((res) => {
-        try { cv.toBlob((b) => res(b), 'image/webp', quality); }
+        try { cv.toBlob((b) => res(b), 'image/webp', q); }
         catch { res(null); }
       });
-      // Liberar canvas
       cv.width = 0;
       cv.height = 0;
       await yieldTick();
@@ -85,7 +88,19 @@ export function createRepackTool(d) {
     return n + '.cbz';
   }
 
-  function suggestUploadName(ch, f) {
+  function stripChannelFromName(name, chName) {
+    let n = cleanFileBase(String(name || '').replace(/\.cbz$/i, ''));
+    if (chName) {
+      const low = n.toLowerCase();
+      const chLow = chName.toLowerCase();
+      if (low.startsWith(chLow)) {
+        n = n.slice(chName.length).replace(/^\s*-\s*/, '').trim();
+      }
+    }
+    return n + '.cbz';
+  }
+
+  function suggestUploadName(ch, f, includeChannel = true) {
     const raw = f?.name || 'comic.cbr';
     const cleaned = cleanFileBase(raw);
     const chName = (ch?.name || '').trim();
@@ -98,31 +113,33 @@ export function createRepackTool(d) {
       }
     } catch (_) {}
 
+    let base = '';
     try {
       if (typeof comicDisplayName === 'function') {
         const shown = comicDisplayName(ch, f, listFallback);
-        if (shown && String(shown).trim()) {
-          return ensureChannelInName(shown, chName);
+        if (shown && String(shown).trim()) base = cleanFileBase(shown);
+      }
+    } catch (_) {}
+
+    if (!base) {
+      let parsed = null;
+      try {
+        if (typeof parseComicName === 'function') {
+          parsed = parseComicName(cleaned + '.cbz', chName) || parseComicName(raw, chName);
         }
+      } catch (_) {}
+      if (parsed && parsed.series && parsed.number != null && String(parsed.number).length) {
+        const series = String(parsed.series).trim();
+        const num = String(parsed.number).trim();
+        const info = String(parsed.info || '').trim();
+        base = info ? (series + ' #' + num + ' - ' + info) : (series + ' #' + num);
+      } else {
+        base = cleaned;
       }
-    } catch (_) {}
-
-    let parsed = null;
-    try {
-      if (typeof parseComicName === 'function') {
-        parsed = parseComicName(cleaned + '.cbz', chName) || parseComicName(raw, chName);
-      }
-    } catch (_) {}
-
-    if (parsed && parsed.series && parsed.number != null && String(parsed.number).length) {
-      const series = String(parsed.series).trim();
-      const num = String(parsed.number).trim();
-      const info = String(parsed.info || '').trim();
-      const body = info ? (series + ' #' + num + ' - ' + info) : (series + ' #' + num);
-      return ensureChannelInName(body, chName);
     }
 
-    return ensureChannelInName(cleaned, chName);
+    if (includeChannel) return ensureChannelInName(base, chName);
+    return stripChannelFromName(base, chName);
   }
 
   async function downloadWholeMessage(msg, size, status) {
@@ -153,6 +170,7 @@ export function createRepackTool(d) {
   /** Si ya es ZIP: no reextraer; solo cambiar extensión al subir. */
   async function convertToCbzBlob(ch, f, status, opts) {
     const wantWebp = !!(opts && opts.asWebp);
+    const webpOpts = (opts && opts.webpOpts) || {};
     const msg = await getMsg(ch, f);
     if (!msg?.media) throw new Error('Sin media en el mensaje');
 
@@ -201,7 +219,7 @@ export function createRepackTool(d) {
         let outName = base;
         if (wantWebp) {
           const origSize = pageBlob.size || 0;
-          const converted = await blobToWebp(pageBlob);
+          const converted = await blobToWebp(pageBlob, webpOpts);
           if (converted && converted.size && converted.size < origSize * 0.98) {
             pageBlob = converted;
             outName = base.replace(/\.[^.]+$/i, '.webp');
@@ -244,7 +262,7 @@ export function createRepackTool(d) {
         let outName = base;
         if (wantWebp) {
           const origSize = pageBlob.size || 0;
-          const converted = await blobToWebp(pageBlob);
+          const converted = await blobToWebp(pageBlob, webpOpts);
           if (converted && converted.size && converted.size < origSize * 0.98) {
             pageBlob = converted;
             outName = base.replace(/\.[^.]+$/i, '.webp');
@@ -526,7 +544,7 @@ export function createRepackTool(d) {
     if (fill) fill.style.width = Math.max(0, Math.min(100, pct)) + '%';
   }
 
-  async function processOne(item, deleteOriginal, asWebp = false, onStatus) {
+  async function processOne(item, deleteOriginal, asWebp = false, onStatus, webpOpts = {}) {
     const { ch, f } = item;
     const label = f.name || ('#' + f.id);
     const status = (t) => {
@@ -541,7 +559,8 @@ export function createRepackTool(d) {
     let cbz = null;
     try {
       const useWebp = !!(item && item.asWebp) || !!asWebp;
-      cbz = await convertToCbzBlob(ch, f, status, { asWebp: useWebp });
+      const wOpts = (item && item.webpOpts) || webpOpts || {};
+      cbz = await convertToCbzBlob(ch, f, status, { asWebp: useWebp, webpOpts: wOpts });
       if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
       let outName = item.outName || toCbzName(cleanFileBase(f.name) + '.cbr');
       outName = String(outName).trim().replace(/_/g, ' ').replace(/\s+/g, ' ');
@@ -564,7 +583,7 @@ export function createRepackTool(d) {
     }
   }
 
-  async function runQueue(selected, deleteOriginal, asWebp = false) {
+  async function runQueue(selected, deleteOriginal, asWebp = false, webpOpts = {}) {
     if (running) {
       alert('Ya hay una recarga en curso');
       return;
@@ -579,7 +598,7 @@ export function createRepackTool(d) {
       const onStatus = (m) => {
         try { ctx?.log?.(m); } catch (_) {}
       };
-      await processOne({ ...item, asWebp }, deleteOriginal, asWebp, onStatus);
+      await processOne({ ...item, asWebp, webpOpts }, deleteOriginal, asWebp, onStatus, webpOpts);
     };
 
     if (jobQueue && typeof jobQueue.enqueue === 'function' && selected.length) {
@@ -616,7 +635,7 @@ export function createRepackTool(d) {
         break;
       }
       try {
-        await processOne({ ...item, asWebp }, deleteOriginal, asWebp);
+        await processOne({ ...item, asWebp, webpOpts }, deleteOriginal, asWebp, null, webpOpts);
         ok++;
       } catch (e) {
         if (e?.cancelled) {
@@ -639,7 +658,7 @@ export function createRepackTool(d) {
   }
 
   /** Pantalla para renombrar cada archivo antes de subir */
-  function showNameReview(selected, deleteOriginal, asWebp = false) {
+  function showNameReview(selected, deleteOriginal, asWebp = false, webpOpts = {}) {
     document.querySelector('.info-frame.repack-names')?.remove();
     const frame = el('div', 'info-frame repack-names');
     const box = el('div', 'info-box');
@@ -656,43 +675,71 @@ export function createRepackTool(d) {
       body.append(el('p', 'cover-pick-hint', 'WebP activado: se añadirá [WebP] al nombre y las páginas se convertirán.'));
     }
 
+    const includeChChk = el('input');
+    includeChChk.type = 'checkbox';
+    includeChChk.checked = true;
+    const includeChRow = el('label', 'repack-check');
+    includeChRow.append(includeChChk, document.createTextNode(' Incluir nombre del canal en los archivos'));
+    body.append(includeChRow);
+
     const inputs = [];
+    const applyNames = () => {
+      const withCh = !!includeChChk.checked;
+      for (const inp of inputs) {
+        if (inp._manual) continue;
+        let name = suggestUploadName(inp._item.ch, inp._item.f, withCh);
+        if (asWebp && !/\[WebP\]/i.test(name)) {
+          name = name.replace(/\.cbz$/i, ' [WebP].cbz');
+        }
+        inp.value = name;
+      }
+    };
+
     for (const item of selected) {
-      const suggested = suggestUploadName(item.ch, item.f);
+      const suggested = suggestUploadName(item.ch, item.f, true);
       const row = el('div', 'repack-name-row');
       row.append(el('div', 'repack-name-from', item.f.name || ''));
       const inp = el('input', 'edit-input repack-name-input');
       inp.type = 'text';
-      inp.value = suggested;
+      inp.value = asWebp && !/\[WebP\]/i.test(suggested)
+        ? suggested.replace(/\.cbz$/i, ' [WebP].cbz')
+        : suggested;
       inp.autocomplete = 'off';
       inp._item = item;
+      inp._manual = false;
+      inp.oninput = () => { inp._manual = true; };
       inputs.push(inp);
       row.append(inp);
       row.append(el('small', '', item.ch.name || ''));
       body.append(row);
     }
+    includeChChk.onchange = applyNames;
 
     const actions = el('div', 'edit-actions');
     const cancel = el('button', 'btn', 'Cancelar');
     cancel.onclick = () => frame.remove();
     const goBtn = el('button', 'btn edit-save', 'Subir');
     goBtn.onclick = () => {
+      const withCh = !!includeChChk.checked;
       const ready = inputs.map((inp) => {
         let name = String(inp.value || '').trim();
-        if (!name) name = suggestUploadName(inp._item.ch, inp._item.f);
+        if (!name) name = suggestUploadName(inp._item.ch, inp._item.f, withCh);
         name = name.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
         if (!/\.cbz$/i.test(name)) name = name.replace(/\.cb[zr]$/i, '') + '.cbz';
         if (!/\.cbz$/i.test(name)) name += '.cbz';
-        return { ...inp._item, outName: name };
+        if (asWebp && !/\[WebP\]/i.test(name)) {
+          name = name.replace(/\.cbz$/i, ' [WebP].cbz');
+        }
+        return { ...inp._item, outName: name, asWebp, webpOpts };
       });
       frame.remove();
-      runQueue(ready, deleteOriginal, asWebp);
+      runQueue(ready, deleteOriginal, asWebp, webpOpts);
     };
     actions.append(cancel, goBtn);
     body.append(actions);
     box.append(head, body);
     frame.append(box);
-    frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+    // Solo cierra con Cancelar / ×
     document.body.append(frame);
   }
 
@@ -725,6 +772,31 @@ export function createRepackTool(d) {
     webpLabel.append(webpCb, document.createTextNode(' Convertir páginas a WebP (añade [WebP] al nombre)'));
     body.append(webpLabel);
 
+    const webpOptsBox = el('div', 'webp-opts');
+    webpOptsBox.hidden = true;
+    const qualityLab = el('label', 'sync-label', 'Calidad');
+    const qualityInp = el('input', 'edit-input');
+    qualityInp.type = 'text';
+    qualityInp.value = '0.62';
+    qualityInp.placeholder = '0.62';
+    const resizeRow = el('label', 'repack-check');
+    const resizeCb = el('input');
+    resizeCb.type = 'checkbox';
+    resizeCb.checked = true;
+    resizeRow.append(resizeCb, document.createTextNode(' Redimensionar (lado mayor máx. 2400 px)'));
+    webpOptsBox.append(qualityLab, qualityInp, resizeRow);
+    body.append(webpOptsBox);
+    webpCb.onchange = () => { webpOptsBox.hidden = !webpCb.checked; };
+
+    // Filtros editorial / canal
+    const edSel = el('select', 'edit-input upload-select');
+    const chSel = el('select', 'edit-input upload-select');
+    chSel.hidden = true;
+    const edLab = el('label', 'sync-label', 'Editorial');
+    const chLab = el('label', 'sync-label', 'Canal');
+    chLab.hidden = true;
+    body.append(edLab, edSel, chLab, chSel);
+
     const listHost = el('div', 'repack-list');
     body.append(listHost);
     const actions = el('div', 'edit-actions');
@@ -736,23 +808,91 @@ export function createRepackTool(d) {
     body.append(actions);
     box.append(head, body);
     frame.append(box);
-    frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+    // Solo cierra con Cancelar / ×
     document.body.append(frame);
 
+    let allCandidates = [];
     let candidates = [];
     const checks = [];
+
+    const rebuildFilters = () => {
+      const groups = [...new Set(allCandidates.map((x) => x.ch.group || 'Sin editorial'))].sort();
+      edSel.replaceChildren();
+      const oAll = el('option');
+      oAll.value = '';
+      oAll.textContent = 'Todas';
+      edSel.append(oAll);
+      for (const g of groups) {
+        const o = el('option');
+        o.value = g;
+        o.textContent = g;
+        edSel.append(o);
+      }
+      edSel.value = '';
+      chSel.hidden = true;
+      chLab.hidden = true;
+      applyFilter();
+    };
+
+    const rebuildChannels = () => {
+      const g = edSel.value;
+      chSel.replaceChildren();
+      const oAll = el('option');
+      oAll.value = '';
+      oAll.textContent = 'Todos';
+      chSel.append(oAll);
+      if (!g) {
+        chSel.hidden = true;
+        chLab.hidden = true;
+        return;
+      }
+      const chs = [...new Map(
+        allCandidates
+          .filter((x) => (x.ch.group || 'Sin editorial') === g)
+          .map((x) => [String(x.ch.id), x.ch])
+      ).values()].sort((a, b) => String(a.name).localeCompare(String(b.name)));
+      for (const c of chs) {
+        const o = el('option');
+        o.value = String(c.id);
+        o.textContent = c.name;
+        chSel.append(o);
+      }
+      chSel.value = '';
+      chSel.hidden = false;
+      chLab.hidden = false;
+    };
+
+    const applyFilter = () => {
+      const g = edSel.value;
+      const cid = chSel.value;
+      candidates = allCandidates.filter((x) => {
+        if (g && (x.ch.group || 'Sin editorial') !== g) return false;
+        if (cid && String(x.ch.id) !== cid) return false;
+        return true;
+      });
+      paintList();
+      status.textContent = candidates.length
+        ? (candidates.length + ' candidato(s)')
+        : (allCandidates.length ? 'Sin candidatos con este filtro' : 'Sin candidatos');
+    };
+
     const paintList = () => {
       listHost.replaceChildren();
       checks.length = 0;
       if (!candidates.length) {
-        listHost.append(el('p', 'cover-pick-hint', 'No hay CBR ni reenviados indexados. Entra antes en los canales.'));
+        listHost.append(el('p', 'cover-pick-hint',
+          allCandidates.length
+            ? 'Ningún archivo con el filtro actual.'
+            : 'No hay CBR ni reenviados indexados. Entra antes en los canales.'
+        ));
+        btnStart.disabled = true;
         return;
       }
       for (const item of candidates) {
         const row = el('label', 'repack-row');
         const cb = el('input');
         cb.type = 'checkbox';
-        cb.checked = checks.length === 0;
+        cb.checked = false; // ninguno por defecto
         cb._item = item;
         checks.push(cb);
         const meta = el('span', 'repack-row-meta');
@@ -765,6 +905,13 @@ export function createRepackTool(d) {
       }
       btnStart.disabled = false;
     };
+
+    edSel.onchange = () => {
+      rebuildChannels();
+      applyFilter();
+    };
+    chSel.onchange = applyFilter;
+
     btnAll.onclick = () => checks.forEach((c) => { c.checked = true; });
     btnNone.onclick = () => checks.forEach((c) => { c.checked = false; });
     btnStart.onclick = () => {
@@ -774,14 +921,18 @@ export function createRepackTool(d) {
         return;
       }
       if (selected.length > 1 && !confirm(`Vas a procesar ${selected.length} archivos. ¿Seguro? Mejor de uno en uno en móvil.`)) return;
+      const webpOpts = {
+        quality: parseFloat(String(qualityInp.value).replace(',', '.')) || 0.62,
+        resize: !!resizeCb.checked,
+        maxEdge: 2400,
+      };
       frame.remove();
-      // Siempre pedir/editar nombres antes de subir
-      showNameReview(selected, delCb.checked, !!webpCb.checked);
+      showNameReview(selected, delCb.checked, !!webpCb.checked, webpOpts);
     };
     collectCandidates().then((list) => {
-      candidates = list;
+      allCandidates = list;
       status.textContent = list.length ? `${list.length} candidato(s)` : 'Sin candidatos';
-      paintList();
+      rebuildFilters();
     }).catch((e) => {
       status.textContent = 'Error: ' + (e?.message || e);
       status.classList.add('sync-err');

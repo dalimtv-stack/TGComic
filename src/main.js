@@ -2117,8 +2117,31 @@ function groupsView() {
 
     const fillHomeBody = () => {
       homeBody.replaceChildren();
-      const continueList = getContinueList();
-      if (continueList.length) {
+      // Seguir leyendo: filtrar cómics que ya no existen en la caché del canal
+      const rawContinue = getContinueList();
+      const continueHost = el('div');
+      homeBody.append(continueHost);
+      (async () => {
+        const continueList = [];
+        for (const item of rawContinue) {
+          try {
+            const files = (await kv.get('f:' + item.ch.id)) || [];
+            if (files.some((x) => String(x.id) === String(item.f.id))) continueList.push(item);
+          } catch (_) {}
+        }
+        // Limpiar recentReads / lastRead de los que ya no están
+        if (continueList.length !== rawContinue.length) {
+          try {
+            const ok = new Set(continueList.map((x) => String(x.ch.id) + ':' + String(x.f.id)));
+            const recent = getRecentReads().filter((x) => ok.has(String(x.ch?.id) + ':' + String(x.f?.id)));
+            localStorage.setItem('recentReads', JSON.stringify(recent));
+            const last = getLastRead();
+            if (last?.ch?.id && last?.f?.id && !ok.has(String(last.ch.id) + ':' + String(last.f.id))) {
+              localStorage.removeItem('lastRead');
+            }
+          } catch (_) {}
+        }
+        if (!continueList.length || !continueHost.isConnected) return;
         const foldCont = el('details', 'pubs-fold continue-fold');
         if (pref('continueOpen', '1') === '1') foldCont.open = true;
         const sumCont = el('summary', '', 'Seguir leyendo');
@@ -2157,8 +2180,8 @@ function groupsView() {
         contInner.append(track);
         foldCont.append(contInner);
         foldCont.addEventListener('toggle', () => setPref('continueOpen', foldCont.open ? '1' : '0'));
-        homeBody.append(foldCont);
-      }
+        continueHost.replaceChildren(foldCont);
+      })();
       const gs = [...new Set(LIB.map((c) => c.group))];
       gs.sort((a, b) => natural(groupDisplayName(a), groupDisplayName(b)));
       const fold = el('details', 'pubs-fold');

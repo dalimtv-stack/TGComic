@@ -266,3 +266,11 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 .job-row-label{flex:1;min-width:0;word-break:break-word}
 .job-queue-actions{flex-wrap:wrap;gap:8px;justify-content:center}
 .job-queue-actions .btn{flex:1 1 auto;min-width:0}
+
+/* Página + Ancho: permitir scroll vertical con rueda cuando la hoja sobresale */
+#rd.page.fit-width{overflow-x:hidden;overflow-y:auto;-webkit-overflow-scrolling:touch}
+#rd.page.fit-width img{width:100%;height:auto;max-height:none;object-fit:contain}
+
+.webp-opts{margin:.25rem 0 .5rem;padding:.5rem .65rem;border-radius:12px;background:#ffffff08}
+.webp-opts .sync-label{margin-top:.15rem}
+.webp-opts .edit-input{margin:.2rem 0 .45rem}

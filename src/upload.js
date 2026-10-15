@@ -34,15 +34,19 @@ export function createUploadTool(d) {
 
   const yieldTick = () => new Promise((r) => setTimeout(r, 0));
 
-  async function blobToWebp(blob, quality = 0.62) {
+  async function blobToWebp(blob, opts = {}) {
     if (!blob || !blob.size) return blob;
     if ((blob.type || '').includes('webp') && blob.size < 1.5 * 1024 * 1024) return blob;
+    const quality = Number(opts.quality);
+    const q = Number.isFinite(quality) && quality > 0 && quality <= 1 ? quality : 0.62;
+    const doResize = opts.resize !== false;
+    const maxEdge = Number(opts.maxEdge) > 0 ? Number(opts.maxEdge) : 2400;
     let bmp = null;
     try {
       bmp = await createImageBitmap(blob);
-      // Limitar lado mayor para no tumbar el móvil (OOM → recarga de la app)
-      const maxEdge = 2400;
-      const scale = Math.min(1, maxEdge / Math.max(bmp.width, bmp.height));
+      const scale = doResize
+        ? Math.min(1, maxEdge / Math.max(bmp.width, bmp.height))
+        : 1;
       const w = Math.max(1, Math.round(bmp.width * scale));
       const h = Math.max(1, Math.round(bmp.height * scale));
       const cv = document.createElement('canvas');
@@ -53,10 +57,9 @@ export function createUploadTool(d) {
       try { bmp.close?.(); } catch (_) {}
       bmp = null;
       const out = await new Promise((res) => {
-        try { cv.toBlob((b) => res(b), 'image/webp', quality); }
+        try { cv.toBlob((b) => res(b), 'image/webp', q); }
         catch { res(null); }
       });
-      // Liberar canvas
       cv.width = 0;
       cv.height = 0;
       await yieldTick();
@@ -215,6 +218,7 @@ export function createUploadTool(d) {
 
   async function localFileToCbzBlob(file, status, opts) {
     const wantWebp = !!(opts && opts.asWebp);
+    const webpOpts = (opts && opts.webpOpts) || {};
     status?.('Leyendo archivo…');
     await yieldTick();
 
@@ -253,7 +257,7 @@ export function createUploadTool(d) {
           let outName = base;
           if (wantWebp) {
             const origSize = pageBlob.size || 0;
-            const converted = await blobToWebp(pageBlob);
+            const converted = await blobToWebp(pageBlob, webpOpts);
             // Solo usar WebP si realmente reduce tamaño (si no, se queda la original)
             if (converted && converted.size && converted.size < origSize * 0.98) {
               pageBlob = converted;
@@ -315,7 +319,7 @@ export function createUploadTool(d) {
         let outName = base;
         if (wantWebp) {
           const origSize = pageBlob.size || 0;
-          const converted = await blobToWebp(pageBlob);
+          const converted = await blobToWebp(pageBlob, webpOpts);
           if (converted && converted.size && converted.size < origSize * 0.98) {
             pageBlob = converted;
             outName = base.replace(/\.[^.]+$/i, '.webp');
@@ -627,7 +631,19 @@ export function createUploadTool(d) {
       const infoInp = el('input', 'edit-input');
       infoInp.type = 'text';
       infoInp.placeholder = 'Info opcional';
-      const preview = el('p', 'upload-preview', '');
+
+      const includeChChk = el('input');
+      includeChChk.type = 'checkbox';
+      includeChChk.checked = true;
+      const includeChRow = el('label', 'repack-check');
+      includeChRow.append(includeChChk, document.createTextNode(' Incluir nombre del canal en el archivo'));
+
+      const nameFinalLab = el('div', 'sync-label', 'Nombre final del archivo');
+      const nameFinalInp = el('input', 'edit-input upload-preview');
+      nameFinalInp.type = 'text';
+      nameFinalInp.placeholder = 'nombre.cbz';
+      let nameFinalTouched = false;
+      nameFinalInp.oninput = () => { nameFinalTouched = true; };
 
       const asWebpChk = el('input');
       asWebpChk.type = 'checkbox';
@@ -635,27 +651,42 @@ export function createUploadTool(d) {
       const webpRow = el('label', 'repack-check');
       webpRow.append(asWebpChk, document.createTextNode(' Convertir páginas a WebP (añade [WebP] al nombre)'));
 
+      const webpOptsBox = el('div', 'webp-opts');
+      webpOptsBox.hidden = true;
+      const qualityLab = el('label', 'sync-label', 'Calidad');
+      const qualityInp = el('input', 'edit-input');
+      qualityInp.type = 'text';
+      qualityInp.value = '0.62';
+      qualityInp.placeholder = '0.62';
+      const resizeRow = el('label', 'repack-check');
+      const resizeCb = el('input');
+      resizeCb.type = 'checkbox';
+      resizeCb.checked = true;
+      resizeRow.append(resizeCb, document.createTextNode(' Redimensionar (lado mayor máx. 2400 px)'));
+      webpOptsBox.append(qualityLab, qualityInp, resizeRow);
+      asWebpChk.onchange = () => { webpOptsBox.hidden = !asWebpChk.checked; };
+
       const status = el('p', 'sync-status', '');
       const actions = el('div', 'edit-actions');
       const cancel = el('button', 'btn', 'Cancelar');
       const goBtn = el('button', 'btn edit-save', 'Subir');
 
+      const currentChannelName = () => {
+        if (channelSel.value === '__new__') return channelInp.value.trim();
+        const opt = [...channelSel.options].find((o) => o.value === channelSel.value);
+        return (opt?._ch?.name || opt?.textContent || '').trim();
+      };
+
       const updatePreview = () => {
-        const ed = editorialSel.value === '__new__' ? editorialInp.value.trim() : editorialSel.value;
-        let chName = '';
-        if (channelSel.value === '__new__') chName = channelInp.value.trim();
-        else {
-          const opt = [...channelSel.options].find((o) => o.value === channelSel.value);
-          chName = opt?._ch?.name || opt?.textContent || '';
-        }
+        if (nameFinalTouched) return;
+        const chName = includeChChk.checked ? currentChannelName() : '';
         const fname = composeFileName({
           channel: chName,
           series: seriesInp.value,
           number: numberInp.value,
           info: infoInp.value,
         });
-        preview.textContent = 'Archivo: ' + fname;
-        preview._fname = fname;
+        nameFinalInp.value = fname;
       };
 
       const rebuildChannels = () => {
@@ -767,12 +798,14 @@ export function createUploadTool(d) {
       editorialInp.oninput = () => { if (editorialSel.value === '__new__') rebuildChannels(); else updatePreview(); };
       channelSel.onchange = () => {
         channelInp.hidden = channelSel.value !== '__new__';
+        nameFinalTouched = false;
         updatePreview();
       };
-      channelInp.oninput = updatePreview;
-      seriesInp.oninput = updatePreview;
-      numberInp.oninput = updatePreview;
-      infoInp.oninput = updatePreview;
+      channelInp.oninput = () => { nameFinalTouched = false; updatePreview(); };
+      seriesInp.oninput = () => { nameFinalTouched = false; updatePreview(); };
+      numberInp.oninput = () => { nameFinalTouched = false; updatePreview(); };
+      infoInp.oninput = () => { nameFinalTouched = false; updatePreview(); };
+      includeChChk.onchange = () => { nameFinalTouched = false; updatePreview(); };
 
       cancel.onclick = () => { frame.remove(); };
       goBtn.onclick = async () => {
@@ -785,21 +818,20 @@ export function createUploadTool(d) {
           return;
         }
         const ed = editorialSel.value === '__new__' ? editorialInp.value.trim() : editorialSel.value;
-        let chName = channelSel.value === '__new__'
-          ? channelInp.value.trim()
-          : (([...channelSel.options].find((o) => o.value === channelSel.value)?._ch?.name)
-            || ([...channelSel.options].find((o) => o.value === channelSel.value)?.textContent) || '');
-        chName = String(chName || '').trim();
+        let chName = currentChannelName();
         if (!ed) { alert('Indica la editorial'); return; }
         if (!chName) { alert('Indica el canal'); return; }
 
-        updatePreview();
-        let outName = preview._fname || composeFileName({
-          channel: chName,
-          series: seriesInp.value,
-          number: numberInp.value,
-          info: infoInp.value,
-        });
+        if (!nameFinalTouched) updatePreview();
+        let outName = String(nameFinalInp.value || '').trim();
+        if (!outName) {
+          outName = composeFileName({
+            channel: includeChChk.checked ? chName : '',
+            series: seriesInp.value,
+            number: numberInp.value,
+            info: infoInp.value,
+          });
+        }
         outName = outName.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
         if (!/\.cbz$/i.test(outName)) outName = outName.replace(/\.cb[zr]$/i, '') + '.cbz';
         if (!/\.cbz$/i.test(outName)) outName += '.cbz';
@@ -808,6 +840,11 @@ export function createUploadTool(d) {
         if (wantWebp && !/\[WebP\]/i.test(outName)) {
           outName = outName.replace(/\.cbz$/i, ' [WebP].cbz');
         }
+        const webpOpts = {
+          quality: parseFloat(String(qualityInp.value).replace(',', '.')) || 0.62,
+          resize: !!resizeCb.checked,
+          maxEdge: 2400,
+        };
 
         if (!confirm('¿Subir como «' + outName + '» al canal «' + chName + '» (' + ed + ')?')) return;
 
@@ -824,7 +861,7 @@ export function createUploadTool(d) {
           ctx.setProgress(20);
           st(wantWebp ? 'Convirtiendo a CBZ WebP…' : 'Convirtiendo a CBZ si hace falta…');
           await yieldTick();
-          let blob = await localFileToCbzBlob(fileRef, st, { asWebp: wantWebp });
+          let blob = await localFileToCbzBlob(fileRef, st, { asWebp: wantWebp, webpOpts });
           ctx.setProgress(55);
           await ctx.waitWhilePaused?.();
           st('Subiendo a Telegram…');
@@ -899,8 +936,10 @@ export function createUploadTool(d) {
       body.append(el('div', 'info-sec', 'Canal'));
       body.append(channelSel, channelInp);
       body.append(el('div', 'info-sec', 'Título del archivo'));
-      body.append(seriesInp, numberInp, infoInp, preview);
-      body.append(webpRow);
+      body.append(seriesInp, numberInp, infoInp);
+      body.append(includeChRow);
+      body.append(nameFinalLab, nameFinalInp);
+      body.append(webpRow, webpOptsBox);
       body.append(status);
       actions.append(cancel, goBtn);
       body.append(actions);
@@ -910,12 +949,7 @@ export function createUploadTool(d) {
       rebuildChannels();
       updatePreview();
 
-      let armed = false;
-      setTimeout(() => { armed = true; }, 350);
-      frame.addEventListener('click', (ev) => {
-        if (!armed) return;
-        if (ev.target === frame) frame.remove();
-      });
+      // Solo cierra con Cancelar / × (no al pulsar fuera)
       document.body.append(frame);
     } catch (e) {
       console.error('[upload] showUploadFrame', e);
