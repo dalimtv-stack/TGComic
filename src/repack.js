@@ -89,15 +89,23 @@ export function createRepackTool(d) {
     return n + '.cbz';
   }
 
-  function stripChannelFromName(name, chName) {
+    function stripChannelFromName(name, chName) {
     let n = cleanFileBase(String(name || '').replace(/\.cbz$/i, ''));
     if (chName) {
-      const low = n.toLowerCase();
-      const chLow = chName.toLowerCase();
-      if (low.startsWith(chLow)) {
-        n = n.slice(chName.length).replace(/^\s*-\s*/, '').trim();
+      // Solo quita el prefijo "Canal - " (añadido por ensureChannelInName).
+      // NO borra la serie aunque se llame igual que el canal (Crossed #01).
+      try {
+        const esc = chName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const rePref = new RegExp('^' + esc + '\\s*-\\s*', 'i');
+        n = n.replace(rePref, '').trim();
+      } catch (_) {
+        const chLow = chName.toLowerCase();
+        if (n.toLowerCase().startsWith(chLow + ' - ')) {
+          n = n.slice(chName.length).replace(/^\s*-\s*/, '').trim();
+        }
       }
     }
+    if (!n) n = cleanFileBase(String(name || '').replace(/\.cbz$/i, ''));
     return n + '.cbz';
   }
 
@@ -512,6 +520,43 @@ export function createRepackTool(d) {
     return chip;
   }
 
+
+  function attachResizeHandle(panel) {
+    if (!panel || panel.querySelector('.repack-resize-handle')) return;
+    const handle = el('div', 'repack-resize-handle');
+    handle.title = 'Arrastra para redimensionar';
+    panel.style.position = panel.style.position || '';
+    if (getComputedStyle(panel).position === 'static') panel.style.position = 'fixed';
+    handle.addEventListener('pointerdown', (e) => {
+      if (e.button != null && e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      handle.setPointerCapture?.(e.pointerId);
+      const startX = e.clientX, startY = e.clientY;
+      const startW = panel.offsetWidth, startH = panel.offsetHeight;
+      const maxW = Math.min(window.innerWidth - 24, 720);
+      const maxH = window.innerHeight - 24;
+      const onMove = (ev) => {
+        // Anclado abajo-derecha: arrastrar el asa (arriba-izq) hacia fuera crece
+        const dw = startX - ev.clientX;
+        const dh = startY - ev.clientY;
+        const w = Math.min(maxW, Math.max(280, startW + dw));
+        const h = Math.min(maxH, Math.max(160, startH + dh));
+        panel.style.width = w + 'px';
+        panel.style.height = h + 'px';
+        panel.style.maxHeight = h + 'px';
+      };
+      const onUp = (ev) => {
+        handle.releasePointerCapture?.(ev.pointerId);
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    });
+    panel.append(handle);
+  }
+
   function isolatePanelScroll(root) {
     if (!root || root.dataset.scrollIso === '1') return;
     root.dataset.scrollIso = '1';
@@ -575,6 +620,7 @@ export function createRepackTool(d) {
     panel.append(titleRow, bar, log, actions);
     document.body.append(panel);
     isolatePanelScroll(panel);
+    attachResizeHandle(panel);
     return panel;
   }
 

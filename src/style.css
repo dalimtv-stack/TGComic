@@ -223,13 +223,16 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 /* Recarga CBR / externos — panel flotante */
 .repack-panel{
   position:fixed;right:12px;bottom:12px;z-index:80;
-  width:min(360px,calc(100vw - 24px));max-height:min(50vh,420px);
+  width:min(360px,calc(100vw - 24px));
+  max-height:min(50vh, calc(100dvh - 24px));
+  max-height:min(50vh, calc(100vh - 24px));
   display:flex;flex-direction:column;gap:8px;padding:12px;border-radius:14px;
   background:#1c1d22f2;-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
   box-shadow:0 8px 32px #000a;color:var(--fg);
   overflow:hidden;
   overscroll-behavior:contain;
   touch-action:manipulation;
+  box-sizing:border-box;
 }
 .repack-panel[hidden]{display:none!important}
 .repack-panel.minimized{max-height:48px;overflow:hidden}
@@ -237,8 +240,8 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 .repack-panel-bar{height:6px;border-radius:99px;background:#ffffff14;overflow:hidden;flex:none}
 .repack-panel-fill{height:100%;width:0;background:var(--acc);transition:width .2s}
 .repack-panel-log{
-  flex:1 1 auto;min-height:80px;overflow:auto;font-size:.78rem;line-height:1.35;
-  color:var(--mut);max-height:220px;
+  flex:1 1 auto;min-height:48px;overflow:auto;font-size:.78rem;line-height:1.35;
+  color:var(--mut);max-height:min(140px, 22vh);
   -webkit-overflow-scrolling:touch;
   overscroll-behavior:contain;
   touch-action:pan-y;
@@ -276,7 +279,7 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 .upload-select{width:100%;margin:.25rem 0}
 
 /* Cola de tareas: secciones desplegables */
-.job-queue-panel{display:flex;flex-direction:column;gap:8px;max-height:min(70vh,520px)}
+.job-queue-panel{display:flex;flex-direction:column;gap:8px;max-height:min(70vh, calc(100dvh - 24px));max-height:min(70vh, calc(100vh - 24px))}
 .job-fold{border-radius:12px;background:#ffffff0a;overflow:hidden}
 .job-fold>summary{cursor:pointer;padding:10px 12px;font-weight:650;font-size:.9rem;list-style:none;display:flex;align-items:center;justify-content:space-between}
 .job-fold>summary::-webkit-details-marker{display:none}
@@ -284,32 +287,36 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 .job-fold:not([open])>summary::after{content:'▸'}
 .job-fold-body{padding:0 10px 10px}
 .job-fold-scroll{
-  max-height:140px;overflow:auto;
+  max-height:min(110px, 18vh);overflow:auto;
   -webkit-overflow-scrolling:touch;
   overscroll-behavior:contain;
   touch-action:pan-y;
 }
 
-/* PC: redimensionar paneles (esquina inferior derecha) */
+/* PC: redimensionar desde esquina superior izquierda (panel anclado abajo-derecha) */
+.repack-resize-handle{
+  display:none;
+}
 @media (hover:hover) and (pointer:fine){
   .repack-panel{
-    resize:both;
     min-width:280px;min-height:160px;
-    max-width:min(92vw,720px);max-height:min(92vh,800px);
-    padding-bottom:18px; /* hueco para el asa */
+    max-width:min(92vw,720px);
+    max-height:calc(100dvh - 24px);
+    max-height:calc(100vh - 24px);
+    padding-top:16px;
   }
-  .repack-panel::after{
-    content:'';
-    position:absolute;right:4px;bottom:4px;
-    width:14px;height:14px;
-    cursor:nwse-resize;pointer-events:none;
+  .repack-resize-handle{
+    display:block;
+    position:absolute;left:2px;top:2px;
+    width:16px;height:16px;
+    cursor:nwse-resize;z-index:2;
     background:
-      linear-gradient(135deg, transparent 0 45%, #ffffff55 45% 55%, transparent 55% 70%, #ffffff55 70% 80%, transparent 80%);
-    border-radius:2px;
+      linear-gradient(135deg, #ffffff66 0 18%, transparent 18% 35%, #ffffff66 35% 48%, transparent 48% 65%, #ffffff55 65% 78%, transparent 78%);
+    border-radius:3px 0 0 0;
+    touch-action:none;
   }
-  .job-queue-panel{max-height:none}
-  .repack-panel-log{max-height:none}
-  .job-fold-scroll{max-height:none;flex:1 1 auto;min-height:60px}
+  .repack-panel-log{max-height:min(160px, 22vh)}
+  .job-fold-scroll{max-height:min(120px, 18vh);flex:1 1 auto;min-height:48px}
 }
 .job-current-status{font-size:.85rem;color:var(--acc);margin:0 0 6px;word-break:break-word}
 .job-row{display:flex;flex-wrap:wrap;align-items:flex-start;gap:6px;padding:6px 0;border-bottom:1px solid #ffffff08;font-size:.78rem;line-height:1.35;color:var(--mut)}

@@ -224,6 +224,43 @@ export function createJobQueue({ el, pref }) {
 
 
   /** Evita que el scroll del panel arrastre la página de detrás (móvil). */
+
+  function attachResizeHandle(panel) {
+    if (!panel || panel.querySelector('.repack-resize-handle')) return;
+    const handle = el('div', 'repack-resize-handle');
+    handle.title = 'Arrastra para redimensionar';
+    panel.style.position = panel.style.position || '';
+    if (getComputedStyle(panel).position === 'static') panel.style.position = 'fixed';
+    handle.addEventListener('pointerdown', (e) => {
+      if (e.button != null && e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      handle.setPointerCapture?.(e.pointerId);
+      const startX = e.clientX, startY = e.clientY;
+      const startW = panel.offsetWidth, startH = panel.offsetHeight;
+      const maxW = Math.min(window.innerWidth - 24, 720);
+      const maxH = window.innerHeight - 24;
+      const onMove = (ev) => {
+        // Anclado abajo-derecha: arrastrar el asa (arriba-izq) hacia fuera crece
+        const dw = startX - ev.clientX;
+        const dh = startY - ev.clientY;
+        const w = Math.min(maxW, Math.max(280, startW + dw));
+        const h = Math.min(maxH, Math.max(160, startH + dh));
+        panel.style.width = w + 'px';
+        panel.style.height = h + 'px';
+        panel.style.maxHeight = h + 'px';
+      };
+      const onUp = (ev) => {
+        handle.releasePointerCapture?.(ev.pointerId);
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    });
+    panel.append(handle);
+  }
+
   function isolatePanelScroll(root) {
     if (!root || root.dataset.scrollIso === '1') return;
     root.dataset.scrollIso = '1';
@@ -315,6 +352,7 @@ export function createJobQueue({ el, pref }) {
     panel.append(head, bar, eta, curFold, pendFold, actions);
     document.body.append(panel);
     isolatePanelScroll(panel);
+    attachResizeHandle(panel);
     return panel;
   }
 
