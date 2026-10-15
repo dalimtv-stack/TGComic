@@ -512,6 +512,20 @@ export function createRepackTool(d) {
     return chip;
   }
 
+  function isolatePanelScroll(root) {
+    if (!root || root.dataset.scrollIso === '1') return;
+    root.dataset.scrollIso = '1';
+    const stop = (e) => { e.stopPropagation(); };
+    root.addEventListener('touchmove', stop, { passive: true });
+    root.addEventListener('wheel', stop, { passive: true });
+    root.querySelectorAll('.repack-panel-log, .job-fold-scroll, .repack-list').forEach((node) => {
+      if (node.dataset.scrollIso === '1') return;
+      node.dataset.scrollIso = '1';
+      node.addEventListener('touchmove', stop, { passive: true });
+      node.addEventListener('wheel', stop, { passive: true });
+    });
+  }
+
   function showProgressPanel() {
     let panel = document.getElementById('repack-panel');
     if (panel) {
@@ -522,6 +536,7 @@ export function createRepackTool(d) {
       panel.classList.remove('minimized');
       const chip = document.getElementById('repack-chip');
       if (chip) chip.hidden = true;
+      isolatePanelScroll(panel);
       return panel;
     }
     panel = el('div', 'repack-panel');
@@ -559,6 +574,7 @@ export function createRepackTool(d) {
     actions.append(btnStop);
     panel.append(titleRow, bar, log, actions);
     document.body.append(panel);
+    isolatePanelScroll(panel);
     return panel;
   }
 
