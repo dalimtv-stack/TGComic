@@ -2673,6 +2673,7 @@ const repackTool = createRepackTool({
   comicDisplayName,
   seriesDisplayName,
   getComicSeriesOverride,
+  seriesBase,
   stripExt,
   getIsHome: () => stack.length < 2 && !document.getElementById('rd'),
   formatBytes: (n) => {
