@@ -13,7 +13,7 @@ export function createRepackTool(d) {
     natural, formatBytes,
     getIsHome,
     parseComicName, comicDisplay, comicDisplayName,
-    seriesDisplayName, getComicSeriesOverride,
+    seriesDisplayName, getComicSeriesOverride, seriesBase,
   } = d;
   const getClient = () => d.client;
   const getReady = () => d.ready;
@@ -448,6 +448,24 @@ export function createRepackTool(d) {
     }
   }
 
+  function seriesOfFile(ch, f) {
+    try {
+      const ov = typeof getComicSeriesOverride === 'function' ? getComicSeriesOverride(ch, f) : null;
+      if (ov != null && String(ov).trim()) return String(ov).trim();
+    } catch (_) {}
+    try {
+      const p = typeof parseComicName === 'function' ? parseComicName(f?.name || '', ch?.name) : null;
+      if (p?.series) return String(p.series).trim();
+    } catch (_) {}
+    try {
+      if (typeof seriesBase === 'function') {
+        const b = seriesBase(f?.name || '', ch?.name);
+        if (b) return String(b).trim();
+      }
+    } catch (_) {}
+    return '';
+  }
+
   async function collectCandidates() {
     await getReady();
     const list = [];
@@ -461,9 +479,11 @@ export function createRepackTool(d) {
         const cbr = isCbrName(f.name);
         const fwd = !!f.forwarded;
         if (!cbr && !fwd) continue;
+        const series = seriesOfFile(ch, f);
         list.push({
           ch,
           f,
+          series,
           reasons: [cbr ? 'CBR' : null, fwd ? 'Reenviado' : null].filter(Boolean),
         });
       }
@@ -865,14 +885,18 @@ export function createRepackTool(d) {
     body.append(webpOptsBox);
     webpCb.onchange = () => { webpOptsBox.hidden = !webpCb.checked; };
 
-    // Filtros editorial / canal
+    // Filtros editorial / canal / serie
     const edSel = el('select', 'edit-input upload-select');
     const chSel = el('select', 'edit-input upload-select');
+    const serSel = el('select', 'edit-input upload-select');
     chSel.hidden = true;
+    serSel.hidden = true;
     const edLab = el('label', 'sync-label', 'Editorial');
     const chLab = el('label', 'sync-label', 'Canal');
+    const serLab = el('label', 'sync-label', 'Serie');
     chLab.hidden = true;
-    body.append(edLab, edSel, chLab, chSel);
+    serLab.hidden = true;
+    body.append(edLab, edSel, chLab, chSel, serLab, serSel);
 
     const listHost = el('div', 'repack-list');
     body.append(listHost);
@@ -908,6 +932,14 @@ export function createRepackTool(d) {
       edSel.value = '';
       chSel.hidden = true;
       chLab.hidden = true;
+      serSel.hidden = true;
+      serLab.hidden = true;
+      serSel.replaceChildren();
+      const oSerAll0 = el('option');
+      oSerAll0.value = '';
+      oSerAll0.textContent = 'Todas';
+      serSel.append(oSerAll0);
+      serSel.value = '';
       applyFilter();
     };
 
@@ -921,6 +953,8 @@ export function createRepackTool(d) {
       if (!g) {
         chSel.hidden = true;
         chLab.hidden = true;
+        chSel.value = '';
+        rebuildSeries();
         return;
       }
       const chs = [...new Map(
@@ -937,14 +971,64 @@ export function createRepackTool(d) {
       chSel.value = '';
       chSel.hidden = false;
       chLab.hidden = false;
+      rebuildSeries();
+    };
+
+    /** Series del canal seleccionado; por defecto "Todas". */
+    const rebuildSeries = () => {
+      const cid = chSel.value;
+      serSel.replaceChildren();
+      const oAll = el('option');
+      oAll.value = '';
+      oAll.textContent = 'Todas';
+      serSel.append(oAll);
+      if (!cid) {
+        serSel.hidden = true;
+        serLab.hidden = true;
+        serSel.value = '';
+        return;
+      }
+      const byKey = new Map(); // lower → label
+      let hasNone = false;
+      for (const x of allCandidates) {
+        if (String(x.ch.id) !== cid) continue;
+        const s = (x.series || '').trim();
+        if (!s) { hasNone = true; continue; }
+        const k = s.toLowerCase();
+        if (!byKey.has(k)) byKey.set(k, s);
+      }
+      const labels = [...byKey.values()].sort((a, b) =>
+        a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+      );
+      for (const lab of labels) {
+        const o = el('option');
+        o.value = lab;
+        o.textContent = lab;
+        serSel.append(o);
+      }
+      if (hasNone) {
+        const oNone = el('option');
+        oNone.value = '__none__';
+        oNone.textContent = 'Sin serie';
+        serSel.append(oNone);
+      }
+      serSel.value = ''; // Todas
+      serSel.hidden = false;
+      serLab.hidden = false;
     };
 
     const applyFilter = () => {
       const g = edSel.value;
       const cid = chSel.value;
+      const ser = serSel.value;
       candidates = allCandidates.filter((x) => {
         if (g && (x.ch.group || 'Sin editorial') !== g) return false;
         if (cid && String(x.ch.id) !== cid) return false;
+        if (ser === '__none__') {
+          if ((x.series || '').trim()) return false;
+        } else if (ser) {
+          if ((x.series || '').trim().toLowerCase() !== ser.toLowerCase()) return false;
+        }
         return true;
       });
       paintList();
@@ -973,9 +1057,10 @@ export function createRepackTool(d) {
         cb._item = item;
         checks.push(cb);
         const meta = el('span', 'repack-row-meta');
+        const serBit = item.series ? item.series + ' · ' : '';
         meta.append(
           el('b', '', item.f.name),
-          el('small', '', `${item.ch.name} · ${item.reasons.join(', ')} · ${formatBytes?.(item.f.size) || ''}`)
+          el('small', '', `${item.ch.name} · ${serBit}${item.reasons.join(', ')} · ${formatBytes?.(item.f.size) || ''}`)
         );
         row.append(cb, meta);
         listHost.append(row);
@@ -987,7 +1072,11 @@ export function createRepackTool(d) {
       rebuildChannels();
       applyFilter();
     };
-    chSel.onchange = applyFilter;
+    chSel.onchange = () => {
+      rebuildSeries();
+      applyFilter();
+    };
+    serSel.onchange = applyFilter;
 
     btnAll.onclick = () => checks.forEach((c) => { c.checked = true; });
     btnNone.onclick = () => checks.forEach((c) => { c.checked = false; });
