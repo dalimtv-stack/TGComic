@@ -535,7 +535,7 @@ export function createRepackTool(d) {
       const startX = e.clientX, startY = e.clientY;
       const startW = panel.offsetWidth, startH = panel.offsetHeight;
       // Más ancho; altura limitada para no tapar el menú ☰ superior
-      const maxW = Math.min(window.innerWidth - 16, 1100);
+      const maxW = Math.max(280, window.innerWidth - 16);
       const topReserve = 56; // menú superior
       const maxH = Math.max(180, window.innerHeight - topReserve - 12);
       const onMove = (ev) => {
@@ -833,7 +833,14 @@ export function createRepackTool(d) {
       'Edita el nombre final de cada archivo (.cbz). Se proponen espacios en lugar de _ cuando se puede.'
     ));
     if (asWebp) {
-      body.append(el('p', 'cover-pick-hint', 'WebP activado: se añadirá [WebP] al nombre y las páginas se convertirán.'));
+      body.append(el('p', 'cover-pick-hint', 'Se convertirán las páginas a WebP y se añadirá [WebP] al nombre.'));
+      const webpLock = el('label', 'repack-check');
+      const webpCb = el('input');
+      webpCb.type = 'checkbox';
+      webpCb.checked = true;
+      webpCb.disabled = true;
+      webpLock.append(webpCb, document.createTextNode(' Convertir páginas a WebP (añade [WebP] al nombre)'));
+      body.append(webpLock);
     }
 
     const includeChChk = el('input');
@@ -1219,8 +1226,19 @@ export function createRepackTool(d) {
     });
   } catch (_) {}
 
+  /** Un cómic → formulario de nombres con WebP forzado (no se puede desmarcar). */
+  function offerWebpVersion(ch, f) {
+    if (!ch || !f) return;
+    showNameReview([{ ch, f }], false, true, {
+      quality: 0.62,
+      resize: true,
+      maxEdge: 2400,
+    });
+  }
+
   return {
     showRepackFrame,
+    offerWebpVersion,
     isRunning: () => running,
     hideFloatingUi,
     syncFloatingUi,

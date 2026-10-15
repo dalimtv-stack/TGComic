@@ -29,7 +29,7 @@ export function setPageIndex(chId, msgId, n) {
     localStorage.setItem(pageKey(chId, msgId), String(n));
     localStorage.removeItem(legacyPageKey(msgId));
   } catch (_) {}
-  try { sync.schedulePush(); } catch (_) {}
+  try { sync.schedulePush(400); } catch (_) {}
 }
 
 export function getPagesTotal(chId, msgId) {

@@ -192,17 +192,15 @@ function mergeKeyMaps(localKeys, remoteKeys) {
     try { lb = JSON.parse(b || '[]'); } catch (_) {}
     if (!Array.isArray(la)) la = [];
     if (!Array.isArray(lb)) lb = [];
-    const seen = new Set();
-    const res = [];
-    for (const item of [...lb, ...la]) {
-      if (!item || item.chId == null || item.msgId == null) continue;
-      const id = String(item.chId) + ':' + String(item.msgId);
-      if (seen.has(id)) continue;
-      seen.add(id);
-      res.push(item);
-      if (res.length >= 8) break;
+    const byId = new Map();
+    for (const item of [...la, ...lb]) {
+      if (!item?.ch?.id || !item?.f?.id) continue;
+      const id = String(item.ch.id) + ':' + String(item.f.id);
+      const prev = byId.get(id);
+      if (!prev || (Number(item.at) || 0) >= (Number(prev.at) || 0)) byId.set(id, item);
     }
-    return JSON.stringify(res);
+    const res = [...byId.values()].sort((x, y) => (Number(y.at) || 0) - (Number(x.at) || 0));
+    return JSON.stringify(res.slice(0, 12));
   };
 
   for (const [k, rv] of Object.entries(remote)) {
@@ -220,11 +218,13 @@ function mergeKeyMaps(localKeys, remoteKeys) {
     } else if (k === 'recentReads') {
       out[k] = mergeRecent(lv, rv);
     } else if (k === 'lastRead') {
-      // Conservar el más “rico” o el remoto si local vacío
       try {
         const L = JSON.parse(lv || 'null');
         const R = JSON.parse(rv || 'null');
-        out[k] = (R && (R.chId != null)) ? rv : lv;
+        const la = Number(L?.at) || 0;
+        const ra = Number(R?.at) || 0;
+        if (R?.ch?.id && (!L?.ch?.id || ra >= la)) out[k] = rv;
+        else out[k] = lv;
       } catch (_) {
         out[k] = rv || lv;
       }
@@ -405,13 +405,34 @@ export async function pull() {
 }
 
 let pushTimer = null;
+let flushBound = false;
+
 /** Debounce: sube tras cada cambio local (progreso, títulos, prefs…). */
-export function schedulePush(ms = 1500) {
+export function schedulePush(ms = 800) {
   if (!isLoggedIn()) return;
   clearTimeout(pushTimer);
   pushTimer = setTimeout(() => {
     push().catch((e) => console.warn('[sync] push', e));
   }, ms);
+  ensureFlushHooks();
+}
+
+/** Empuja al instante (cerrar pestaña / cambiar app). */
+export function flushPush() {
+  if (!isLoggedIn()) return;
+  clearTimeout(pushTimer);
+  pushTimer = null;
+  push().catch((e) => console.warn('[sync] flush', e));
+}
+
+function ensureFlushHooks() {
+  if (flushBound || typeof window === 'undefined') return;
+  flushBound = true;
+  const go = () => { try { flushPush(); } catch (_) {} };
+  window.addEventListener('pagehide', go);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') go();
+  });
 }
 
 function showBootOverlay(text) {
@@ -635,6 +656,6 @@ export function showSyncFrame(opts = {}) {
 
   box.append(head, body);
   frame.append(box);
-  frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+  // No cerrar al pulsar fuera
   document.body.append(frame);
 }

@@ -41,6 +41,10 @@ export function createJobQueue({ el, pref }) {
     }
     save();
     paintPanel();
+    try {
+      const p = document.getElementById('job-queue-panel');
+      if (p && !p.hidden) requestAnimationFrame(() => layoutJobLogs(p));
+    } catch (_) {}
   }
 
   function onChange(fn) {
@@ -351,11 +355,60 @@ export function createJobQueue({ el, pref }) {
     btnClose.onclick = () => { panel.hidden = true; };
     actions.append(btnPause, btnClear, btnClose);
 
+    const onFoldToggle = () => requestAnimationFrame(() => layoutJobLogs(panel));
+    curFold.addEventListener('toggle', onFoldToggle);
+    pendFold.addEventListener('toggle', onFoldToggle);
+
     panel.append(head, bar, eta, curFold, pendFold, actions);
     document.body.append(panel);
     isolatePanelScroll(panel);
     attachResizeHandle(panel);
+    requestAnimationFrame(() => layoutJobLogs(panel));
+    if (typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver(() => layoutJobLogs(panel));
+      ro.observe(panel);
+      panel._logRo = ro;
+    }
     return panel;
+  }
+
+  /** Reparte el alto libre 50/50 entre los dos logs internos. */
+  function layoutJobLogs(panel) {
+    if (!panel || panel.hidden) return;
+    const cur = panel.querySelector('#job-fold-current');
+    const pend = panel.querySelector('#job-fold-pending');
+    const log = panel.querySelector('#job-queue-log');
+    const list = panel.querySelector('#job-queue-list');
+    if (!log || !list) return;
+    const panelH = panel.clientHeight || 0;
+    if (panelH < 80) return;
+    let used = 0;
+    for (const child of panel.children) {
+      if (child === cur || child === pend) continue;
+      if (child.classList?.contains('repack-resize-handle')) continue;
+      used += child.offsetHeight || 0;
+    }
+    // gap approx
+    used += 8 * 4;
+    const free = Math.max(120, panelH - used);
+    const half = Math.floor(free / 2);
+    const applyFold = (fold, scrollEl, h) => {
+      if (!fold || !scrollEl) return;
+      if (!fold.open) {
+        scrollEl.style.height = '';
+        scrollEl.style.maxHeight = '';
+        return;
+      }
+      const sumH = fold.querySelector('summary')?.offsetHeight || 40;
+      const statusH = fold.querySelector('.job-current-status')?.offsetHeight || 0;
+      const inner = Math.max(60, h - sumH - statusH - 12);
+      scrollEl.style.height = inner + 'px';
+      scrollEl.style.maxHeight = inner + 'px';
+      scrollEl.style.minHeight = '60px';
+      scrollEl.style.flex = 'none';
+    };
+    applyFold(cur, log, half);
+    applyFold(pend, list, half);
   }
 
   function ensureChip() {

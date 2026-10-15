@@ -520,7 +520,7 @@ function showInfoFrame() {
   body.append(el('div', 'info-loading', 'Calculando…'));
   box.append(head, body);
   frame.append(box);
-  frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+  // No cerrar al pulsar fuera: solo × / Cancelar
   document.body.append(frame);
 
   const row = (label, value) => {
@@ -735,7 +735,7 @@ function showViewerConfig() {
 
   box.append(head, body);
   frame.append(box);
-  frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+  // No cerrar al pulsar fuera: solo × / Cancelar
   document.body.append(frame);
 }
 menuCfgBtn.onclick = (ev) => { ev.stopPropagation(); showViewerConfig(); };
@@ -1098,7 +1098,7 @@ function showComicInfo(ch, f, displayTitle) {
     }
     box.append(head, body);
     frame.append(box);
-    frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+  // No cerrar al pulsar fuera: solo × / Cancelar
     document.body.append(frame);
   } catch (err) {
     console.error('showComicInfo', err);
@@ -1172,7 +1172,7 @@ function sheet(title, opts) {
   for (const [label, fn] of opts) { const b = el('button', 'btn', label); b.onclick = () => { close(); fn(); }; box.append(b); }
   const c = el('button', 'btn', 'Cancelar'); c.onclick = close;
   box.append(c);
-  bg.onclick = (ev) => { if (ev.target === bg) close(); };
+  // Submenú: no cerrar al pulsar fuera (solo Cancelar o una opción)
   bg.append(box);
   document.body.append(bg);
 }
@@ -1281,7 +1281,7 @@ function showEditComicTitle(ch, f, currentLabel, after) {
   body.append(actions);
   box.append(head, body);
   frame.append(box);
-  frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+  // No cerrar al pulsar fuera: solo × / Cancelar
   document.body.append(frame);
   setTimeout(() => { inputTitle.focus(); inputTitle.select(); }, 50);
 }
@@ -1315,7 +1315,7 @@ function showSeriesInfo(ch, seriesLabel, files) {
     body.append(row('Tamaño total', formatBytes(bytes)));
     box.append(head, body);
     frame.append(box);
-    frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+  // No cerrar al pulsar fuera: solo × / Cancelar
     document.body.append(frame);
   } catch (err) {
     console.error(err);
@@ -1441,7 +1441,7 @@ function showEditSeriesName(ch, seriesLabel, after) {
   body.append(actions);
   box.append(head, body);
   frame.append(box);
-  frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+  // No cerrar al pulsar fuera: solo × / Cancelar
   document.body.append(frame);
   setTimeout(() => { input.focus(); input.select(); }, 50);
 }
@@ -1521,7 +1521,7 @@ function showSeriesCoverPicker(ch, seriesLabel, files, after) {
 
   box.append(head, body);
   frame.append(box);
-  frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+  // No cerrar al pulsar fuera: solo × / Cancelar
   document.body.append(frame);
 }
 
@@ -1756,7 +1756,7 @@ async function showGroupInfo(originalName) {
     body.append(row('Tamaño total', formatBytes(bytes)));
     box.append(head, body);
     frame.append(box);
-    frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+  // No cerrar al pulsar fuera: solo × / Cancelar
     document.body.append(frame);
   } catch (err) {
     console.error(err);
@@ -1800,7 +1800,7 @@ function showEditGroupName(originalName, after) {
   body.append(actions);
   box.append(head, body);
   frame.append(box);
-  frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+  // No cerrar al pulsar fuera: solo × / Cancelar
   document.body.append(frame);
   setTimeout(() => { input.focus(); input.select(); }, 50);
 }
@@ -1920,7 +1920,7 @@ async function showGroupCoverPicker(originalName, after) {
 
   box.append(head, body);
   frame.append(box);
-  frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+  // No cerrar al pulsar fuera: solo × / Cancelar
   document.body.append(frame);
 }
 
@@ -1959,7 +1959,7 @@ async function showChannelInfo(ch) {
     body.append(row('Tamaño total', formatBytes(bytes)));
     box.append(head, body);
     frame.append(box);
-    frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+  // No cerrar al pulsar fuera: solo × / Cancelar
     document.body.append(frame);
   } catch (err) {
     console.error(err);
@@ -2003,7 +2003,7 @@ function showEditChannelName(ch, after) {
   body.append(actions);
   box.append(head, body);
   frame.append(box);
-  frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+  // No cerrar al pulsar fuera: solo × / Cancelar
   document.body.append(frame);
   setTimeout(() => { input.focus(); input.select(); }, 50);
 }
@@ -2106,7 +2106,7 @@ function showChannelCoverPicker(ch, files, after) {
 
   box.append(head, body);
   frame.append(box);
-  frame.addEventListener('click', (ev) => { if (ev.target === frame) frame.remove(); });
+  // No cerrar al pulsar fuera: solo × / Cancelar
   document.body.append(frame);
 }
 
@@ -2577,6 +2577,10 @@ function filesView(ch) {
         opts.push(unread
           ? ['Marcar comic como leído', () => markComicRead(ch, f, redraw)]
           : ['Marcar comic como no leído', () => markComicUnread(ch, f, redraw)]);
+        opts.push(['Añadir versión WebP', () => {
+          try { repackTool?.offerWebpVersion?.(ch, f); }
+          catch (e) { alert(e?.message || e); }
+        }]);
         // Solo la acción que proceda para la serie completa
         if (seriesLabel && seriesFiles && seriesFiles.length > 1) {
           const anyUnread = seriesFiles.some((x) => !isComicRead(ch.id, x.id));
@@ -2640,6 +2644,7 @@ function filesView(ch) {
               !isComicRead(ch.id, f.id)
                 ? ['Marcar comic como leído', () => markComicRead(ch, f, redraw)]
                 : ['Marcar comic como no leído', () => markComicUnread(ch, f, redraw)],
+              ['Añadir versión WebP', () => { try { repackTool?.offerWebpVersion?.(ch, f); } catch (e) { alert(e?.message || e); } }],
             ]);
             it.menu = undefined;
           }
@@ -2710,6 +2715,7 @@ function seriesView(ch, s, files) {
           unread
             ? ['Marcar comic como leído', () => markComicRead(ch, f, redraw)]
             : ['Marcar comic como no leído', () => markComicUnread(ch, f, redraw)],
+          ['Añadir versión WebP', () => { try { repackTool?.offerWebpVersion?.(ch, f); } catch (e) { alert(e?.message || e); } }],
           seriesUnread
             ? ['Marcar serie como leída', () => markSeriesRead(ch, files, redraw)]
             : ['Marcar serie como no leída', () => markSeriesUnread(ch, files, redraw)],
