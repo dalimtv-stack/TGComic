@@ -325,7 +325,10 @@ export function createReader(state, d) {
           try { rd.scrollTo(0, 0); } catch (_) {}
         };
 
-        /** level>1 activa zoom; centra el punto (clientX/Y) si se indica */
+        /**
+         * Cambia el nivel de zoom anclando el punto (clientX, clientY) del viewport
+         * para que no “baile” la imagen (cálculo síncrono scroll/tamaño).
+         */
         const setZoomLevel = (level, clientX, clientY) => {
           const im = rd.querySelector('img');
           if (!im) return;
@@ -335,20 +338,22 @@ export function createReader(state, d) {
             return;
           }
 
-          // Punto del contenido bajo el dedo (coords de documento del scroll)
-          let relX = 0.5, relY = 0.5;
+          const rdRect = rd.getBoundingClientRect();
+          const oldW = Math.max(1, im.offsetWidth || im.getBoundingClientRect().width);
+          const oldH = Math.max(1, im.offsetHeight || im.getBoundingClientRect().height);
+
+          let focusX = rd.clientWidth / 2;
+          let focusY = rd.clientHeight / 2;
           if (clientX != null && clientY != null) {
-            const rect = im.getBoundingClientRect();
-            const rw = Math.max(1, rect.width);
-            const rh = Math.max(1, rect.height);
-            relX = Math.min(1, Math.max(0, (clientX - rect.left) / rw));
-            relY = Math.min(1, Math.max(0, (clientY - rect.top) / rh));
-          } else if (rd.classList.contains('zoom')) {
-            const rw = Math.max(1, im.offsetWidth);
-            const rh = Math.max(1, im.offsetHeight);
-            relX = (rd.scrollLeft + rd.clientWidth / 2) / rw;
-            relY = (rd.scrollTop + rd.clientHeight / 2) / rh;
+            focusX = clientX - rdRect.left;
+            focusY = clientY - rdRect.top;
           }
+
+          // Punto del contenido bajo el foco (coords de scroll actuales)
+          const contentX = rd.scrollLeft + focusX;
+          const contentY = rd.scrollTop + focusY;
+          const ratioX = contentX / oldW;
+          const ratioY = contentY / oldH;
 
           zoomLevel = level;
           rd.classList.add('zoom');
@@ -356,16 +361,11 @@ export function createReader(state, d) {
           im.style.maxWidth = 'none';
           im.style.maxHeight = 'none';
 
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-              const im2 = rd.querySelector('img');
-              if (!im2 || !rd.classList.contains('zoom')) return;
-              const w = im2.offsetWidth || 1;
-              const h = im2.offsetHeight || 1;
-              rd.scrollLeft = Math.max(0, relX * w - rd.clientWidth / 2);
-              rd.scrollTop = Math.max(0, relY * h - rd.clientHeight / 2);
-            });
-          });
+          // Layout síncrono → mismo ratio de contenido bajo el dedo
+          const newW = Math.max(1, im.offsetWidth);
+          const newH = Math.max(1, im.offsetHeight);
+          rd.scrollLeft = Math.max(0, ratioX * newW - focusX);
+          rd.scrollTop = Math.max(0, ratioY * newH - focusY);
         };
 
         const applyZoomAt = (clientX, clientY) => {
@@ -402,7 +402,7 @@ export function createReader(state, d) {
 
         const armSuppressClick = () => {
           suppressClick = true;
-          setTimeout(() => { suppressClick = false; }, 450);
+          setTimeout(() => { suppressClick = false; }, 500);
         };
 
         rd.onclick = (ev) => {
@@ -413,9 +413,29 @@ export function createReader(state, d) {
           onTap(ev.clientX, ev.clientY);
         };
 
-        // Laterales siguen activos con zoom (cambiar página)
-        eL.onclick = () => { clearZoom(); turn(n - 1); };
-        eR.onclick = () => { clearZoom(); turn(n + 1); };
+        // Laterales: una sola acción (evitar doble turn por touch + click)
+        const edgeGo = (dir) => {
+          if (suppressClick) return;
+          armSuppressClick();
+          clearZoom();
+          turn(dir < 0 ? n - 1 : n + 1);
+        };
+        eL.onclick = (ev) => { ev.stopPropagation(); edgeGo(-1); };
+        eR.onclick = (ev) => { ev.stopPropagation(); edgeGo(1); };
+        eL.addEventListener('touchend', (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          armSuppressClick();
+          clearZoom();
+          turn(n - 1);
+        }, { passive: false });
+        eR.addEventListener('touchend', (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          armSuppressClick();
+          clearZoom();
+          turn(n + 1);
+        }, { passive: false });
 
         let sx = null, sy = 0, moved = false;
         let pinch = null; // { d0, z0 }
@@ -427,6 +447,12 @@ export function createReader(state, d) {
         });
 
         rd.addEventListener('touchstart', (e) => {
+          // Toque en laterales/barra: no iniciar gesto de página en #rd
+          if (e.target.closest?.('.edge, .bar, .mosaic')) {
+            sx = null;
+            pinch = null;
+            return;
+          }
           if (e.touches.length === 2) {
             sx = null;
             moved = false;
@@ -445,12 +471,22 @@ export function createReader(state, d) {
           sx = x; sy = y; moved = false;
         }, { passive: true });
 
+        let pinchRaf = 0;
+        let pinchPending = null;
         rd.addEventListener('touchmove', (e) => {
           if (pinch && e.touches.length === 2) {
             const d = Math.max(1, touchDist(e.touches[0], e.touches[1]));
             const c = touchCenter(e.touches[0], e.touches[1]);
-            const next = pinch.z0 * (d / pinch.d0);
-            setZoomLevel(next, c.x, c.y);
+            pinchPending = { level: pinch.z0 * (d / pinch.d0), x: c.x, y: c.y };
+            if (!pinchRaf) {
+              pinchRaf = requestAnimationFrame(() => {
+                pinchRaf = 0;
+                if (!pinchPending) return;
+                const p = pinchPending;
+                pinchPending = null;
+                setZoomLevel(p.level, p.x, p.y);
+              });
+            }
             e.preventDefault();
             return;
           }
@@ -459,15 +495,16 @@ export function createReader(state, d) {
         }, { passive: false });
 
         rd.addEventListener('touchend', (e) => {
-          if (e.touches.length >= 2) return;
-          if (e.touches.length === 1) {
-            // un dedo levantado en pellizco: fin del pellizco
-            pinch = null;
+          if (e.target.closest?.('.edge, .bar, .mosaic')) {
+            sx = null;
+            return;
           }
+          if (e.touches.length >= 2) return;
           if (pinch) {
             pinch = null;
             armSuppressClick();
             if (zoomLevel <= 1.08) clearZoom();
+            sx = null;
             return;
           }
           if (sx === null) return;
@@ -477,21 +514,9 @@ export function createReader(state, d) {
           sx = null;
           armSuppressClick();
 
-          // Con zoom: solo pan (moved) o toques; NO swipe de página ni cerrar
+          // Con zoom: solo pan o doble toque. Página = solo .edge (no zonas laterales aquí)
           if (rd.classList.contains('zoom')) {
-            if (moved) return; // pan de la imagen
-            // toque en laterales ~18% → cambiar página (como .edge)
-            const w = window.innerWidth || 1;
-            if (x < w * 0.18) {
-              clearZoom();
-              setTimeout(() => turn(n - 1), 30);
-              return;
-            }
-            if (x > w * 0.82) {
-              clearZoom();
-              setTimeout(() => turn(n + 1), 30);
-              return;
-            }
+            if (moved) return;
             onTap(x, y);
             return;
           }
