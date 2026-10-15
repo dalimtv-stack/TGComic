@@ -281,9 +281,11 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 /* Cola de tareas: secciones desplegables */
 .job-queue-panel{
   display:flex;flex-direction:column;gap:8px;
-  /* Bajo el menú superior (~52px) y margen inferior */
-  max-height:min(70vh, calc(100dvh - 64px));
-  max-height:min(70vh, calc(100vh - 64px));
+  /* Tamaño inicial como al principio; tope bajo el menú ☰ */
+  width:min(360px, calc(100vw - 24px));
+  height:min(70vh, 520px);
+  max-height:calc(100dvh - 64px);
+  max-height:calc(100vh - 64px);
 }
 .job-queue-panel > .repack-panel-head,
 .job-queue-panel > .repack-panel-bar,
@@ -311,7 +313,8 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 .job-fold-body{padding:0 10px 10px}
 .job-queue-panel .job-fold-scroll,
 .job-queue-panel .repack-panel-log.job-fold-scroll{
-  flex:1 1 0;min-height:0;
+  flex:1 1 0;
+  min-height:100px;
   max-height:none !important;
   overflow:auto;
   -webkit-overflow-scrolling:touch;

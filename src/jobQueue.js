@@ -239,7 +239,7 @@ export function createJobQueue({ el, pref }) {
       const startX = e.clientX, startY = e.clientY;
       const startW = panel.offsetWidth, startH = panel.offsetHeight;
       // Más ancho; altura limitada para no tapar el menú ☰ superior
-      const maxW = Math.min(window.innerWidth - 16, 1100);
+      const maxW = Math.max(280, window.innerWidth - 16);
       const topReserve = 56; // menú superior
       const maxH = Math.max(180, window.innerHeight - topReserve - 12);
       const onMove = (ev) => {

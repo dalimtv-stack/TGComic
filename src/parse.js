@@ -28,7 +28,7 @@ const cleanInfo = (s) => (s || '')
 // Número de número: 12, 07b, 1.5, 01 de 40, 3 of 12
 const ISSUE_NUM = '(?:\\d+(?:\\.\\d+)?[a-zA-Z]?(?:\\s*(?:de|of)\\s*\\d+)?)';
 // Marcador completo: número o Special / Especial / Extra
-const ISSUE_TAG = `(?:${ISSUE_NUM}|Special|Especial|Extra)`;
+const ISSUE_TAG = `(?:${ISSUE_NUM}|Special|Especial|Extra|One[-\s]?Shot|OneShot)`;
 export function parseComicName(name, channelName) {
   // Quitar [corchetes], @sitios y basura; dejar el patrón serie #n
   const raw = stripExt(name).replace(/_/g, ' ')

@@ -16,7 +16,7 @@ import {
   getPageFormat, setPageFormat, detectPageFormats,
   isComicRead, readProgress, markComicRead, markComicUnread,
   markSeriesRead, markSeriesUnread,
-  getLastRead, setLastRead, getRecentReads, getContinueList,
+  getLastRead, setLastRead, getRecentReads, getContinueList, listUnfinishedProgress,
 } from './progress.js';
 import {
   ungroupMap, setUngroupMode,
@@ -2199,25 +2199,56 @@ function groupsView() {
       homeBody.append(continueHost);
       (async () => {
         const continueList = [];
+        const seen = new Set();
+        const addItem = (item) => {
+          if (!item?.ch?.id || !item?.f?.id) return;
+          const id = String(item.ch.id) + ':' + String(item.f.id);
+          if (seen.has(id)) return;
+          if (isComicRead(item.ch.id, item.f.id)) return;
+          seen.add(id);
+          continueList.push(item);
+        };
+
         for (const item of rawContinue) {
           try {
-            const files = (await kv.get('f:' + item.ch.id)) || [];
-            if (files.some((x) => String(x.id) === String(item.f.id))) continueList.push(item);
-          } catch (_) {}
-        }
-        // Limpiar recentReads / lastRead de los que ya no están
-        if (continueList.length !== rawContinue.length) {
-          try {
-            const ok = new Set(continueList.map((x) => String(x.ch.id) + ':' + String(x.f.id)));
-            const recent = getRecentReads().filter((x) => ok.has(String(x.ch?.id) + ':' + String(x.f?.id)));
-            localStorage.setItem('recentReads', JSON.stringify(recent));
-            const last = getLastRead();
-            if (last?.ch?.id && last?.f?.id && !ok.has(String(last.ch.id) + ':' + String(last.f.id))) {
-              localStorage.removeItem('lastRead');
+            let files = (await kv.get('f:' + item.ch.id)) || [];
+            if (!files.length) {
+              try { files = await fetchFiles(item.ch); } catch (_) {}
             }
-          } catch (_) {}
+            if (!files.length) {
+              // Sin listado aún: mantener el ítem (no borrar recentReads)
+              addItem(item);
+              continue;
+            }
+            const f = files.find((x) => String(x.id) === String(item.f.id));
+            if (f) addItem({ ...item, f: { id: f.id, name: f.name, size: f.size } });
+            // Si el listado existe y el archivo no está, no lo añadimos (purgado lógico)
+          } catch (_) {
+            addItem(item);
+          }
         }
+
+        // Progreso page: en localStorage aunque no esté en recentReads
+        try {
+          const lib = (Array.isArray(LIB) && LIB.length) ? LIB : ((await kv.get('lib')) || []);
+          const byCh = new Map(lib.map((c) => [String(c.id), c]));
+          for (const u of listUnfinishedProgress()) {
+            const id = String(u.chId) + ':' + String(u.msgId);
+            if (seen.has(id)) continue;
+            const ch = byCh.get(String(u.chId));
+            if (!ch) continue;
+            let files = (await kv.get('f:' + ch.id)) || [];
+            if (!files.length) {
+              try { files = await fetchFiles(ch); } catch (_) {}
+            }
+            const f = files.find((x) => String(x.id) === String(u.msgId));
+            if (f) addItem({ ch, f: { id: f.id, name: f.name, size: f.size }, at: Date.now() });
+          }
+        } catch (_) {}
+
         if (!continueList.length || !continueHost.isConnected) return;
+        // Mostrar como máximo 5
+        continueList.splice(5);
         const foldCont = el('details', 'pubs-fold continue-fold');
         if (pref('continueOpen', '1') === '1') foldCont.open = true;
         const sumCont = el('summary', '', 'Seguir leyendo');

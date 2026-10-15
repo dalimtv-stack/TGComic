@@ -142,13 +142,37 @@ export function getRecentReads() {
   } catch { return []; }
 }
 
+/** IDs ch:msg con página > 0 y no terminados (desde localStorage). */
+export function listUnfinishedProgress() {
+  const out = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || !k.startsWith('page:')) continue;
+      const rest = k.slice(5);
+      const idx = rest.indexOf(':');
+      if (idx <= 0) continue; // legacy page:msgId sin canal
+      const chId = rest.slice(0, idx);
+      const msgId = rest.slice(idx + 1);
+      if (!chId || !msgId) continue;
+      const page = Math.max(0, +(localStorage.getItem(k) || 0) || 0);
+      if (page <= 0) continue;
+      if (isComicRead(chId, msgId)) continue;
+      out.push({ chId, msgId, page });
+    }
+  } catch (_) {}
+  return out;
+}
+
 export function getContinueList() {
   const list = getRecentReads().filter((x) => x?.ch?.id && x?.f?.id && !isComicRead(x.ch.id, x.f.id));
   const last = getLastRead();
   if (last?.ch?.id && last?.f?.id && !isComicRead(last.ch.id, last.f.id)) {
-    if (!list.some((x) => x.ch.id === last.ch.id && x.f.id === last.f.id)) list.unshift(last);
+    if (!list.some((x) => String(x.ch.id) === String(last.ch.id) && String(x.f.id) === String(last.f.id))) {
+      list.unshift(last);
+    }
   }
-  return list.slice(0, 5);
+  return list.slice(0, 12);
 }
 
 export function setLastRead(ch, f) {
