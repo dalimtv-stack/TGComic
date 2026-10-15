@@ -222,10 +222,30 @@ export function createJobQueue({ el, pref }) {
     pump();
   }
 
+
+  /** Evita que el scroll del panel arrastre la página de detrás (móvil). */
+  function isolatePanelScroll(root) {
+    if (!root || root.dataset.scrollIso === '1') return;
+    root.dataset.scrollIso = '1';
+    const stop = (e) => { e.stopPropagation(); };
+    root.addEventListener('touchmove', stop, { passive: true });
+    root.addEventListener('wheel', stop, { passive: true });
+    // Áreas internas con scroll propio
+    root.querySelectorAll('.repack-panel-log, .job-fold-scroll, .repack-list').forEach((node) => {
+      if (node.dataset.scrollIso === '1') return;
+      node.dataset.scrollIso = '1';
+      node.addEventListener('touchmove', stop, { passive: true });
+      node.addEventListener('wheel', stop, { passive: true });
+    });
+  }
+
   // ---- UI panel ----
   function ensurePanel() {
     let panel = document.getElementById('job-queue-panel');
-    if (panel) return panel;
+    if (panel) {
+      isolatePanelScroll(panel);
+      return panel;
+    }
     panel = el('div', 'repack-panel job-queue-panel');
     panel.id = 'job-queue-panel';
 
@@ -294,6 +314,7 @@ export function createJobQueue({ el, pref }) {
 
     panel.append(head, bar, eta, curFold, pendFold, actions);
     document.body.append(panel);
+    isolatePanelScroll(panel);
     return panel;
   }
 
