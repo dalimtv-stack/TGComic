@@ -1039,6 +1039,14 @@ function bindLongPress(node, fn, ms = 480) {
   }, true);
 }
 
+function formatPeople(s) {
+  const parts = String(s || '')
+    .split(/\s*\|\s*|\s*;\s*|\s*,\s*/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+  return parts.length ? parts.join(', ') : (s || '—');
+}
+
 function showComicInfo(ch, f, displayTitle) {
   try {
     document.querySelector('.info-frame.comic-info')?.remove();
@@ -1077,25 +1085,28 @@ function showComicInfo(ch, f, displayTitle) {
       r.append(el('span', 'info-label', label), el('span', 'info-value', String(value ?? '—')));
       return r;
     };
-    body.append(el('div', 'info-sec', 'Cómic'));
+    body.append(el('div', 'info-sec', 'Archivo'));
     body.append(row('Título', title));
-    if (cap.originalTitle) body.append(row('Título original', cap.originalTitle));
     body.append(row('Serie', series));
-    if (cap.titleEs) body.append(row('Título España', cap.titleEs));
-    if (cap.writer) body.append(row('Guionista', cap.writer));
-    if (cap.artist) body.append(row('Dibujante', cap.artist));
-    if (cap.publisher) body.append(row('Editorial', cap.publisher));
-    if (cap.date) body.append(row('Fecha', cap.date));
     body.append(row('Canal', ch ? channelDisplayName(ch) : '—'));
-    body.append(row('Editorial', ch?.group || '—'));
-    body.append(row('Nombre archivo', fname || '—'));
-    body.append(row('Formato archivo', fmt));
+    body.append(row('Editorial canal', ch?.group || '—'));
+    body.append(row('Archivo', fname || '—'));
+    body.append(row('Formato', fmt));
     body.append(row('Tamaño', formatBytes(f?.size)));
-    body.append(row('Número de páginas', pagesLabel));
-    body.append(row('Formato páginas', pageFmt));
-    // Si hay caption pero no se reconoció ninguna clave, mostrar texto crudo
-    if (f?.caption && !cap.originalTitle && !cap.series && !cap.writer && !cap.artist && !cap.date) {
-      body.append(el('div', 'info-sec', 'Descripción Telegram'));
+    body.append(row('Páginas', pagesLabel));
+    body.append(row('Formato pág.', pageFmt));
+    const hasFicha = !!(cap.titleEs || cap.originalTitle || cap.series || cap.writer || cap.artist || cap.publisher || cap.date);
+    if (hasFicha) {
+      body.append(el('div', 'info-sec', 'Ficha en Telegram'));
+      if (cap.titleEs) body.append(row('Título España', cap.titleEs));
+      if (cap.originalTitle) body.append(row('Título original', cap.originalTitle));
+      if (cap.series) body.append(row('Serie (caption)', cap.series));
+      if (cap.writer) body.append(row('Guionista', formatPeople(cap.writer)));
+      if (cap.artist) body.append(row('Dibujante', formatPeople(cap.artist)));
+      if (cap.publisher) body.append(row('Editorial', cap.publisher));
+      if (cap.date) body.append(row('Fecha', cap.date));
+    } else if (f?.caption) {
+      body.append(el('div', 'info-sec', 'Ficha en Telegram'));
       body.append(el('p', 'cover-pick-hint', String(f.caption).slice(0, 800)));
     }
     box.append(head, body);
@@ -1195,16 +1206,14 @@ function existingSeriesLabels(ch, files) {
 
 async function updateTelegramCaption(ch, f, caption) {
   if (!ch || !f?.id) return;
-  await getReady();
-  const client = getClient();
+  await ready;
+  if (!client) throw new Error('Cliente Telegram no listo');
   const peer = peerOf(ch);
-  const { Api } = await import('telegram');
   await client.invoke(new Api.messages.EditMessage({
     peer,
     id: Number(f.id),
     message: String(caption || ''),
   }));
-  // Actualizar caché local del listado
   try {
     const files = (await kv.get('f:' + ch.id)) || [];
     const i = files.findIndex((x) => String(x.id) === String(f.id));
@@ -1250,20 +1259,42 @@ function showEditComicTitle(ch, f, currentLabel, after) {
   inputSeries.type = 'text';
   inputSeries.value = currentSeries;
   inputSeries.autocomplete = 'off';
-  inputSeries.placeholder = 'Nombre de la serie';
-  inputSeries.setAttribute('list', 'series-suggest-edit');
+  inputSeries.placeholder = 'Elige o escribe una serie';
+  const listId = 'series-suggest-' + String(ch.id) + '-' + String(f.id);
+  inputSeries.setAttribute('list', listId);
   const dl = el('datalist');
-  dl.id = 'series-suggest-edit';
+  dl.id = listId;
   body.append(inputSeries, dl);
-  body.append(el('p', 'cover-pick-hint', 'Si la serie ya existe, el cómic se agrupa con ella. Vacío = usar el nombre del archivo.'));
+  body.append(el('p', 'cover-pick-hint', 'Lista del canal + serie original del archivo. Si eliges una existente, se agrupa. Vacío = parseo del nombre.'));
 
   (async () => {
     try {
-      const files = (await kv.get('f:' + ch.id)) || [];
-      for (const lab of existingSeriesLabels(ch, files)) {
+      let files = (await kv.get('f:' + ch.id)) || [];
+      if (!files.length) {
+        try { files = await fetchFiles(ch); } catch (_) {}
+      }
+      const labels = existingSeriesLabels(ch, files);
+      const seen = new Set();
+      // Serie original del archivo (aunque ya no haya grupo)
+      if (parsedSeries) {
         const o = el('option');
-        o.value = seriesDisplayName(ch, lab) || lab;
-        o.dataset.key = lab;
+        o.value = parsedSeries;
+        o.label = parsedSeries + ' (original del archivo)';
+        // Algunos navegadores solo muestran value; prefijamos el value visible
+        o.value = parsedSeries;
+        dl.append(o);
+        seen.add(parsedSeries.toLowerCase());
+      }
+      for (const lab of labels) {
+        const k = lab.toLowerCase();
+        if (seen.has(k)) continue;
+        seen.add(k);
+        const o = el('option');
+        const shown = seriesDisplayName(ch, lab) || lab;
+        o.value = shown;
+        if (parsedSeries && k === parsedSeries.toLowerCase()) {
+          o.label = shown + ' (original del archivo)';
+        }
         dl.append(o);
       }
     } catch (_) {}
@@ -1290,8 +1321,8 @@ function showEditComicTitle(ch, f, currentLabel, after) {
   };
   const inpTitleEs = mkField('Título España', cap.titleEs);
   const inpOrig = mkField('Título original', cap.originalTitle);
-  const inpWriter = mkField('Guionista', cap.writer);
-  const inpArtist = mkField('Dibujante', cap.artist);
+  const inpWriter = mkField('Guionista', cap.writer, 'Nombre1 | Nombre2');
+  const inpArtist = mkField('Dibujante', cap.artist, 'Nombre1 | Nombre2');
   const inpPub = mkField('Editorial', cap.publisher || (ch.group || ''));
   body.append(metaBox);
   metaChk.onchange = () => { metaBox.hidden = !metaChk.checked; };
@@ -1339,10 +1370,20 @@ function showEditComicTitle(ch, f, currentLabel, after) {
             publisher: inpPub.value,
           });
           try {
+            // Guardar siempre en caché local primero
+            f.caption = caption;
+            try {
+              const files = (await kv.get('f:' + ch.id)) || [];
+              const i = files.findIndex((x) => String(x.id) === String(f.id));
+              if (i >= 0) {
+                files[i] = { ...files[i], caption };
+                await kv.set('f:' + ch.id, files);
+              }
+            } catch (_) {}
             await updateTelegramCaption(ch, f, caption);
           } catch (e) {
             console.warn('[caption]', e);
-            alert('Datos locales guardados. Caption Telegram: ' + (e?.message || e));
+            alert('Ficha guardada en la app. Telegram: ' + (e?.message || e));
           }
         }
         frame.remove();
@@ -1478,17 +1519,17 @@ function showEditSeries(ch, seriesLabel, files, after) {
   const title = seriesDisplayName(ch, seriesLabel);
   const list = Array.isArray(files) ? files : [];
   sheet(title, [
-    ['Editar nombre de la serie a la que pertenece', () => showEditSeriesName(ch, seriesLabel, after)],
+    ['Editar nombre de la serie a la que pertenece', () => showEditSeriesName(ch, seriesLabel, list, after)],
     ['Seleccionar portada de la serie', () => showSeriesCoverPicker(ch, seriesLabel, list, after)],
   ]);
 }
-function showEditSeriesName(ch, seriesLabel, after) {
+function showEditSeriesName(ch, seriesLabel, seriesFiles, after) {
   document.querySelector('.info-frame.edit-series')?.remove();
   const current = seriesDisplayName(ch, seriesLabel);
   const frame = el('div', 'info-frame edit-series');
   const box = el('div', 'info-box');
   const head = el('div', 'info-head');
-  head.append(el('span', '', 'Editar nombre'));
+  head.append(el('span', '', 'Editar nombre de la serie'));
   const close = el('button', 'btn info-close', '×');
   close.onclick = () => frame.remove();
   head.append(close);
@@ -1499,6 +1540,9 @@ function showEditSeriesName(ch, seriesLabel, after) {
   input.value = current;
   input.autocomplete = 'off';
   body.append(input);
+  body.append(el('p', 'cover-pick-hint',
+    'Si escribes el nombre de una serie que ya existe en el canal, todos los cómics de esta serie se agrupan con ella.'
+  ));
   const actions = el('div', 'edit-actions');
   const cancel = el('button', 'btn', 'Cancelar');
   cancel.onclick = () => frame.remove();
@@ -1510,8 +1554,21 @@ function showEditSeriesName(ch, seriesLabel, after) {
       return;
     }
     try {
-      const files = list.length ? list : ((await kv.get('f:' + ch.id)) || []);
-      const labels = existingSeriesLabels(ch, files);
+      let allFiles = (await kv.get('f:' + ch.id)) || [];
+      if (!allFiles.length) {
+        try { allFiles = await fetchFiles(ch); } catch (_) {}
+      }
+      // Cómics de ESTA serie: lista pasada o los que coinciden por parseo/override
+      let members = Array.isArray(seriesFiles) && seriesFiles.length ? seriesFiles.slice() : [];
+      if (!members.length) {
+        for (const f of allFiles) {
+          const ov = getComicSeriesOverride(ch, f);
+          const p = parseComicName(f.name, ch.name);
+          const base = (ov != null && String(ov).trim()) ? String(ov).trim() : (p?.series || seriesBase(f.name, ch.name) || '');
+          if (String(base).toLowerCase() === String(seriesLabel).toLowerCase()) members.push(f);
+        }
+      }
+      const labels = existingSeriesLabels(ch, allFiles);
       const hit = labels.find((lab) =>
         lab.toLowerCase() !== String(seriesLabel).toLowerCase()
         && (
@@ -1520,22 +1577,20 @@ function showEditSeriesName(ch, seriesLabel, after) {
         )
       );
       if (hit) {
-        // Fusionar con serie existente: override en cada cómic
-        for (const f of (list || files || [])) {
-          const p = parseComicName(f.name, ch.name);
-          const base = p?.series || seriesBase(f.name, ch.name) || '';
-          if (String(base).toLowerCase() === String(seriesLabel).toLowerCase()
-              || String(getComicSeriesOverride(ch, f) || '').toLowerCase() === String(seriesLabel).toLowerCase()) {
-            setComicSeries(ch, f, hit);
-          }
+        // Fusionar: override de serie en cada cómic miembro → misma clave de agrupación
+        for (const f of members) {
+          setComicSeries(ch, f, hit);
         }
-        // Limpiar renombre del label antiguo
-        setSeriesDisplayName(ch, seriesLabel, '', () => { frame.remove(); after?.(); });
+        // Quitar renombre visual del label antiguo (ya no hace falta)
+        setSeriesDisplayName(ch, seriesLabel, '');
+        frame.remove();
+        after?.();
         return;
       }
     } catch (e) {
       console.warn('[series merge]', e);
     }
+    // Solo renombre visual (serie nueva o mismo grupo)
     setSeriesDisplayName(ch, seriesLabel, newName, () => {
       frame.remove();
       after?.();
@@ -1545,7 +1600,6 @@ function showEditSeriesName(ch, seriesLabel, after) {
   body.append(actions);
   box.append(head, body);
   frame.append(box);
-  // No cerrar al pulsar fuera: solo × / Cancelar
   document.body.append(frame);
   setTimeout(() => { input.focus(); input.select(); }, 50);
 }
@@ -2369,6 +2423,19 @@ function groupsView() {
             const row = el('button', 'continue-row continue-slide');
             row.type = 'button';
             row.onclick = () => openComic(ch, f);
+            const contLabel = comicDisplayName(ch, f, comicDisplay(f.name, ch.name) || clean(f.name));
+            const contUnread = !isComicRead(ch.id, f.id);
+            const contOpts = [
+              ['Información', () => showComicInfo(ch, f, contLabel)],
+              ['Editar datos del comic', () => showEditComicTitle(ch, f, contLabel, () => {
+                try { if (stack.length === 1) groupsView(); } catch (_) {}
+              })],
+              contUnread
+                ? ['Marcar comic como leído', () => markComicRead(ch, f, () => renderContinue(continueList))]
+                : ['Marcar comic como no leído', () => markComicUnread(ch, f, () => renderContinue(continueList))],
+              ['Añadir versión WebP', () => { try { repackTool?.offerWebpVersion?.(ch, f); } catch (e) { alert(e?.message || e); } }],
+            ];
+            bindLongPress(row, () => sheet(contLabel, contOpts));
             const thumb = el('div', 'continue-cover');
             const letter = el('span', '', stripExt(f.name).slice(0, 1).toUpperCase());
             thumb.append(letter);

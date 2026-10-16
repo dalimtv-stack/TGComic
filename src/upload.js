@@ -685,8 +685,8 @@ export function createUploadTool(d) {
       };
       const metaTitleEs = mkMeta('Título España');
       const metaOrig = mkMeta('Título original');
-      const metaWriter = mkMeta('Guionista');
-      const metaArtist = mkMeta('Dibujante');
+      const metaWriter = mkMeta('Guionista', 'Nombre1 | Nombre2');
+      const metaArtist = mkMeta('Dibujante', 'Nombre1 | Nombre2');
       const metaPub = mkMeta('Editorial');
       metaChk.onchange = () => { metaBox.hidden = !metaChk.checked; };
 
