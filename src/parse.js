@@ -264,25 +264,28 @@ export function parseComicCaption(text) {
     'synopsis': 'description',
   };
   const lines = String(text).replace(/\r\n/g, '\n').split('\n');
-  let current = null;
+  let inDescription = false;
   for (const line of lines) {
+    // Tras "Descripción:" el resto del caption es solo descripción
+    // (no interpretar "Título original:" u otras claves dentro del texto)
+    if (inDescription) {
+      out.description = (out.description ? out.description + '\n' : '') + line.trimEnd();
+      continue;
+    }
     const m = line.match(/^\s*([^:：\n]{1,40})[:：]\s*(.*)$/);
     if (m) {
       const rawKey = m[1].trim().toLowerCase().normalize('NFC');
       const keyFold = rawKey.normalize('NFD').replace(/\p{M}/gu, '');
       const field = keyMap[rawKey] || keyMap[keyFold];
       if (field) {
-        current = field;
-        const v = m[2].trim();
-        out[field] = v;
+        if (field === 'description') {
+          inDescription = true;
+          out.description = String(m[2] || '').replace(/\s+$/, '');
+        } else {
+          const tv = String(m[2] || '').trim();
+          if (tv) out[field] = tv;
+        }
         continue;
-      }
-    }
-    // Continuación de descripción (u otro campo multilínea)
-    if (current === 'description') {
-      const cont = line.trimEnd();
-      if (cont !== '' || out.description) {
-        out.description = (out.description ? out.description + '\n' : '') + cont;
       }
     }
   }
