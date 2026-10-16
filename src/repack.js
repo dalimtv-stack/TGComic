@@ -724,7 +724,18 @@ export function createRepackTool(d) {
       prog(65);
       await pauseGate();
       if (jobCtx?.isAborted?.()) throw Object.assign(new Error('cancelado'), { cancelled: true });
-      await uploadCbz(ch, outName, cbz, f.caption || '', statusWithProg);
+      // Caption del original (lista o mensaje de Telegram)
+      let caption = String(item.caption || f.caption || '').trim();
+      if (!caption && typeof getMsg === 'function') {
+        try {
+          const msg = await getMsg(ch, f);
+          caption = String(msg?.message || '').trim();
+        } catch (e) {
+          console.warn('[repack] no se pudo leer caption del original', e);
+        }
+      }
+      status(caption ? 'Caption del original: ' + caption.length + ' caracteres' : 'Sin caption en el original');
+      await uploadCbz(ch, outName, cbz, caption, statusWithProg);
       cbz = null;
       status('Subido a Telegram');
       prog(95);
@@ -1322,7 +1333,7 @@ export function createRepackTool(d) {
         maxEdge: 2400,
       };
       frame.remove();
-      runQueue([{ ch, f, outName: name, asWebp: true, webpOpts }], !!delCb.checked, true, webpOpts);
+      runQueue([{ ch, f, outName: name, asWebp: true, webpOpts, caption: f.caption || '' }], !!delCb.checked, true, webpOpts);
     };
     actions.append(cancel, goBtn);
     body.append(actions);

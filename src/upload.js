@@ -815,8 +815,21 @@ export function createUploadTool(d) {
         if (p) {
           series = String(p.series || '').trim();
           number = String(p.number || '').trim();
-          info = String(p.info || '').trim();
           if (p.rangeEnd) number = number + ' - #' + p.rangeEnd;
+          // Info opcional: conservar paréntesis del nombre (solo en subidas)
+          let base = String(pickedFile.name || '')
+            .replace(/\.cb[zr]$/i, '')
+            .replace(/_/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+          base = base.replace(/\s*@\S+/g, '').replace(/\s*\[WebP\]/ig, '').trim();
+          const numEsc = String(p.number || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const afterNum = base.match(new RegExp('#\\s*' + numEsc + '\\b(?:\\s*[-–—:]\\s*|\\s+)(.*)$', 'i'));
+          if (afterNum) {
+            info = String(afterNum[1] || '').trim();
+          } else {
+            info = String(p.info || '').trim();
+          }
         } else {
           let base = String(pickedFile.name || '')
             .replace(/\.cb[zr]$/i, '')
@@ -912,6 +925,15 @@ export function createUploadTool(d) {
             date: metaDate.value,
             description: metaDesc.value,
           });
+          const capLen = captionText.length;
+          if (capLen > 1024) {
+            alert(
+              'El caption tiene ' + capLen + ' caracteres (máximo 1024 de Telegram).\n' +
+              'Acorta sobre todo la descripción u otros campos de la ficha y vuelve a intentar.\n' +
+              'El formulario no se ha cerrado.'
+            );
+            return;
+          }
         }
 
         if (!confirm('¿Subir como «' + outName + '» al canal «' + chName + '» (' + ed + ')?')) return;
