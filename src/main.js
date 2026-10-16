@@ -1052,11 +1052,13 @@ function showComicInfo(ch, f, displayTitle) {
     document.querySelector('.info-frame.comic-info')?.remove();
     const cap = parseComicCaption(f?.caption || '');
     const parsed = parseComicName(f?.name || '', ch?.name);
-    // Serie de agrupación en la app (override o parseo); sin renombre visual
-    let series = (ch && f ? getComicSeriesOverride(ch, f) : null)
-      || parsed?.series || seriesBase(f?.name || '', ch?.name) || '—';
-    if (series != null && String(series).trim()) series = String(series).trim();
-    else series = '—';
+    // Clave de agrupación + renombre visual de «Editar TODA la serie»
+    let seriesKey = (ch && f ? getComicSeriesOverride(ch, f) : null)
+      || parsed?.series || seriesBase(f?.name || '', ch?.name) || '';
+    seriesKey = String(seriesKey || '').trim();
+    let series = seriesKey
+      ? (ch ? (seriesDisplayName(ch, seriesKey) || seriesKey) : seriesKey)
+      : '—';
     const parsedTitle = comicDisplay(f?.name || '', ch?.name) || '—';
     const title = (displayTitle && String(displayTitle).trim())
       || (ch && f ? comicDisplayName(ch, f, parsedTitle) : parsedTitle)
@@ -1232,9 +1234,9 @@ function showEditComicTitle(ch, f, currentLabel, after) {
   const currentTitle = comicDisplayName(ch, f, currentLabel || fallbackTitle);
   const parsed = parseComicName(f?.name || '', ch?.name);
   const parsedSeries = (parsed?.series || seriesBase(f?.name || '', ch?.name) || '').trim();
-  // Valor REAL de agrupación (sin renombre visual de "Editar TODA la serie")
   const overrideRaw = getComicSeriesOverride(ch, f);
-  const currentSeries = (overrideRaw != null && String(overrideRaw).trim())
+  // Clave real de agrupación
+  const seriesKey = (overrideRaw != null && String(overrideRaw).trim())
     ? String(overrideRaw).trim()
     : parsedSeries;
 
@@ -1256,18 +1258,18 @@ function showEditComicTitle(ch, f, currentLabel, after) {
   body.append(inputTitle);
   body.append(el('p', 'cover-pick-hint', 'Vacío = restaurar el del nombre de archivo.'));
 
-  body.append(el('div', 'info-sec', 'Serie (agrupación en la app)'));
-  const inputSeries = el('input', 'edit-input');
-  inputSeries.type = 'text';
-  inputSeries.value = currentSeries;
-  inputSeries.autocomplete = 'off';
-  inputSeries.placeholder = parsedSeries ? ('Vacío = original: ' + parsedSeries) : 'Nombre de la serie';
-  body.append(inputSeries);
-  body.append(el('p', 'cover-pick-hint', 'Vacío o el nombre original del archivo = sin forzar. Si eliges una serie del listado, se agrupa con ella.'));
+  body.append(el('div', 'info-sec', 'Serie'));
+  const seriesSel = el('select', 'edit-input series-select');
+  const seriesOther = el('input', 'edit-input');
+  seriesOther.type = 'text';
+  seriesOther.autocomplete = 'off';
+  seriesOther.placeholder = 'Nombre de la nueva serie';
+  seriesOther.hidden = true;
+  body.append(seriesSel);
+  body.append(seriesOther);
+  body.append(el('p', 'cover-pick-hint', 'Elige una serie del canal o «Otra…». Vacío / original = sin forzar agrupación.'));
 
-  const seriesPick = el('div', 'series-pick');
-  body.append(seriesPick);
-
+  // Rellenar desplegable
   (async () => {
     try {
       let files = (await kv.get('f:' + ch.id)) || [];
@@ -1275,42 +1277,83 @@ function showEditComicTitle(ch, f, currentLabel, after) {
         try { files = await fetchFiles(ch); } catch (_) {}
       }
       const labels = existingSeriesLabels(ch, files);
+      seriesSel.replaceChildren();
+
+      const optOrig = el('option');
+      optOrig.value = '';
+      optOrig.textContent = parsedSeries
+        ? ('Original del archivo: ' + parsedSeries)
+        : 'Original del archivo (sin serie)';
+      seriesSel.append(optOrig);
+
       const seen = new Set();
-      const addChip = (value, note) => {
-        const v = String(value || '').trim();
-        if (!v) return;
-        const k = v.toLowerCase();
-        if (seen.has(k)) return;
-        seen.add(k);
-        const b = el('button', 'series-chip', note ? (v + ' · ' + note) : v);
-        b.type = 'button';
-        b.onclick = (ev) => {
-          ev.preventDefault();
-          inputSeries.value = v;
-        };
-        seriesPick.append(b);
-      };
-      if (parsedSeries) addChip(parsedSeries, 'original');
+      if (parsedSeries) seen.add(parsedSeries.toLowerCase());
+
       for (const lab of labels) {
-        const shown = lab; // clave real de agrupación, no el renombre visual
-        addChip(shown, shown.toLowerCase() === parsedSeries.toLowerCase() ? 'original' : '');
+        const k = String(lab).toLowerCase();
+        if (seen.has(k)) continue;
+        seen.add(k);
+        const o = el('option');
+        o.value = lab;
+        const shown = seriesDisplayName(ch, lab);
+        o.textContent = (shown && shown !== lab) ? (shown + ' (' + lab + ')') : lab;
+        seriesSel.append(o);
       }
-      if (!seriesPick.childNodes.length) {
-        seriesPick.append(el('span', 'cover-pick-hint', 'No hay otras series en este canal.'));
+
+      // Si la clave actual no está en la lista (serie forzada rara), añadirla
+      if (seriesKey && !seen.has(seriesKey.toLowerCase())
+          && seriesKey.toLowerCase() !== parsedSeries.toLowerCase()) {
+        const o = el('option');
+        o.value = seriesKey;
+        o.textContent = seriesKey;
+        seriesSel.append(o);
       }
-    } catch (_) {}
+
+      const optOther = el('option');
+      optOther.value = '__other__';
+      optOther.textContent = 'Otra…';
+      seriesSel.append(optOther);
+
+      // Selección inicial
+      if (!overrideRaw) {
+        seriesSel.value = '';
+        seriesOther.hidden = true;
+      } else if ([...seriesSel.options].some((o) => o.value === seriesKey)) {
+        seriesSel.value = seriesKey;
+        seriesOther.hidden = true;
+      } else {
+        seriesSel.value = '__other__';
+        seriesOther.hidden = false;
+        seriesOther.value = seriesKey;
+      }
+    } catch (e) {
+      console.warn('[series select]', e);
+      const o = el('option');
+      o.value = '';
+      o.textContent = 'Original';
+      seriesSel.append(o);
+    }
   })();
+
+  seriesSel.onchange = () => {
+    if (seriesSel.value === '__other__') {
+      seriesOther.hidden = false;
+      seriesOther.focus();
+    } else {
+      seriesOther.hidden = true;
+      seriesOther.value = '';
+    }
+  };
 
   const cap = parseComicCaption(f?.caption || '');
   const metaChk = el('input');
   metaChk.type = 'checkbox';
-  const hasCap = !!(cap.titleEs || cap.originalTitle || cap.series || cap.writer || cap.artist || cap.publisher);
-  metaChk.checked = hasCap;
+  metaChk.checked = false; // siempre desmarcado por defecto
   const metaLab = el('label', 'repack-check');
   metaLab.append(metaChk, document.createTextNode(' Ficha en Telegram (caption)'));
   body.append(metaLab);
   const metaBox = el('div', 'meta-telegram-box');
-  metaBox.hidden = !metaChk.checked;
+  metaBox.hidden = true;
   let metaDirty = false;
   const markDirty = () => { metaDirty = true; };
   const mkField = (lab, val, ph) => {
@@ -1333,7 +1376,7 @@ function showEditComicTitle(ch, f, currentLabel, after) {
   body.append(metaBox);
   metaChk.onchange = () => {
     metaBox.hidden = !metaChk.checked;
-    markDirty();
+    if (metaChk.checked) markDirty();
   };
 
   const actions = el('div', 'edit-actions');
@@ -1351,33 +1394,20 @@ function showEditComicTitle(ch, f, currentLabel, after) {
     }
     if (!titleSave || titleSave === fallbackTitle) titleSave = '';
 
-    // Serie de la APP: clave de agrupación, sin mezclar con renombres visuales
-    const seriesV = inputSeries.value.trim();
-    let seriesSave;
-    if (!seriesV) {
-      // Vacío = volver al parseo del archivo
-      seriesSave = '';
-    } else if (parsedSeries && seriesV.toLowerCase() === parsedSeries.toLowerCase()) {
-      // Explicitamente el original = sin override
+    // Serie desde el <select>
+    let seriesSave = '';
+    const sel = seriesSel.value;
+    if (sel === '__other__') {
+      const custom = seriesOther.value.trim();
+      if (!custom) seriesSave = '';
+      else if (parsedSeries && custom.toLowerCase() === parsedSeries.toLowerCase()) seriesSave = '';
+      else seriesSave = custom;
+    } else if (!sel) {
+      seriesSave = ''; // original
+    } else if (parsedSeries && sel.toLowerCase() === parsedSeries.toLowerCase()) {
       seriesSave = '';
     } else {
-      // Resolver a clave canónica si coincide con una serie del canal
-      let hit = null;
-      try {
-        let files = (await kv.get('f:' + ch.id)) || [];
-        if (!files.length) {
-          try { files = await fetchFiles(ch); } catch (_) {}
-        }
-        const labels = existingSeriesLabels(ch, files);
-        hit = labels.find((lab) => lab.toLowerCase() === seriesV.toLowerCase()) || null;
-        if (!hit) {
-          // Solo por nombre mostrado de serie si no hay match exacto de clave
-          hit = labels.find((lab) =>
-            String(seriesDisplayName(ch, lab) || '').toLowerCase() === seriesV.toLowerCase()
-          ) || null;
-        }
-      } catch (_) {}
-      seriesSave = hit || seriesV;
+      seriesSave = sel;
     }
 
     setComicDisplayName(ch, f, titleSave, () => {
