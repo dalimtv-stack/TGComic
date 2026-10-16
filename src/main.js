@@ -1053,6 +1053,24 @@ function formatPeople(s) {
   return parts.length ? parts.join(', ') : (s || '—');
 }
 
+function showDescriptionPanel(text) {
+  document.querySelector('.info-frame.desc-panel')?.remove();
+  const frame = el('div', 'info-frame desc-panel');
+  const box = el('div', 'info-box');
+  const head = el('div', 'info-head');
+  head.append(el('span', '', 'Descripción'));
+  const close = el('button', 'btn info-close', '×');
+  close.onclick = () => frame.remove();
+  head.append(close);
+  const body = el('div', 'info-body');
+  const p = el('div', 'desc-panel-text');
+  p.textContent = String(text || '');
+  body.append(p);
+  box.append(head, body);
+  frame.append(box);
+  document.body.append(frame);
+}
+
 function showComicInfo(ch, f, displayTitle) {
   try {
     document.querySelector('.info-frame.comic-info')?.remove();
@@ -1102,9 +1120,10 @@ function showComicInfo(ch, f, displayTitle) {
     body.append(row('Tamaño', formatBytes(f?.size)));
     body.append(row('Páginas', pagesLabel));
     body.append(row('Formato pág.', pageFmt));
-    const hasFicha = !!(cap.titleEs || cap.originalTitle || cap.series || cap.writer || cap.artist || cap.publisher || cap.date);
+    const hasFicha = !!(cap.fileName || cap.titleEs || cap.originalTitle || cap.series || cap.writer || cap.artist || cap.publisher || cap.date || cap.description);
     if (hasFicha) {
       body.append(el('div', 'info-sec', 'Ficha en Telegram'));
+      if (cap.fileName) body.append(row('Nombre de archivo', cap.fileName));
       if (cap.titleEs) body.append(row('Título España', cap.titleEs));
       if (cap.originalTitle) body.append(row('Título original', cap.originalTitle));
       if (cap.series) body.append(row('Serie', cap.series));
@@ -1113,12 +1132,13 @@ function showComicInfo(ch, f, displayTitle) {
       if (cap.publisher) body.append(row('Editorial', cap.publisher));
       if (cap.date) body.append(row('Fecha de publicación', cap.date));
       if (cap.description) {
-        const dr = el('div', 'info-row info-row-desc');
-        dr.append(el('span', 'info-label', 'Descripción'));
-        const dv = el('span', 'info-value info-desc');
-        dv.textContent = cap.description;
-        dr.append(dv);
-        body.append(dr);
+        const descBtn = el('button', 'btn info-desc-btn', 'Ver descripción');
+        descBtn.type = 'button';
+        descBtn.onclick = () => {
+          frame.remove();
+          showDescriptionPanel(cap.description);
+        };
+        body.append(descBtn);
       }
     } else if (f?.caption) {
       body.append(el('div', 'info-sec', 'Ficha en Telegram'));
@@ -1379,6 +1399,7 @@ function showEditComicTitle(ch, f, currentLabel, after) {
     metaBox.append(inp);
     return inp;
   };
+  const inpFileName = mkField('Nombre de archivo', cap.fileName || (f?.name || ''));
   const inpTitleEs = mkField('Título España', cap.titleEs);
   const inpOrig = mkField('Título original', cap.originalTitle);
   const inpCapSeries = mkField('Serie', cap.series);
@@ -1434,6 +1455,7 @@ function showEditComicTitle(ch, f, currentLabel, after) {
       setComicSeries(ch, f, seriesSave, async () => {
         if (metaChk.checked && metaDirty) {
           const caption = buildComicCaption({
+            fileName: inpFileName?.value || f?.name || '',
             titleEs: inpTitleEs.value,
             originalTitle: inpOrig.value,
             series: inpCapSeries.value,
@@ -2530,7 +2552,16 @@ function groupsView() {
               img.src = URL.createObjectURL(b);
             }).catch(() => {});
             const meta = el('div', 'continue-meta');
-            meta.append(el('b', '', comicDisplayName(ch, f, comicDisplay(f.name, ch.name) || clean(f.name))));
+            let seriesLab = '';
+            try {
+              const ov = getComicSeriesOverride(ch, f);
+              const p = parseComicName(f.name, ch.name);
+              const sk = (ov != null && String(ov).trim()) ? String(ov).trim() : (p?.series || seriesBase(f.name, ch.name) || '');
+              seriesLab = sk ? (seriesDisplayName(ch, sk) || sk) : '';
+            } catch (_) {}
+            const titleLab = comicDisplayName(ch, f, comicDisplay(f.name, ch.name) || clean(f.name));
+            if (seriesLab) meta.append(el('b', 'continue-series', seriesLab));
+            meta.append(el('span', 'continue-title', titleLab));
             meta.append(el('small', '', sizeLabel(f, ch)));
             if (prog) {
               const bar = el('div', 'continue-prog');

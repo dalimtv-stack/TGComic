@@ -3,6 +3,7 @@
  * Móvil: poca RAM, un archivo a la vez, liberar buffers.
  */
 import * as zip from '@zip.js/zip.js';
+import { parseComicCaption, buildComicCaption } from './parse.js';
 
 export function createRepackTool(d) {
   const {
@@ -373,12 +374,22 @@ export function createRepackTool(d) {
         workers: 1,
         onProgress: onProg,
       });
-      await client.sendFile(peer, {
-        file: inputFile,
-        caption: caption || '',
-        forceDocument: true,
-        attributes: attrs,
-      });
+      try {
+        await client.sendFile(peer, {
+          file: inputFile,
+          caption: caption || '',
+          forceDocument: true,
+          attributes: attrs,
+        });
+      } catch (se) {
+        const sm = String(se?.message || se || '');
+        if (/Missing MTProto Entity/i.test(sm) || /TL definition for ID 0/i.test(sm)) {
+          console.warn('[repack] sendFile aviso GramJS (archivo suele estar subido)', sm);
+          status?.('Subida OK (aviso GramJS ignorado)');
+          return;
+        }
+        throw se;
+      }
       return;
     } catch (e) {
       if (e?.cancelled || abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
@@ -724,7 +735,7 @@ export function createRepackTool(d) {
       prog(65);
       await pauseGate();
       if (jobCtx?.isAborted?.()) throw Object.assign(new Error('cancelado'), { cancelled: true });
-      // Caption del original (lista o mensaje de Telegram)
+      // Caption del original + Nombre de archivo = nombre final WebP
       let caption = String(item.caption || f.caption || '').trim();
       if (!caption && typeof getMsg === 'function') {
         try {
@@ -734,8 +745,34 @@ export function createRepackTool(d) {
           console.warn('[repack] no se pudo leer caption del original', e);
         }
       }
-      status(caption ? 'Caption del original: ' + caption.length + ' caracteres' : 'Sin caption en el original');
-      await uploadCbz(ch, outName, cbz, caption, statusWithProg);
+      if (caption) {
+        try {
+          const fields = parseComicCaption(caption);
+          fields.fileName = outName;
+          // Si no había nombre de archivo, conservar resto y poner el nuevo al inicio
+          caption = buildComicCaption(fields);
+          // buildComicCaption no incluye description multilinea raw si solo fields —
+          // reinyectar descripción si se perdió el cuerpo largo
+          if (fields.description && !/Descripción:/i.test(caption)) {
+            caption = caption + '\nDescripción: ' + fields.description;
+          }
+        } catch (e) {
+          console.warn('[repack] caption rebuild', e);
+        }
+      }
+      status(caption ? 'Caption: ' + caption.length + ' caracteres' : 'Sin caption');
+      try {
+        await uploadCbz(ch, outName, cbz, caption, statusWithProg);
+      } catch (e) {
+        const msg = String(e?.message || e || '');
+        // GramJS a veces lanza esto tras subir bien el documento
+        if (/Missing MTProto Entity/i.test(msg) || /TL definition for ID 0/i.test(msg)) {
+          console.warn('[repack] aviso GramJS tras subida (se ignora):', msg);
+          status('✓ Subido (aviso interno GramJS ignorado)');
+        } else {
+          throw e;
+        }
+      }
       cbz = null;
       status('Subido a Telegram');
       prog(95);

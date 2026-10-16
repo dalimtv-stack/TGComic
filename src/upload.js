@@ -916,6 +916,7 @@ export function createUploadTool(d) {
         let captionText = '';
         if (metaChk && metaChk.checked) {
           captionText = buildComicCaption({
+            fileName: outName,
             titleEs: metaTitleEs.value,
             originalTitle: metaOrig.value,
             series: metaCapSeries.value,

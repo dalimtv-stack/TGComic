@@ -221,6 +221,11 @@ export function parseComicCaption(text) {
   const out = {};
   if (!text || !String(text).trim()) return out;
   const keyMap = {
+    'nombre de archivo': 'fileName',
+    'nombre archivo': 'fileName',
+    'filename': 'fileName',
+    'file name': 'fileName',
+    'archivo': 'fileName',
     'titulo espana': 'titleEs',
     'titulo españa': 'titleEs',
     'título españa': 'titleEs',
@@ -300,6 +305,7 @@ export function buildComicCaption(fields = {}) {
     const s = String(v || '').trim();
     if (s) lines.push(k + ': ' + s);
   };
+  add('Nombre de archivo', fields.fileName);
   add('Título España', fields.titleEs);
   add('Título original', fields.originalTitle);
   add('Serie', fields.series);
