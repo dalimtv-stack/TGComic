@@ -2888,6 +2888,7 @@ function channelsView(g) {
 function filesView(ch) {
   go(channelDisplayName(ch), async (e) => {
     e._uploadCtx = { editorial: ch.group || 'Sin editorial', channel: ch };
+    e._chId = ch.id;
     let cur = [];
     const draw = (files) => {
       if (!alive(e)) return;
@@ -3028,32 +3029,59 @@ function seriesView(ch, s, files) {
   const title = seriesDisplayName(ch, s);
   go(title, (e) => {
     e._uploadCtx = { editorial: ch.group || 'Sin editorial', channel: ch, series: s };
-    const redraw = () => {
-      // Re-render series view with updated labels
-      const items = files.map((f) => {
+    e._chId = ch.id;
+    e._seriesKey = s;
+
+    const loadSeriesFiles = async () => {
+      let all = [];
+      try { all = (await kv.get('f:' + ch.id)) || []; } catch (_) {}
+      if (!all.length) {
+        try { all = await fetchFiles(ch); } catch (_) {}
+      }
+      if (!all.length && Array.isArray(files) && files.length) all = files;
+      const groups = groupSeries(all, ch.name, seriesOverrideFor(ch));
+      const key = String(s || '').toLowerCase();
+      let match = groups.find((g) => String(g.label || '').toLowerCase() === key);
+      if (!match) {
+        match = groups.find((g) =>
+          String(seriesDisplayName(ch, g.label) || '').toLowerCase() === key
+        );
+      }
+      return match ? match.files : (Array.isArray(files) ? files : []);
+    };
+
+    const redraw = async () => {
+      if (!alive(e)) return;
+      const fs = await loadSeriesFiles();
+      if (!alive(e)) return;
+      try {
+        const t = seriesDisplayName(ch, s);
+        if (titleEl) titleEl.textContent = t;
+      } catch (_) {}
+      const seriesUnread = fs.some((x) => !isComicRead(ch.id, x.id));
+      const items = fs.map((f) => {
         const p = parseComicName(f.name, ch.name);
-        const baseLabel = (p && p.series.toLowerCase() === s.toLowerCase())
+        const baseLabel = (p && String(p.series || '').toLowerCase() === String(s).toLowerCase())
           ? issueDisplay(p)
           : issueLabel(s, f, ch.name);
         const displayLabel = comicDisplayName(ch, f, baseLabel);
         const unread = !isComicRead(ch.id, f.id);
-        const seriesUnread = files.some((x) => !isComicRead(ch.id, x.id));
         const opts = [
           ['Información', () => showComicInfo(ch, f, displayLabel)],
           ['Editar datos del comic', () => showEditComicTitle(ch, f, displayLabel, redraw)],
-          ['Editar TODA la serie', () => showEditSeries(ch, s, files, () => {
-            titleEl.textContent = seriesDisplayName(ch, s);
+          ['Editar TODA la serie', () => showEditSeries(ch, s, fs, () => {
+            try { titleEl.textContent = seriesDisplayName(ch, s); } catch (_) {}
             redraw();
           })],
           unread
             ? ['Marcar comic como leído', () => markComicRead(ch, f, redraw)]
             : ['Marcar comic como no leído', () => markComicUnread(ch, f, redraw)],
           seriesUnread
-            ? ['Marcar serie como leída', () => markSeriesRead(ch, files, redraw)]
-            : ['Marcar serie como no leída', () => markSeriesUnread(ch, files, redraw)],
+            ? ['Marcar serie como leída', () => markSeriesRead(ch, fs, redraw)]
+            : ['Marcar serie como no leída', () => markSeriesUnread(ch, fs, redraw)],
           ['Desagrupar serie', () => setUngroupMode(ch, s, 'short', () => history.back())],
           ['Desagrupar serie (con nombre)', () => setUngroupMode(ch, s, 'full', () => history.back())],
-          ['Añadir versión WebP', () => { try { repackTool?.offerWebpVersion?.(ch, f); } catch (e) { alert(e?.message || e); } }],
+          ['Añadir versión WebP', () => { try { repackTool?.offerWebpVersion?.(ch, f); } catch (err) { alert(err?.message || err); } }],
         ];
         return {
           label: displayLabel,
@@ -3061,7 +3089,7 @@ function seriesView(ch, s, files) {
           searchText: (displayLabel + ' ' + (f.name || '')).toLowerCase(),
           isUnread: unread,
           cover: () => comicCover(ch, f),
-          go: () => openComic(ch, f, files),
+          go: () => openComic(ch, f, fs),
           longPress: () => sheet(displayLabel, opts),
         };
       });
@@ -3159,6 +3187,23 @@ try {
       if (x < 1024) return x + ' B';
       if (x < 1024 * 1024) return (x / 1024).toFixed(1) + ' KB';
       return (x / (1024 * 1024)).toFixed(2) + ' MB';
+    },
+    // Tras subir: refrescar listado del canal/serie en pantalla
+    onUploadDone: async (ch) => {
+      if (!ch?.id) return;
+      try { await fetchFiles(ch); } catch (_) {}
+      try {
+        const top = stack[stack.length - 1];
+        if (!top) return;
+        const ctx = top._uploadCtx;
+        if (ctx?.channel && String(ctx.channel.id) === String(ch.id)) {
+          show(); // re-ejecuta seriesView/filesView con listado fresco
+        } else if (String(top._chId) === String(ch.id)) {
+          show();
+        }
+      } catch (e) {
+        console.warn('[upload] onUploadDone refresh', e);
+      }
     },
   });
 } catch (e) {

@@ -18,7 +18,7 @@ export function createUploadTool(d) {
   const {
     el, Api, bigInt,
     kv, peerOf,
-    fetchFiles, refreshLibrary,
+    fetchFiles, refreshLibrary, onUploadDone,
     natural, formatBytes,
     jobQueue,
   } = d;
@@ -995,6 +995,11 @@ export function createUploadTool(d) {
             try { await fetchFiles(ch); } catch (e) { st('Listado: ' + (e?.message || e)); }
             ctx.setProgress(100);
             st('✓ Subido correctamente');
+            try {
+              if (typeof onUploadDone === 'function') await onUploadDone(ch);
+            } catch (e) {
+              console.warn('[upload] onUploadDone', e);
+            }
           } catch (e) {
             if (!e?.cancelled && !abort) {
               st('ERROR: ' + (e?.message || e));
