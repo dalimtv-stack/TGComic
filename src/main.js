@@ -1385,7 +1385,7 @@ function showEditComicTitle(ch, f, currentLabel, after) {
   const inpWriter = mkField('Guionista', cap.writer, 'Nombre1 | Nombre2');
   const inpArtist = mkField('Dibujante', cap.artist, 'Nombre1 | Nombre2');
   const inpPub = mkField('Editorial', cap.publisher);
-  const inpDate = mkField('Fecha de publicación', cap.date, 'AAAA o AAAA-MM-DD');
+  const inpDate = mkField('Fecha de publicación', cap.date, 'MM/AAAA o AAAA');
   metaBox.append(el('label', 'sync-label', 'Descripción'));
   const inpDesc = el('textarea', 'edit-input meta-desc');
   inpDesc.rows = 3;

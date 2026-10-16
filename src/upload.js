@@ -7,7 +7,7 @@
 import * as zip from '@zip.js/zip.js';
 import { createExtractorFromData } from 'node-unrar-js';
 import rarWasm from 'node-unrar-js/esm/js/unrar.wasm?url';
-import { buildComicCaption } from './parse.js';
+import { buildComicCaption, parseComicName, clean as parseClean } from './parse.js';
 
 const SEP = '::';
 const TSEP = ':';
@@ -709,7 +709,7 @@ export function createUploadTool(d) {
       const metaWriter = mkMeta('Guionista', 'Nombre1 | Nombre2');
       const metaArtist = mkMeta('Dibujante', 'Nombre1 | Nombre2');
       const metaPub = mkMeta('Editorial');
-      const metaDate = mkMeta('Fecha de publicación', 'AAAA o AAAA-MM-DD');
+      const metaDate = mkMeta('Fecha de publicación', 'MM/AAAA o AAAA');
       metaBox.append(el('label', 'sync-label', 'Descripción'));
       const metaDesc = el('textarea', 'edit-input meta-desc');
       metaDesc.rows = 3;
@@ -800,69 +800,49 @@ export function createUploadTool(d) {
           : 'Ningún archivo seleccionado';
         if (!pickedFile) return;
 
-        let base = String(pickedFile.name || '')
-          .replace(/\.cb[zr]$/i, '')
-          .replace(/_/g, ' ')
-          .replace(/\s+/g, ' ')
-          .trim();
-
-        // Quitar @handles (p. ej. @Comicverso)
-        base = base.replace(/\s*@\S+/g, '').trim();
-        // Quitar [WebP] y guardar otros [tags]
-        base = base.replace(/\s*\[WebP\]/ig, '').trim();
-        const extras = [];
-        base = base.replace(/\s*\[([^\]]+)\]/g, (_, inner) => {
-          const t = String(inner || '').trim();
-          if (t && !/^webp$/i.test(t)) extras.push(t);
-          return ' ';
-        }).replace(/\s+/g, ' ').trim();
-
-        // Quitar prefijo de canal si coincide
         let chName = '';
         if (channelSel.value === '__new__') chName = channelInp.value.trim();
         else {
           const opt = [...channelSel.options].find((o) => o.value === channelSel.value);
           chName = (opt && opt._ch && opt._ch.name) || (opt && opt.textContent) || '';
         }
-        if (chName) {
-          const low = base.toLowerCase();
-          const chLow = chName.toLowerCase();
-          if (low.startsWith(chLow)) {
-            base = base.slice(chName.length).replace(/^\s*-\s*/, '').trim();
-          }
-        }
 
+        // Parseo unificado (no vacía la serie cuando se llama igual que el canal)
+        const p = parseComicName(pickedFile.name, chName);
         let series = '';
         let number = '';
         let info = '';
-
-        // Prioridad: ... #01 ... o ... #Special ...
-        let m = base.match(/^(.*?)\s*#\s*(\d+[a-z]?|Special|Especial|Extra|Anual|Annual)\b(?:\s*[-–—:]\s*(.*))?$/i);
-        if (!m) {
-          // ... 01 - resto (sin almohadilla)
-          m = base.match(/^(.*?)\s+(\d{1,4}[a-z]?)\s*[-–—]\s+(.*)$/i);
-        }
-        if (!m) {
-          // ... 01 al final
-          m = base.match(/^(.*?)\s+(\d{1,4}[a-z]?)$/i);
-        }
-
-        if (m) {
-          series = String(m[1] || '').trim();
-          number = String(m[2] || '').trim();
-          info = String(m[3] || '').trim();
+        if (p) {
+          series = String(p.series || '').trim();
+          number = String(p.number || '').trim();
+          info = String(p.info || '').trim();
+          if (p.rangeEnd) number = number + ' - #' + p.rangeEnd;
         } else {
+          let base = String(pickedFile.name || '')
+            .replace(/\.cb[zr]$/i, '')
+            .replace(/_/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+          base = base.replace(/\s*@\S+/g, '').replace(/\s*\[WebP\]/ig, '').trim();
           series = base;
         }
-        // Si tras quitar canal queda "Serie - resto" sin número, no forzar
-        if (extras.length) {
-          info = info ? (info + ' [' + extras.join('] [') + ']').trim() : extras.map((x) => '[' + x + ']').join(' ');
+
+        // Si el contexto ya tenía serie y el parseo no sacó ninguna, conservar la del contexto
+        if (!series && seriesInp.value.trim()) {
+          series = seriesInp.value.trim();
         }
 
         seriesInp.value = series;
         numberInp.value = number;
         infoInp.value = info;
-        updatePreview();
+        // Al elegir archivo, permitir que la ficha se rellene de nuevo con estos datos
+        try {
+          metaTitleEs._touched = false;
+          metaOrig._touched = false;
+          metaCapSeries._touched = false;
+          metaPub._touched = false;
+        } catch (_) {}
+        nameFinalTouched = false;
         updatePreview();
       };
       editorialSel.onchange = () => {
