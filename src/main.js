@@ -756,7 +756,7 @@ menuUploadBtn.onclick = (ev) => {
         alert('La herramienta de subida no está disponible. Recarga la página.');
         return;
       }
-      uploadTool.showUploadFrame();
+      uploadTool.showUploadFrame(getUploadContext());
     } catch (e) {
       console.error('[upload] showUploadFrame', e);
       alert('Error al abrir subida: ' + (e?.message || e));
@@ -791,6 +791,12 @@ menuUnreadBtn.onclick = (ev) => {
 
 let cleanup = null, LIB = [], synced = false;
 
+function getUploadContext() {
+  for (let i = stack.length - 1; i >= 0; i--) {
+    if (stack[i] && stack[i]._uploadCtx) return stack[i]._uploadCtx;
+  }
+  return {};
+}
 function go(title, render) { stack.push({ title, render }); history.pushState(null, ''); show(); }
 function show() {
   cleanup?.(); cleanup = null;
@@ -1105,7 +1111,15 @@ function showComicInfo(ch, f, displayTitle) {
       if (cap.writer) body.append(row('Guionista', formatPeople(cap.writer)));
       if (cap.artist) body.append(row('Dibujante', formatPeople(cap.artist)));
       if (cap.publisher) body.append(row('Editorial', cap.publisher));
-      if (cap.date) body.append(row('Fecha', cap.date));
+      if (cap.date) body.append(row('Fecha de publicación', cap.date));
+      if (cap.description) {
+        const dr = el('div', 'info-row info-row-desc');
+        dr.append(el('span', 'info-label', 'Descripción'));
+        const dv = el('span', 'info-value info-desc');
+        dv.textContent = cap.description;
+        dr.append(dv);
+        body.append(dr);
+      }
     } else if (f?.caption) {
       body.append(el('div', 'info-sec', 'Ficha en Telegram'));
       body.append(el('p', 'cover-pick-hint', String(f.caption).slice(0, 800)));
@@ -1371,6 +1385,14 @@ function showEditComicTitle(ch, f, currentLabel, after) {
   const inpWriter = mkField('Guionista', cap.writer, 'Nombre1 | Nombre2');
   const inpArtist = mkField('Dibujante', cap.artist, 'Nombre1 | Nombre2');
   const inpPub = mkField('Editorial', cap.publisher);
+  const inpDate = mkField('Fecha de publicación', cap.date, 'AAAA o AAAA-MM-DD');
+  metaBox.append(el('label', 'sync-label', 'Descripción'));
+  const inpDesc = el('textarea', 'edit-input meta-desc');
+  inpDesc.rows = 3;
+  inpDesc.value = cap.description || '';
+  inpDesc.placeholder = 'Texto libre (saltos de línea permitidos)';
+  inpDesc.addEventListener('input', markDirty);
+  metaBox.append(inpDesc);
   body.append(metaBox);
   metaChk.onchange = () => {
     metaBox.hidden = !metaChk.checked;
@@ -1418,6 +1440,8 @@ function showEditComicTitle(ch, f, currentLabel, after) {
             writer: inpWriter.value,
             artist: inpArtist.value,
             publisher: inpPub.value,
+            date: inpDate.value,
+            description: inpDesc.value,
           });
           try {
             f.caption = caption;
@@ -2695,6 +2719,7 @@ function groupsView() {
 }
 function channelsView(g) {
   go(groupDisplayName(g), async (e) => {
+    e._uploadCtx = { editorial: g };
     const chs = LIB.filter((c) => c.group === g);
     let searchIndex = null;
 
@@ -2862,6 +2887,7 @@ function channelsView(g) {
 }
 function filesView(ch) {
   go(channelDisplayName(ch), async (e) => {
+    e._uploadCtx = { editorial: ch.group || 'Sin editorial', channel: ch };
     let cur = [];
     const draw = (files) => {
       if (!alive(e)) return;
@@ -3000,7 +3026,8 @@ function filesView(ch) {
 }
 function seriesView(ch, s, files) {
   const title = seriesDisplayName(ch, s);
-  go(title, () => {
+  go(title, (e) => {
+    e._uploadCtx = { editorial: ch.group || 'Sin editorial', channel: ch, series: s };
     const redraw = () => {
       // Re-render series view with updated labels
       const items = files.map((f) => {

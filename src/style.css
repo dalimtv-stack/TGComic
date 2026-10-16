@@ -386,3 +386,11 @@ select.edit-input, .series-select{
   background:var(--card);color:inherit;padding:0 .85rem;font:inherit;
   appearance:auto;-webkit-appearance:menulist;
 }
+
+textarea.meta-desc, textarea.edit-input.meta-desc{
+  display:block;width:100%;min-height:4.2em;max-height:9em;resize:vertical;
+  border:0;border-radius:12px;background:var(--card);color:inherit;
+  padding:.55rem .85rem;font:inherit;line-height:1.35;box-sizing:border-box;
+}
+.info-row-desc{flex-direction:column;align-items:flex-start;gap:.25rem}
+.info-desc{white-space:pre-wrap;text-align:left;font-size:.86rem;color:var(--mut);max-height:6em;overflow:auto}

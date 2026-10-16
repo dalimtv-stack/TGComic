@@ -581,7 +581,7 @@ export function createUploadTool(d) {
   }
 
 
-  function showUploadFrame() {
+  function showUploadFrame(ctx = {}) {
     try {
       document.querySelector('.info-frame.upload-frame')?.remove();
       const frame = el('div', 'info-frame upload-frame');
@@ -653,7 +653,7 @@ export function createUploadTool(d) {
 
       const includeChChk = el('input');
       includeChChk.type = 'checkbox';
-      includeChChk.checked = true;
+      includeChChk.checked = false;
       const includeChRow = el('label', 'repack-check');
       includeChRow.append(includeChChk, document.createTextNode(' Incluir nombre del canal en el archivo'));
 
@@ -690,7 +690,7 @@ export function createUploadTool(d) {
       metaChk.checked = false;
       const metaLab = el('label', 'repack-check');
       metaLab.append(metaChk, document.createTextNode(' Añadir ficha al caption (Telegram)'));
-      const metaBox = el('div');
+      const metaBox = el('div', 'meta-telegram-box');
       metaBox.hidden = true;
       const mkMeta = (lab, ph) => {
         metaBox.append(el('label', 'sync-label', lab));
@@ -698,6 +698,8 @@ export function createUploadTool(d) {
         inp.type = 'text';
         inp.placeholder = ph || '';
         inp.autocomplete = 'off';
+        inp._touched = false;
+        inp.addEventListener('input', () => { inp._touched = true; });
         metaBox.append(inp);
         return inp;
       };
@@ -707,10 +709,36 @@ export function createUploadTool(d) {
       const metaWriter = mkMeta('Guionista', 'Nombre1 | Nombre2');
       const metaArtist = mkMeta('Dibujante', 'Nombre1 | Nombre2');
       const metaPub = mkMeta('Editorial');
-      metaChk.onchange = () => { metaBox.hidden = !metaChk.checked; };
+      const metaDate = mkMeta('Fecha de publicación', 'AAAA o AAAA-MM-DD');
+      metaBox.append(el('label', 'sync-label', 'Descripción'));
+      const metaDesc = el('textarea', 'edit-input meta-desc');
+      metaDesc.rows = 3;
+      metaDesc.placeholder = 'Texto libre (saltos de línea permitidos)';
+      metaDesc._touched = false;
+      metaDesc.addEventListener('input', () => { metaDesc._touched = true; });
+      metaBox.append(metaDesc);
 
+      const fillMetaFromForm = () => {
+        const base = String(nameFinalInp.value || '')
+          .replace(/\.cb[zr]$/i, '')
+          .replace(/\.cbz$/i, '')
+          .trim();
+        if (!metaTitleEs._touched) metaTitleEs.value = base;
+        if (!metaOrig._touched) metaOrig.value = metaTitleEs.value || base;
+        if (!metaCapSeries._touched) metaCapSeries.value = String(seriesInp.value || '').trim();
+        if (!metaPub._touched) {
+          const ed = editorialSel.value === '__new__'
+            ? editorialInp.value.trim()
+            : editorialSel.value;
+          metaPub.value = ed || '';
+        }
+      };
 
-      body.append(metaLab, metaBox);
+      metaChk.onchange = () => {
+        metaBox.hidden = !metaChk.checked;
+        if (metaChk.checked) fillMetaFromForm();
+      };
+
       const status = el('p', 'sync-status', '');
       const actions = el('div', 'edit-actions');
       const cancel = el('button', 'btn', 'Cancelar');
@@ -732,6 +760,7 @@ export function createUploadTool(d) {
           info: infoInp.value,
         });
         nameFinalInp.value = fname;
+        if (metaChk.checked) fillMetaFromForm();
       };
 
       const rebuildChannels = () => {
@@ -900,6 +929,8 @@ export function createUploadTool(d) {
             writer: metaWriter.value,
             artist: metaArtist.value,
             publisher: metaPub.value,
+            date: metaDate.value,
+            description: metaDesc.value,
           });
         }
 
@@ -1037,13 +1068,49 @@ export function createUploadTool(d) {
       body.append(includeChRow);
       body.append(nameFinalLab, nameFinalInp);
       body.append(webpRow, webpOptsBox);
+      body.append(metaLab, metaBox);
       body.append(status);
       actions.append(cancel, goBtn);
       body.append(actions);
       box.append(head, body);
       frame.append(box);
 
-      rebuildChannels();
+      // Prefill desde contexto (editorial / canal / serie actuales)
+      try {
+        const c = ctx || {};
+        if (c.editorial) {
+          const g = String(c.editorial);
+          const has = [...editorialSel.options].some((o) => o.value === g);
+          if (has) {
+            editorialSel.value = g;
+            editorialInp.hidden = true;
+          } else {
+            editorialSel.value = '__new__';
+            editorialInp.hidden = false;
+            editorialInp.value = g;
+          }
+        }
+        rebuildChannels();
+        if (c.channel) {
+          const id = String(c.channel.id || c.channel);
+          const name = c.channel.name || '';
+          const opt = [...channelSel.options].find((o) => o.value === id || o.textContent === name);
+          if (opt) {
+            channelSel.value = opt.value;
+            channelInp.hidden = true;
+          } else if (name) {
+            channelSel.value = '__new__';
+            channelInp.hidden = false;
+            channelInp.value = name;
+          }
+        }
+        if (c.series) {
+          seriesInp.value = String(c.series);
+        }
+      } catch (e) {
+        console.warn('[upload] ctx', e);
+        rebuildChannels();
+      }
       updatePreview();
 
       // Solo cierra con Cancelar / × (no al pulsar fuera)
