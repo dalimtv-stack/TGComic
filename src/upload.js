@@ -685,6 +685,7 @@ export function createUploadTool(d) {
       };
       const metaTitleEs = mkMeta('Título España');
       const metaOrig = mkMeta('Título original');
+      const metaCapSeries = mkMeta('Serie');
       const metaWriter = mkMeta('Guionista', 'Nombre1 | Nombre2');
       const metaArtist = mkMeta('Dibujante', 'Nombre1 | Nombre2');
       const metaPub = mkMeta('Editorial');
@@ -877,10 +878,10 @@ export function createUploadTool(d) {
           captionText = buildComicCaption({
             titleEs: metaTitleEs.value,
             originalTitle: metaOrig.value,
-            series: seriesInp.value,
+            series: metaCapSeries.value,
             writer: metaWriter.value,
             artist: metaArtist.value,
-            publisher: metaPub.value || ed,
+            publisher: metaPub.value,
           });
         }
 

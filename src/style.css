@@ -371,3 +371,12 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 .webp-opts{margin:.25rem 0 .5rem;padding:.5rem .65rem;border-radius:12px;background:#ffffff08}
 .webp-opts .sync-label{margin-top:.15rem}
 .webp-opts .edit-input{margin:.2rem 0 .45rem}
+
+/* Chips de serie al editar cómic */
+.series-pick{display:flex;flex-wrap:wrap;gap:6px;margin:.35rem 0 .5rem}
+.series-chip{
+  border:0;border-radius:999px;padding:.35rem .7rem;font:inherit;font-size:.8rem;
+  background:#ffffff14;color:var(--fg);cursor:pointer;
+}
+.series-chip:active{opacity:.75}
+.meta-telegram-box{margin-top:.25rem}
