@@ -1,4 +1,4 @@
-import { parseComicCaption } from './parse.js';
+import { parseComicCaption, parseComicName, comicDisplay, issueDisplay } from './parse.js';
 /**
  * Metadatos locales: renombres de serie/cómic, serie asignada a un cómic,
  * desagrupar, nombres de canal/editorial.
@@ -74,19 +74,32 @@ export function comicDisplayName(ch, f, fallback) {
   const custom = m[String(f.id)];
   let t = '';
   if (custom != null && String(custom).trim()) {
-    // Título personalizado por el usuario
     t = String(custom).trim();
   } else {
-    // Telegram altera nombres largos (_ por espacios, quita -): preferir Título España del caption
+    // Telegram altera nombres largos: usar Título España del caption y
+    // normalizarlo igual que un nombre de archivo (parseComicName).
     try {
       const cap = parseComicCaption(f.caption || '');
-      if (cap.titleEs && String(cap.titleEs).trim()) {
-        t = String(cap.titleEs).trim();
+      const titleEs = cap.titleEs && String(cap.titleEs).trim();
+      if (titleEs) {
+        const asName = /\.cb[zr]$/i.test(titleEs) ? titleEs : (titleEs + '.cbz');
+        const p = parseComicName(asName, ch.name);
+        if (p) {
+          const fb = String(fallback || '').trim();
+          // En vista de serie el fallback suele ser "#nn - …" → mismo formato
+          if (/^#/.test(fb)) {
+            t = issueDisplay(p);
+          } else {
+            // Vista canal / título completo: Serie #nn - info
+            t = comicDisplay(asName, ch.name) || issueDisplay(p);
+          }
+        } else {
+          t = titleEs;
+        }
       }
     } catch (_) {}
     if (!t) t = fallback || '';
   }
-  // En el canal no mostrar el prefijo "Canal - "
   const chName = String(ch.name || '').trim();
   if (t && chName) {
     try {
