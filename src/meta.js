@@ -1,3 +1,4 @@
+import { parseComicCaption } from './parse.js';
 /**
  * Metadatos locales: renombres de serie/cómic, serie asignada a un cómic,
  * desagrupar, nombres de canal/editorial.
@@ -71,7 +72,20 @@ export function comicDisplayName(ch, f, fallback) {
   if (!ch || !f) return fallback || '';
   const m = comicRenameMap(ch);
   const custom = m[String(f.id)];
-  let t = (custom != null && String(custom).trim()) ? String(custom).trim() : (fallback || '');
+  let t = '';
+  if (custom != null && String(custom).trim()) {
+    // Título personalizado por el usuario
+    t = String(custom).trim();
+  } else {
+    // Telegram altera nombres largos (_ por espacios, quita -): preferir Título España del caption
+    try {
+      const cap = parseComicCaption(f.caption || '');
+      if (cap.titleEs && String(cap.titleEs).trim()) {
+        t = String(cap.titleEs).trim();
+      }
+    } catch (_) {}
+    if (!t) t = fallback || '';
+  }
   // En el canal no mostrar el prefijo "Canal - "
   const chName = String(ch.name || '').trim();
   if (t && chName) {
