@@ -1052,13 +1052,11 @@ function showComicInfo(ch, f, displayTitle) {
     document.querySelector('.info-frame.comic-info')?.remove();
     const cap = parseComicCaption(f?.caption || '');
     const parsed = parseComicName(f?.name || '', ch?.name);
-    // Clave de agrupación + renombre visual de «Editar TODA la serie»
+    // Serie = override de agrupación o la del nombre de archivo
     let seriesKey = (ch && f ? getComicSeriesOverride(ch, f) : null)
       || parsed?.series || seriesBase(f?.name || '', ch?.name) || '';
     seriesKey = String(seriesKey || '').trim();
-    let series = seriesKey
-      ? (ch ? (seriesDisplayName(ch, seriesKey) || seriesKey) : seriesKey)
-      : '—';
+    let series = seriesKey || '—';
     const parsedTitle = comicDisplay(f?.name || '', ch?.name) || '—';
     const title = (displayTitle && String(displayTitle).trim())
       || (ch && f ? comicDisplayName(ch, f, parsedTitle) : parsedTitle)
@@ -1577,7 +1575,8 @@ function showEditSeries(ch, seriesLabel, files, after) {
 }
 function showEditSeriesName(ch, seriesLabel, seriesFiles, after) {
   document.querySelector('.info-frame.edit-series')?.remove();
-  const current = seriesDisplayName(ch, seriesLabel);
+  // Valor que ve el usuario: override real de los cómics o renombre visual o la clave
+  const current = seriesDisplayName(ch, seriesLabel) || seriesLabel || '';
   const frame = el('div', 'info-frame edit-series');
   const box = el('div', 'info-box');
   const head = el('div', 'info-head');
@@ -1593,7 +1592,7 @@ function showEditSeriesName(ch, seriesLabel, seriesFiles, after) {
   input.autocomplete = 'off';
   body.append(input);
   body.append(el('p', 'cover-pick-hint',
-    'Si escribes el nombre de una serie que ya existe en el canal, todos los cómics de esta serie se agrupan con ella.'
+    'Se aplica a todos los cómics de esta serie. Si el nombre ya existe, se fusionan.'
   ));
   const actions = el('div', 'edit-actions');
   const cancel = el('button', 'btn', 'Cancelar');
@@ -1601,52 +1600,60 @@ function showEditSeriesName(ch, seriesLabel, seriesFiles, after) {
   const save = el('button', 'btn edit-save', 'Guardar');
   save.onclick = async () => {
     const newName = input.value.trim();
-    if (!newName) {
-      setSeriesDisplayName(ch, seriesLabel, '', () => { frame.remove(); after?.(); });
-      return;
-    }
     try {
       let allFiles = (await kv.get('f:' + ch.id)) || [];
       if (!allFiles.length) {
         try { allFiles = await fetchFiles(ch); } catch (_) {}
       }
-      // Cómics de ESTA serie: lista pasada o los que coinciden por parseo/override
+      // Miembros de la serie (lista pasada o por clave/override)
       let members = Array.isArray(seriesFiles) && seriesFiles.length ? seriesFiles.slice() : [];
       if (!members.length) {
         for (const f of allFiles) {
           const ov = getComicSeriesOverride(ch, f);
           const p = parseComicName(f.name, ch.name);
-          const base = (ov != null && String(ov).trim()) ? String(ov).trim() : (p?.series || seriesBase(f.name, ch.name) || '');
+          const base = (ov != null && String(ov).trim())
+            ? String(ov).trim()
+            : (p?.series || seriesBase(f.name, ch.name) || '');
           if (String(base).toLowerCase() === String(seriesLabel).toLowerCase()) members.push(f);
         }
       }
-      const labels = existingSeriesLabels(ch, allFiles);
-      const hit = labels.find((lab) =>
-        lab.toLowerCase() !== String(seriesLabel).toLowerCase()
-        && (
-          lab.toLowerCase() === newName.toLowerCase()
-          || String(seriesDisplayName(ch, lab) || '').toLowerCase() === newName.toLowerCase()
-        )
-      );
-      if (hit) {
-        // Fusionar: override de serie en cada cómic miembro → misma clave de agrupación
-        for (const f of members) {
-          setComicSeries(ch, f, hit);
-        }
-        // Quitar renombre visual del label antiguo (ya no hace falta)
-        setSeriesDisplayName(ch, seriesLabel, '');
-        frame.remove();
-        after?.();
+      if (!members.length) {
+        alert('No se encontraron cómics de esta serie');
         return;
       }
+
+      // ¿Fusionar con una serie ya existente (otra clave)?
+      const labels = existingSeriesLabels(ch, allFiles);
+      const hit = newName
+        ? labels.find((lab) =>
+            lab.toLowerCase() !== String(seriesLabel).toLowerCase()
+            && lab.toLowerCase() === newName.toLowerCase()
+          )
+        : null;
+      const target = hit || newName;
+
+      // UN solo mecanismo: override por cómic (no renombre visual)
+      for (const f of members) {
+        const p = parseComicName(f.name, ch.name);
+        const parsedSer = (p?.series || seriesBase(f.name, ch.name) || '').trim();
+        if (!target || (parsedSer && target.toLowerCase() === parsedSer.toLowerCase())) {
+          setComicSeries(ch, f, ''); // vuelve al nombre del archivo
+        } else {
+          setComicSeries(ch, f, target);
+        }
+      }
+      // Limpiar renombres visuales viejos para no liar el campo
+      try { setSeriesDisplayName(ch, seriesLabel, ''); } catch (_) {}
+      if (target && target.toLowerCase() !== String(seriesLabel).toLowerCase()) {
+        try { setSeriesDisplayName(ch, target, ''); } catch (_) {}
+      }
     } catch (e) {
-      console.warn('[series merge]', e);
+      console.error('[series rename]', e);
+      alert('Error al guardar la serie: ' + (e?.message || e));
+      return;
     }
-    // Solo renombre visual (serie nueva o mismo grupo)
-    setSeriesDisplayName(ch, seriesLabel, newName, () => {
-      frame.remove();
-      after?.();
-    });
+    frame.remove();
+    after?.();
   };
   actions.append(cancel, save);
   body.append(actions);
@@ -1655,6 +1662,7 @@ function showEditSeriesName(ch, seriesLabel, seriesFiles, after) {
   document.body.append(frame);
   setTimeout(() => { input.focus(); input.select(); }, 50);
 }
+
 function showSeriesCoverPicker(ch, seriesLabel, files, after) {
   document.querySelector('.info-frame.cover-pick')?.remove();
   const title = seriesDisplayName(ch, seriesLabel);
