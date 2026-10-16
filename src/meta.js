@@ -71,8 +71,17 @@ export function comicDisplayName(ch, f, fallback) {
   if (!ch || !f) return fallback || '';
   const m = comicRenameMap(ch);
   const custom = m[String(f.id)];
-  if (custom != null && String(custom).trim()) return String(custom).trim();
-  return fallback || '';
+  let t = (custom != null && String(custom).trim()) ? String(custom).trim() : (fallback || '');
+  // En el canal no mostrar el prefijo "Canal - "
+  const chName = String(ch.name || '').trim();
+  if (t && chName) {
+    try {
+      const esc = chName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const stripped = t.replace(new RegExp('^' + esc + '\\s*-\\s*', 'i'), '').trim();
+      if (stripped) t = stripped;
+    } catch (_) {}
+  }
+  return t;
 }
 export function setComicDisplayName(ch, f, newName, after) {
   if (!ch || !f?.id) return after?.();

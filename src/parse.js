@@ -221,6 +221,12 @@ export function parseComicCaption(text) {
   const out = {};
   if (!text || !String(text).trim()) return out;
   const keyMap = {
+    'titulo espana': 'titleEs',
+    'titulo españa': 'titleEs',
+    'título españa': 'titleEs',
+    'título espana': 'titleEs',
+    'titulo en español': 'titleEs',
+    'título en español': 'titleEs',
     'titulo original': 'originalTitle',
     'título original': 'originalTitle',
     'titulo': 'originalTitle',
@@ -238,6 +244,9 @@ export function parseComicCaption(text) {
     'artist': 'artist',
     'artista': 'artist',
     'arte': 'artist',
+    'editorial': 'publisher',
+    'publisher': 'publisher',
+    'publisher name': 'publisher',
     'fecha': 'date',
     'fecha de publicacion': 'date',
     'fecha de publicación': 'date',
@@ -253,7 +262,6 @@ export function parseComicCaption(text) {
     const m = line.match(/^\s*([^:：\n]+)[:：]\s*(.+?)\s*$/);
     if (!m) continue;
     const rawKey = m[1].trim().toLowerCase().normalize('NFC');
-    // Quitar acentos solo para lookup flexible
     const keyFold = rawKey.normalize('NFD').replace(/\p{M}/gu, '');
     const v = m[2].trim();
     if (!v) continue;
@@ -261,4 +269,21 @@ export function parseComicCaption(text) {
     if (field) out[field] = v;
   }
   return out;
+}
+
+/** Construye caption legible por parseComicCaption. */
+export function buildComicCaption(fields = {}) {
+  const lines = [];
+  const add = (k, v) => {
+    const s = String(v || '').trim();
+    if (s) lines.push(k + ': ' + s);
+  };
+  add('Título España', fields.titleEs);
+  add('Título original', fields.originalTitle);
+  add('Serie', fields.series);
+  add('Guionista', fields.writer);
+  add('Dibujante', fields.artist);
+  add('Editorial', fields.publisher);
+  add('Fecha', fields.date);
+  return lines.join('\n');
 }

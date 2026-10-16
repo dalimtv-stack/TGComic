@@ -7,6 +7,7 @@
 import * as zip from '@zip.js/zip.js';
 import { createExtractorFromData } from 'node-unrar-js';
 import rarWasm from 'node-unrar-js/esm/js/unrar.wasm?url';
+import { buildComicCaption } from './parse.js';
 
 const SEP = '::';
 const TSEP = ':';
@@ -38,7 +39,7 @@ export function createUploadTool(d) {
     if (!blob || !blob.size) return blob;
     if ((blob.type || '').includes('webp') && blob.size < 1.5 * 1024 * 1024) return blob;
     const quality = Number(opts.quality);
-    const q = Number.isFinite(quality) && quality > 0 && quality <= 1 ? quality : 0.62;
+    const q = Number.isFinite(quality) && quality > 0 && quality <= 1 ? quality : 0.40;
     const doResize = opts.resize !== false;
     const maxEdge = Number(opts.maxEdge) > 0 ? Number(opts.maxEdge) : 2400;
     let bmp = null;
@@ -656,7 +657,7 @@ export function createUploadTool(d) {
       const qualityLab = el('label', 'sync-label', 'Calidad');
       const qualityInp = el('input', 'edit-input');
       qualityInp.type = 'text';
-      qualityInp.value = '0.62';
+      qualityInp.value = '0.40';
       qualityInp.placeholder = '0.62';
       const resizeRow = el('label', 'repack-check');
       const resizeCb = el('input');
@@ -666,6 +667,31 @@ export function createUploadTool(d) {
       webpOptsBox.append(qualityLab, qualityInp, resizeRow);
       asWebpChk.onchange = () => { webpOptsBox.hidden = !asWebpChk.checked; };
 
+      const metaChk = el('input');
+      metaChk.type = 'checkbox';
+      metaChk.checked = false;
+      const metaLab = el('label', 'repack-check');
+      metaLab.append(metaChk, document.createTextNode(' Añadir ficha al caption (Telegram)'));
+      const metaBox = el('div');
+      metaBox.hidden = true;
+      const mkMeta = (lab, ph) => {
+        metaBox.append(el('label', 'sync-label', lab));
+        const inp = el('input', 'edit-input');
+        inp.type = 'text';
+        inp.placeholder = ph || '';
+        inp.autocomplete = 'off';
+        metaBox.append(inp);
+        return inp;
+      };
+      const metaTitleEs = mkMeta('Título España');
+      const metaOrig = mkMeta('Título original');
+      const metaWriter = mkMeta('Guionista');
+      const metaArtist = mkMeta('Dibujante');
+      const metaPub = mkMeta('Editorial');
+      metaChk.onchange = () => { metaBox.hidden = !metaChk.checked; };
+
+
+      body.append(metaLab, metaBox);
       const status = el('p', 'sync-status', '');
       const actions = el('div', 'edit-actions');
       const cancel = el('button', 'btn', 'Cancelar');
@@ -841,10 +867,22 @@ export function createUploadTool(d) {
           outName = outName.replace(/\.cbz$/i, ' [WebP].cbz');
         }
         const webpOpts = {
-          quality: parseFloat(String(qualityInp.value).replace(',', '.')) || 0.62,
+          quality: parseFloat(String(qualityInp.value).replace(',', '.')) || 0.40,
           resize: !!resizeCb.checked,
           maxEdge: 2400,
         };
+
+        let captionText = '';
+        if (metaChk && metaChk.checked) {
+          captionText = buildComicCaption({
+            titleEs: metaTitleEs.value,
+            originalTitle: metaOrig.value,
+            series: seriesInp.value,
+            writer: metaWriter.value,
+            artist: metaArtist.value,
+            publisher: metaPub.value || ed,
+          });
+        }
 
         if (!confirm('¿Subir como «' + outName + '» al canal «' + chName + '» (' + ed + ')?')) return;
 
@@ -898,7 +936,7 @@ export function createUploadTool(d) {
             ctx.setProgress(55);
             await ctx.waitWhilePaused?.();
             st('Subiendo a Telegram…');
-            await uploadCbz(ch, outName, blob, '', st);
+            await uploadCbz(ch, outName, blob, captionText || '', st);
             blob = null;
             ctx.setProgress(90);
             st('Actualizando listado…');
