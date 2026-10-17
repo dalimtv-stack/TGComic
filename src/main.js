@@ -34,7 +34,7 @@ import { createPageCache } from './pageCache.js';
 import { createJobQueue } from './jobQueue.js';
 import { exportLibraryData, importLibraryData, downloadJson } from './dataPort.js';
 import {
-  comicVineConfigured, searchIssues, fetchIssueDetail, buildSearchQuery,
+  comicVineConfigured, searchIssues, searchIssuesSmart, fetchIssueDetail, buildSearchQuery,
 } from './comicvine.js';
 
 const apiId = Number(import.meta.env.VITE_API_ID);
@@ -1409,9 +1409,12 @@ function showCaptionEditor(ch, f, after) {
       } else {
         tEs = detail.name || detail.volume || '';
       }
-      if (tEs && !inpTitleEs.value.trim()) inpTitleEs.value = tEs;
-      else if (tEs) inpTitleEs.value = tEs;
-      if (detail.name) inpOrig.value = detail.name;
+      // Comic Vine suele traer un solo "name": copiar a ambos títulos
+      const oneTitle = (detail.name || '').trim();
+      if (tEs) inpTitleEs.value = tEs;
+      else if (oneTitle) inpTitleEs.value = oneTitle;
+      if (oneTitle) inpOrig.value = oneTitle;
+      else if (tEs) inpOrig.value = tEs;
       if (detail.volume) inpSeries.value = detail.volume;
       if (detail.writers?.length) inpWriter.value = detail.writers.join(' | ');
       if (detail.artists?.length) inpArtist.value = detail.artists.join(' | ');
@@ -1479,8 +1482,16 @@ function showComicVinePicker(ch, f, { onPick } = {}) {
     status.className = 'sync-status';
     status.textContent = 'Buscando en Comic Vine…';
     try {
-      const results = await searchIssues(q, 12);
-      status.textContent = results.length ? (results.length + ' resultados') : 'Sin resultados';
+      const seriesQ = (cap.series || parsed?.series || seriesBase(f?.name || '', ch?.name) || '').trim();
+      const numberQ = String(parsed?.number || '').replace(/^#/, '').trim();
+      const results = await searchIssuesSmart({
+        query: q,
+        series: seriesQ,
+        number: numberQ,
+      });
+      status.textContent = results.length
+        ? (results.length + ' resultados (búsqueda ampliada)')
+        : 'Sin resultados — prueba a quitar el canal o el número en la caja de texto';
       for (const r of results) {
         const btn = el('button', 'cv-result');
         btn.type = 'button';
