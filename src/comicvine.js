@@ -132,29 +132,61 @@ export async function searchVolumes(query, limit = 8) {
 }
 
 /**
- * Lista issues de un volume (opcionalmente filtrado por número).
- * volumeId numérico (sin prefijo 4050-).
+ * Lista issues de un volume.
+ * Estrategia fiable: listar por volume (sin filter de número) y filtrar el número en cliente.
+ * Prueba volume:ID y volume:4050-ID (CV a veces exige uno u otro).
  */
-export async function listIssuesForVolume(volumeId, issueNumber, limit = 30) {
+export async function listIssuesForVolume(volumeId, issueNumber, limit = 100) {
   if (!API_KEY) throw new Error('Falta VITE_COMICVINE_API_KEY');
-  const vid = String(volumeId || '').replace(/^4050-/, '');
+  const raw = String(volumeId || '').trim();
+  const vid = raw.replace(/^4050-/, '');
   if (!vid) return [];
-  const filterParts = [`volume:${vid}`];
-  const num = String(issueNumber || '').replace(/^#/, '').trim();
-  // Solo filtrar por número si es numérico puro (Annual etc. se listan sin filtro)
-  if (num && /^\d+[a-z]?$/i.test(num)) {
-    filterParts.push(`issue_number:${num}`);
+
+  async function fetchByFilter(filterVal) {
+    const url = apiUrl('/issues/', {
+      filter: filterVal,
+      limit: String(Math.min(100, limit)),
+      offset: '0',
+      field_list: 'id,name,issue_number,volume,cover_date,site_detail_url,image,api_detail_url',
+      sort: 'issue_number:asc',
+    });
+    const data = await jsonp(url);
+    if (data?.error && data.error !== 'OK') throw new Error('Comic Vine: ' + data.error);
+    const results = Array.isArray(data?.results) ? data.results : [];
+    return results.map(mapIssue);
   }
-  const url = apiUrl('/issues/', {
-    filter: filterParts.join(','),
-    limit: String(Math.min(50, limit)),
-    field_list: 'id,name,issue_number,volume,cover_date,site_detail_url,image,api_detail_url',
-    sort: 'cover_date:asc',
+
+  let results = [];
+  try {
+    results = await fetchByFilter('volume:' + vid);
+  } catch (_) {
+    results = [];
+  }
+  if (!results.length) {
+    try {
+      results = await fetchByFilter('volume:4050-' + vid);
+    } catch (_) {
+      results = [];
+    }
+  }
+
+  const num = String(issueNumber || '').replace(/^#/, '').trim();
+  if (!num) return results;
+
+  const numNorm = num.replace(/^0+/, '') || num;
+  const numLow = num.toLowerCase();
+  const matched = results.filter((i) => {
+    const n = String(i.issueNumber || '').trim();
+    const nNorm = n.replace(/^0+/, '') || n;
+    if (n.toLowerCase() === numLow) return true;
+    if (nNorm.toLowerCase() === numNorm.toLowerCase()) return true;
+    // Annual / Special
+    if (/^[a-z]/i.test(num) && n.toLowerCase().includes(numLow)) return true;
+    return false;
   });
-  const data = await jsonp(url);
-  if (data?.error && data.error !== 'OK') throw new Error('Comic Vine: ' + data.error);
-  const results = Array.isArray(data?.results) ? data.results : [];
-  return results.map(mapIssue);
+  // Si el número no aparece en la primera página, devolver igual el listado
+  // (el usuario puede elegir) — si había número y hay match, solo matches
+  return matched.length ? matched : (num ? [] : results);
 }
 
 /**
@@ -199,30 +231,59 @@ export async function searchIssuesSmart(opts = {}) {
   for (const b of batches) add(b);
 
   // 4) Volumen → listado de issues (mucho más fiable que search)
-  if (series) {
+  if (series || query) {
     try {
-      const vols = await searchVolumes(series, 6);
-      // Priorizar nombre de volumen más parecido
-      const serLow = series.toLowerCase();
+      const volQueries = [];
+      if (series) volQueries.push(series);
+      if (series && query && query.toLowerCase() !== series.toLowerCase()) {
+        volQueries.push(query.replace(/\s*-\s*/g, ' ').trim());
+      }
+      if (query) {
+        const qNoNum = query.replace(/#?\s*\d+[a-z]?\s*$/i, '').replace(/\s*-\s*/g, ' ').trim();
+        if (qNoNum) volQueries.push(qNoNum);
+      }
+      // Variantes "Crossed Badlands" / "Crossed: Badlands"
+      for (const base of [...volQueries]) {
+        if (base.includes('-')) volQueries.push(base.replace(/\s*-\s*/g, ' ').trim());
+        if (base.includes(' ')) volQueries.push(base.replace(/\s+/g, ': ').replace(/: :/g, ':').trim());
+        // Si parece "Canal Serie", probar solo la última palabra (Badlands)
+        const parts = base.split(/\s+/).filter(Boolean);
+        if (parts.length >= 2) volQueries.push(parts[parts.length - 1]);
+      }
+      const uniqVolQ = [...new Set(volQueries.map((s) => s.trim()).filter(Boolean))];
+      const vols = [];
+      const seenV = new Set();
+      for (const vq of uniqVolQ.slice(0, 6)) {
+        const found = await searchVolumes(vq, 10).catch(() => []);
+        for (const v of found) {
+          if (seenV.has(v.id)) continue;
+          seenV.add(v.id);
+          vols.push(v);
+        }
+      }
+
+      // Priorizar nombre de volumen más parecido a serie o query
+      const serLow = (series || query.replace(/#?\s*\d+[a-z]?\s*$/i, '').trim() || '').toLowerCase();
       vols.sort((a, b) => {
-        const as = a.name.toLowerCase() === serLow ? 0 : a.name.toLowerCase().includes(serLow) ? 1 : 2;
-        const bs = b.name.toLowerCase() === serLow ? 0 : b.name.toLowerCase().includes(serLow) ? 1 : 2;
-        return as - bs;
+        const score = (n) => {
+          const x = n.toLowerCase();
+          if (!serLow) return 2;
+          if (x === serLow) return 0;
+          if (x.includes(serLow) || serLow.includes(x)) return 1;
+          return 2;
+        };
+        return score(a.name) - score(b.name);
       });
-      for (const v of vols.slice(0, 4)) {
+      for (const v of vols.slice(0, 8)) {
         try {
-          const issues = await listIssuesForVolume(v.id, number, number ? 20 : 25);
-          // Si filtramos por número y no hay nada, listar sin filtro y filtrar en cliente
-          if (number && !issues.length) {
-            const all = await listIssuesForVolume(v.id, '', 40);
-            const numLow = number.toLowerCase();
-            add(all.filter((i) =>
-              String(i.issueNumber || '').toLowerCase() === numLow
-              || String(i.issueNumber || '').replace(/^0+/, '') === numLow.replace(/^0+/, '')
-              || String(i.name || '').toLowerCase().includes(numLow)
-            ));
-          } else {
+          // Listar issues del volumen; el número se filtra dentro de listIssuesForVolume
+          const issues = await listIssuesForVolume(v.id, number, 100);
+          if (issues.length) {
             add(issues);
+          } else if (number) {
+            // Sin match de número: mostrar issues del volumen para elegir a mano
+            const all = await listIssuesForVolume(v.id, '', 50);
+            add(all);
           }
         } catch (_) {}
       }
@@ -253,14 +314,27 @@ export async function fetchIssueDetail(apiDetailUrlOrId) {
   if (!r) return null;
   const credits = Array.isArray(r.person_credits) ? r.person_credits : [];
   const writers = [];
+  const pencilers = [];
   const artists = [];
+  const inkers = [];
   for (const c of credits) {
-    const role = String(c.role || '').toLowerCase();
+    const role = String(c.role || '').toLowerCase().trim();
     const n = c.name || '';
     if (!n) continue;
+    // Roles de portada no van a dibujante interior
+    if (/(^|\b)cover(\b|$)/.test(role) && !/penciler|penciller|inker/.test(role.replace(/cover/g, ''))) {
+      // "cover artist", "cover" → ignorar para dibujante
+      if (/writer|script/.test(role)) writers.push(n);
+      continue;
+    }
     if (/writer|script/.test(role)) writers.push(n);
-    if (/penciler|penciller|inker|artist/.test(role) && !/cover/.test(role)) artists.push(n);
+    // Inglés CV: penciler, penciller, artist, inker
+    if (/penciler|penciller/.test(role)) pencilers.push(n);
+    else if (/(^|\b)artist(\b|$)/.test(role) && !/colorist|letterer|inker/.test(role)) artists.push(n);
+    else if (/inker/.test(role)) inkers.push(n);
   }
+  // Preferir penciler > artist > inker
+  const artistsFinal = [...new Set([...pencilers, ...artists, ...inkers])];
   let desc = String(r.description || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
   if (desc.length > 1200) desc = desc.slice(0, 1200) + '…';
   let date = r.cover_date || '';
@@ -283,7 +357,7 @@ export async function fetchIssueDetail(apiDetailUrlOrId) {
     publisher,
     description: desc,
     writers: [...new Set(writers)],
-    artists: [...new Set(artists)],
+    artists: artistsFinal,
     siteUrl: r.site_detail_url || '',
   };
 }
