@@ -436,3 +436,9 @@ textarea.meta-desc, textarea.edit-input.meta-desc{
   resize:vertical;
   line-height:1.35;
 }
+
+.meta-sel-bar{display:flex;gap:.5rem;flex-wrap:wrap;margin:.4rem 0 .2rem}
+.meta-sel-hint{margin:.15rem 0 .5rem}
+.meta-field{margin:.35rem 0}
+.meta-field-top{display:flex;align-items:center;gap:.35rem;font-size:.85rem;font-weight:600;margin-bottom:.2rem}
+.meta-field-chk{width:1.05rem;height:1.05rem;accent-color:#3b82f6}

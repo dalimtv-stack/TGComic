@@ -1363,45 +1363,108 @@ function showCaptionEditor(ch, f, after, opts = {}) {
   body.append(idBtn);
   body.append(el('p', 'cover-pick-hint', 'Busca en Comic Vine y rellena los campos. Necesitas VITE_COMICVINE_API_KEY.'));
 
-  const mk = (lab, val, ph) => {
-    body.append(el('label', 'sync-label', lab));
-    const inp = el('input', 'edit-input');
-    inp.type = 'text';
-    inp.value = val || '';
-    inp.placeholder = ph || '';
-    inp.autocomplete = 'off';
-    body.append(inp);
-    return inp;
+  // Tras identificar: elegir qué campos de CV aplicar
+  const selBar = el('div', 'meta-sel-bar');
+  selBar.hidden = true;
+  const btnAll = el('button', 'btn', 'Seleccionar todos');
+  btnAll.type = 'button';
+  const btnNone = el('button', 'btn', 'Ninguno');
+  btnNone.type = 'button';
+  selBar.append(btnAll, btnNone);
+  body.append(selBar);
+  body.append(el('p', 'cover-pick-hint meta-sel-hint', 'Marcado = dato de Comic Vine (editable). Sin marcar = valor anterior.'));
+  const selHint = body.lastChild;
+  selHint.hidden = true;
+
+  const fieldCtrls = [];
+
+  const mkField = (lab, prevVal, ph, multiline) => {
+    const wrap = el('div', 'meta-field');
+    const top = el('label', 'meta-field-top');
+    const chk = el('input');
+    chk.type = 'checkbox';
+    chk.className = 'meta-field-chk';
+    chk.hidden = true;
+    chk.checked = false;
+    top.append(chk, document.createTextNode(' ' + lab));
+    wrap.append(top);
+    let inp;
+    if (multiline) {
+      inp = el('textarea', 'edit-input meta-desc meta-desc-lg');
+      inp.rows = 10;
+    } else {
+      inp = el('input', 'edit-input');
+      inp.type = 'text';
+      inp.autocomplete = 'off';
+    }
+    const prev = prevVal != null ? String(prevVal) : '';
+    inp.value = prev;
+    if (ph) inp.placeholder = ph;
+    wrap.append(inp);
+    body.append(wrap);
+
+    const ctrl = {
+      chk, inp,
+      prev,
+      cv: '',
+      apply() {
+        if (chk.hidden) return;
+        inp.value = chk.checked ? (ctrl.cv || '') : ctrl.prev;
+      },
+    };
+    chk.onchange = () => ctrl.apply();
+    fieldCtrls.push(ctrl);
+    return ctrl;
   };
-  const inpFileName = mk('Nombre de archivo', cap.fileName || (f?.name || ''));
-  const inpTitleEs = mk('Título España', cap.titleEs);
-  const inpOrig = mk('Título original', cap.originalTitle);
-  const inpSeries = mk('Serie', cap.series || parsed?.series || '');
-  const inpWriter = mk('Guionista', cap.writer, 'Nombre1 | Nombre2');
-  const inpArtist = mk('Dibujante', cap.artist, 'Nombre1 | Nombre2');
-  const inpPub = mk('Editorial', cap.publisher);
-  const inpDate = mk('Fecha de publicación', cap.date, 'MM/AAAA o AAAA');
-  body.append(el('label', 'sync-label', 'Descripción'));
-  const inpDesc = el('textarea', 'edit-input meta-desc meta-desc-lg');
-  inpDesc.rows = 10;
-  inpDesc.value = cap.description || '';
-  body.append(inpDesc);
+
+  const fileNameCtrl = mkField('Nombre de archivo', cap.fileName || (f?.name || ''));
+  const titleEsCtrl = mkField('Título España', cap.titleEs);
+  const origCtrl = mkField('Título original', cap.originalTitle);
+  const seriesCtrl = mkField('Serie', cap.series || parsed?.series || '');
+  const writerCtrl = mkField('Guionista', cap.writer, 'Nombre1 | Nombre2');
+  const artistCtrl = mkField('Dibujante', cap.artist, 'Nombre1 | Nombre2');
+  const pubCtrl = mkField('Editorial', cap.publisher);
+  const dateCtrl = mkField('Fecha de publicación', cap.date, 'MM/AAAA o AAAA');
+  const descCtrl = mkField('Descripción', cap.description || '', '', true);
+
+  const setSelectMode = (on) => {
+    selBar.hidden = !on;
+    selHint.hidden = !on;
+    for (const c of fieldCtrls) {
+      c.chk.hidden = !on;
+      if (!on) c.chk.checked = false;
+    }
+  };
+
+  btnAll.onclick = () => {
+    for (const c of fieldCtrls) {
+      c.chk.checked = true;
+      c.apply();
+    }
+  };
+  btnNone.onclick = () => {
+    for (const c of fieldCtrls) {
+      c.chk.checked = false;
+      c.apply();
+    }
+  };
 
   const actions = el('div', 'edit-actions');
   const cancel = el('button', 'btn', 'Cancelar');
   cancel.onclick = () => frame.remove();
   const save = el('button', 'btn edit-save', 'Guardar en Telegram');
   save.onclick = async () => {
+    // Guardar lo que hay en los inputs (según checks ya aplicados)
     const caption = buildComicCaption({
-      fileName: inpFileName.value,
-      titleEs: inpTitleEs.value,
-      originalTitle: inpOrig.value,
-      series: inpSeries.value,
-      writer: inpWriter.value,
-      artist: inpArtist.value,
-      publisher: inpPub.value,
-      date: inpDate.value,
-      description: inpDesc.value,
+      fileName: fileNameCtrl.inp.value,
+      titleEs: titleEsCtrl.inp.value,
+      originalTitle: origCtrl.inp.value,
+      series: seriesCtrl.inp.value,
+      writer: writerCtrl.inp.value,
+      artist: artistCtrl.inp.value,
+      publisher: pubCtrl.inp.value,
+      date: dateCtrl.inp.value,
+      description: descCtrl.inp.value,
     });
     if (caption.length > 1024) {
       alert('El caption tiene ' + caption.length + ' caracteres (máx. 1024). Acorta la descripción.');
@@ -1414,7 +1477,6 @@ function showCaptionEditor(ch, f, after, opts = {}) {
       const editWasOpen = !!document.querySelector('.info-frame.edit-comic');
       document.querySelector('.info-frame.edit-comic')?.remove();
       document.querySelector('.info-frame.comic-info')?.remove();
-      // Actualizar listado/portadas detrás (caption afecta título visible)
       try { after?.(); } catch (_) {}
       try {
         const top = stack[stack.length - 1];
@@ -1423,7 +1485,6 @@ function showCaptionEditor(ch, f, after, opts = {}) {
           show();
         }
       } catch (_) {}
-      // Si veníamos de editar cómic, reabrir el formulario ya con datos nuevos
       if (editWasOpen || opts.reopenEdit) {
         showEditComicTitle(ch, f, opts.currentLabel || '', after);
       }
@@ -1442,23 +1503,31 @@ function showCaptionEditor(ch, f, after, opts = {}) {
   idBtn.onclick = () => showComicVinePicker(ch, f, {
     onPick: (detail) => {
       if (!detail) return;
-      // Sin canal ni serie en los títulos (van en sus campos).
-      // Formato: "#n - nombre" o solo "#n" / nombre.
       const num = String(detail.issueNumber || '').replace(/^#/, '').trim();
       const story = String(detail.name || '').trim();
       let titleLine = '';
       if (num && story) titleLine = '#' + num + ' - ' + story;
       else if (num) titleLine = '#' + num;
       else titleLine = story;
-      // Mismo valor en ambos títulos (CV no distingue ES/EN)
-      inpTitleEs.value = titleLine;
-      inpOrig.value = titleLine;
-      if (detail.volume) inpSeries.value = detail.volume;
-      if (detail.writers?.length) inpWriter.value = detail.writers.join(' | ');
-      if (detail.artists?.length) inpArtist.value = detail.artists.join(' | ');
-      if (detail.publisher) inpPub.value = detail.publisher;
-      if (detail.coverDate) inpDate.value = detail.coverDate;
-      if (detail.description) inpDesc.value = detail.description;
+
+      // Valores CV por campo (nombre de archivo no viene de CV → dejar vacío = no forzar)
+      titleEsCtrl.cv = titleLine;
+      origCtrl.cv = titleLine;
+      seriesCtrl.cv = detail.volume || '';
+      writerCtrl.cv = (detail.writers && detail.writers.length) ? detail.writers.join(' | ') : '';
+      artistCtrl.cv = (detail.artists && detail.artists.length) ? detail.artists.join(' | ') : '';
+      pubCtrl.cv = detail.publisher || '';
+      dateCtrl.cv = detail.coverDate || '';
+      descCtrl.cv = detail.description || '';
+      fileNameCtrl.cv = fileNameCtrl.prev; // no cambia por CV
+
+      setSelectMode(true);
+      // Por defecto: marcar los que CV aportó dato
+      for (const c of fieldCtrls) {
+        const hasCv = c === fileNameCtrl ? false : !!(c.cv && String(c.cv).trim());
+        c.chk.checked = hasCv;
+        c.apply();
+      }
     },
   });
 }
