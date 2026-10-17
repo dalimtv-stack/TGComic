@@ -184,9 +184,9 @@ export async function listIssuesForVolume(volumeId, issueNumber, limit = 100) {
     if (/^[a-z]/i.test(num) && n.toLowerCase().includes(numLow)) return true;
     return false;
   });
-  // Si el número no aparece en la primera página, devolver igual el listado
-  // (el usuario puede elegir) — si había número y hay match, solo matches
-  return matched.length ? matched : (num ? [] : results);
+  // Preferir matches de número; si no hay, devolver el listado del volumen
+  // (el ranking en searchIssuesSmart pondrá el mejor arriba)
+  return matched.length ? matched : results;
 }
 
 /**
@@ -209,29 +209,40 @@ export async function searchIssuesSmart(opts = {}) {
     }
   };
 
-  // --- 1) Una sola búsqueda de issues (serie + número, sin canal) ---
-  const issueQuery = [series, number].filter(Boolean).join(' ')
-    || query
-    || '';
-  if (issueQuery) {
-    add(await searchIssues(issueQuery, 20).catch(() => []));
+  // --- Issues search (paralelo, 2 queries) ---
+  const issueTasks = [];
+  const q1 = [series, number].filter(Boolean).join(' ');
+  if (q1) issueTasks.push(searchIssues(q1, 25).catch(() => []));
+  if (query && query.toLowerCase() !== q1.toLowerCase()) {
+    issueTasks.push(searchIssues(query, 20).catch(() => []));
   }
+  if (series && number) {
+    issueTasks.push(searchIssues(series + ' #' + number, 15).catch(() => []));
+  }
+  for (const batch of await Promise.all(issueTasks)) add(batch);
 
-  // --- 2) Volumen → issues (máx. 2 queries de volumen, 2 volúmenes) ---
+  // --- Volúmenes (varias queries en paralelo, no secuencial) ---
   const volQ = [];
   if (series) volQ.push(series);
   if (query) {
-    const qNoNum = query.replace(/#?\s*\d+[a-z]?\s*$/i, '').replace(/\s*-\s*/g, ' ').trim();
-    if (qNoNum && qNoNum.toLowerCase() !== series.toLowerCase()) volQ.push(qNoNum);
+    const qNoNum = query
+      .replace(/#?\s*\d+[a-z]?\s*$/i, '')
+      .replace(/\s*-\s*/g, ' ')
+      .trim();
+    if (qNoNum) volQ.push(qNoNum);
   }
-  // Última palabra (Badlands)
   for (const b of [...volQ]) {
     const parts = b.split(/\s+/).filter(Boolean);
-    if (parts.length >= 2) volQ.push(parts[parts.length - 1]);
+    if (parts.length >= 2) {
+      volQ.push(parts[parts.length - 1]); // Badlands
+      volQ.push(parts.join(' '));
+    }
   }
-  const uniqVolQ = [...new Set(volQ.map((s) => s.trim()).filter(Boolean))].slice(0, 2);
+  const uniqVolQ = [...new Set(volQ.map((s) => s.trim()).filter(Boolean))].slice(0, 4);
 
-  const volLists = await Promise.all(uniqVolQ.map((vq) => searchVolumes(vq, 5).catch(() => [])));
+  const volLists = await Promise.all(
+    uniqVolQ.map((vq) => searchVolumes(vq, 8).catch(() => []))
+  );
   const vols = [];
   const seenV = new Set();
   for (const list of volLists) {
@@ -241,6 +252,7 @@ export async function searchIssuesSmart(opts = {}) {
       vols.push(v);
     }
   }
+
   const serLow = (series || uniqVolQ[0] || '').toLowerCase();
   vols.sort((a, b) => {
     const score = (n) => {
@@ -248,38 +260,39 @@ export async function searchIssuesSmart(opts = {}) {
       if (!serLow) return 2;
       if (x === serLow) return 0;
       if (x.includes(serLow) || serLow.includes(x)) return 1;
+      // "Crossed: Badlands" vs "Badlands"
+      if (serLow && x.endsWith(serLow)) return 1;
       return 2;
     };
     return score(a.name) - score(b.name);
   });
 
-  for (const v of vols.slice(0, 2)) {
-    try {
-      const issues = await listIssuesForVolume(v.id, number, 80);
-      add(issues);
-    } catch (_) {}
-  }
+  // Hasta 4 volúmenes en paralelo
+  const issueLists = await Promise.all(
+    vols.slice(0, 4).map((v) => listIssuesForVolume(v.id, number, 100).catch(() => []))
+  );
+  for (const list of issueLists) add(list);
 
-  // Ranking: número exacto primero, luego volumen ≈ serie
+  // Ranking
   const scoreOf = (r) => {
     let s = 0;
     const n = String(r.issueNumber || '').trim();
     const nNorm = (n.replace(/^0+/, '') || n).toLowerCase();
     if (number) {
       if (n.toLowerCase() === number.toLowerCase() || nNorm === numNorm) s += 100;
-      else if (nNorm && numNorm && nNorm.startsWith(numNorm)) s += 40;
+      else if (nNorm && numNorm && (nNorm === numNorm || nNorm.endsWith(numNorm))) s += 30;
     }
     const vol = String(r.volume || '').toLowerCase();
     if (serLow) {
       if (vol === serLow) s += 50;
       else if (vol.includes(serLow) || serLow.includes(vol)) s += 25;
+      else if (vol.endsWith(serLow) || serLow.endsWith(vol)) s += 20;
     }
     return s;
   };
-  out.sort((a, b) => scoreOf(b) - scoreOf(a));
+  out.sort((a, b) => scoreOf(b) - scoreOf(a) || String(a.issueNumber).localeCompare(String(b.issueNumber), undefined, { numeric: true }));
 
-  // Sin editoriales en listado (rápido); se cargan al elegir ficha
-  return out.slice(0, 20);
+  return out.slice(0, 25);
 }
 
 export async function fetchIssueDetail(apiDetailUrlOrId) {
