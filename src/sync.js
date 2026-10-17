@@ -23,7 +23,7 @@ const SYNC_PREFIXES = [
   'ungroup:',
   'read:',
 ];
-const SYNC_KEYS = ['channelNames', 'groupNames', 'lastRead', 'recentReads'];
+const SYNC_KEYS = ['channelNames', 'groupNames', 'lastRead', 'recentReads', 'contentLocks'];
 
 function configured() {
   return !!(SUPABASE_URL && SUPABASE_ANON);

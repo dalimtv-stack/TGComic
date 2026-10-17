@@ -36,6 +36,7 @@ import { exportLibraryData, importLibraryData, downloadJson } from './dataPort.j
 import {
   comicVineConfigured, searchIssues, searchIssuesSmart, fetchIssueDetail, buildSearchQuery,
 } from './comicvine.js';
+import * as locks from './lock.js';
 
 const apiId = Number(import.meta.env.VITE_API_ID);
 const apiHash = import.meta.env.VITE_API_HASH;
@@ -668,6 +669,42 @@ function showViewerConfig() {
   close.onclick = () => frame.remove();
   head.append(close);
   const body = el('div', 'info-body');
+
+  // Candado de contenido (+18)
+  {
+    const lockRow = el('div', 'cfg-lock-row');
+    const lockBtn = el('button', 'cfg-lock-btn', locks.isSessionUnlocked() ? '🔓 Contenido desbloqueado' : '🔒 Contenido bloqueado');
+    lockBtn.type = 'button';
+    const lockHint = el('p', 'cover-pick-hint', locks.canUseLocks()
+      ? 'Al abrir la app siempre está bloqueado. Pulsa el candado e introduce la contraseña de sincronización para ver contenido marcado.'
+      : 'Inicia sesión de sincronización para poder usar el candado de contenido.');
+    lockBtn.disabled = !locks.canUseLocks();
+    lockBtn.onclick = async () => {
+      if (!locks.canUseLocks()) {
+        alert('Configura antes la sincronización (usuario y contraseña).');
+        return;
+      }
+      if (locks.isSessionUnlocked()) {
+        locks.lockSession();
+        lockBtn.textContent = '🔒 Contenido bloqueado';
+        try { groupsView(); } catch (_) {}
+        return;
+      }
+      const pw = prompt('Contraseña de sincronización para desbloquear contenido:');
+      if (pw == null) return;
+      const ok = await locks.unlockSession(pw);
+      if (!ok) {
+        alert('Contraseña incorrecta');
+        return;
+      }
+      lockBtn.textContent = '🔓 Contenido desbloqueado';
+      try { groupsView(); } catch (_) {}
+    };
+    lockRow.append(lockBtn);
+    body.append(lockRow, lockHint);
+  }
+
+
 
   const section = (title) => {
     body.append(el('div', 'info-sec', title));
@@ -1391,7 +1428,7 @@ function showCaptionEditor(ch, f, after, opts = {}) {
     let inp;
     if (multiline) {
       inp = el('textarea', 'edit-input meta-desc meta-desc-lg');
-      inp.rows = 10;
+      inp.rows = 14;
     } else {
       inp = el('input', 'edit-input');
       inp.type = 'text';
@@ -2755,6 +2792,42 @@ function cardNode(i) {
   if (i.sub) c.append(el('small', '', i.sub));
   return c;
 }
+
+/** Opciones Bloquear/Desbloquear para submenús */
+function lockToggleOpts(kind, ref, label, redraw) {
+  if (!locks.canUseLocks()) return [];
+  const marked =
+    kind === 'group' ? locks.isGroupMarked(ref)
+    : kind === 'channel' ? locks.isChannelMarked(ref)
+    : kind === 'series' ? locks.isSeriesMarked(ref.ch, ref.seriesLabel)
+    : kind === 'comic' ? locks.isComicMarked(ref.ch, ref.f)
+    : false;
+  if (marked) {
+    return [['Desbloquear', async () => {
+      if (!locks.isSessionUnlocked()) {
+        const pw = prompt('Contraseña de sincronización:');
+        if (!(await locks.unlockSession(pw || ''))) return alert('Contraseña incorrecta');
+      }
+      if (kind === 'group') locks.setGroupLocked(ref, false);
+      else if (kind === 'channel') locks.setChannelLocked(ref, false);
+      else if (kind === 'series') locks.setSeriesLocked(ref.ch, ref.seriesLabel, false);
+      else if (kind === 'comic') locks.setComicLocked(ref.ch, ref.f, false);
+      redraw?.();
+    }]];
+  }
+  return [['Bloquear', async () => {
+    if (!locks.isSessionUnlocked()) {
+      const pw = prompt('Contraseña de sincronización:');
+      if (!(await locks.unlockSession(pw || ''))) return alert('Contraseña incorrecta');
+    }
+    if (kind === 'group') locks.setGroupLocked(ref, true);
+    else if (kind === 'channel') locks.setChannelLocked(ref, true);
+    else if (kind === 'series') locks.setSeriesLocked(ref.ch, ref.seriesLabel, true);
+    else if (kind === 'comic') locks.setComicLocked(ref.ch, ref.f, true);
+    redraw?.();
+  }]];
+}
+
 function groupsView() {
   if (!LIB.length) return msg(synced ? 'No se encontraron canales ...::Comics::tgstorage.' : 'Conectando…');
 
@@ -2833,6 +2906,8 @@ function groupsView() {
           const id = String(item.ch.id) + ':' + String(item.f.id);
           if (seen.has(id)) return;
           if (isComicRead(item.ch.id, item.f.id)) return;
+          // No mostrar en Seguir leyendo si está bloqueado (sesión cerrada)
+          if (locks.isContentRestricted('comic', { ch: item.ch, f: item.f })) return;
           seen.add(id);
           continueList.push(item);
         };
@@ -2992,16 +3067,24 @@ function groupsView() {
           const prog = readProgress(ch.id, f.id);
           const row = el('button', 'continue-row continue-slide');
           row.type = 'button';
-          row.onclick = () => openComic(ch, f);
-          const thumb = el('div', 'continue-cover');
-          const letter = el('span', '', stripExt(f.name).slice(0, 1).toUpperCase());
-          thumb.append(letter);
-          getCover(ch, f).then((b) => {
-            if (!b || !thumb.isConnected) return;
-            const img = new Image();
-            img.onload = () => { letter.remove(); thumb.prepend(img); };
-            img.src = URL.createObjectURL(b);
-          }).catch(() => {});
+          row.onclick = () => {
+            if (!locks.guardRestricted('comic', { ch, f }, comicDisplayName(ch, f, clean(f.name)))) return;
+            openComic(ch, f);
+          };
+          let thumb = el('div', 'continue-cover');
+          if (locks.isContentRestricted('comic', { ch, f })) {
+            thumb = locks.lockedCoverNode(ART);
+            thumb.classList.add('continue-cover');
+          } else {
+            const letter = el('span', '', stripExt(f.name).slice(0, 1).toUpperCase());
+            thumb.append(letter);
+            getCover(ch, f).then((b) => {
+              if (!b || !thumb.isConnected) return;
+              const img = new Image();
+              img.onload = () => { letter.remove(); thumb.prepend(img); };
+              img.src = URL.createObjectURL(b);
+            }).catch(() => {});
+          }
           const meta = el('div', 'continue-meta');
           meta.append(el('b', '', comicDisplayName(ch, f, comicDisplay(f.name, ch.name) || clean(f.name))));
           meta.append(el('small', '', sizeLabel(f, ch)));
@@ -3032,15 +3115,43 @@ function groupsView() {
       for (const name of gs) {
         const n = LIB.filter((c) => c.group === name).length;
         const label = groupDisplayName(name);
+        const gRestricted = locks.isContentRestricted('group', name);
         g.append(cardNode({
           label,
           sub: n === 1 ? '1 canal' : `${n} canales`,
-          cover: () => groupCoverNode(name),
-          go: () => channelsView(name),
-          longPress: () => sheet(label, [
-            ['Información', () => showGroupInfo(name)],
-            ['Editar', () => showEditGroup(name, redrawPubs)],
-          ]),
+          cover: () => gRestricted ? locks.lockedCoverNode(ART) : groupCoverNode(name),
+          go: () => {
+            if (!locks.guardRestricted('group', name, label)) return;
+            channelsView(name);
+          },
+          longPress: () => {
+            const opts = [
+              ['Información', () => showGroupInfo(name)],
+              ['Editar', () => showEditGroup(name, redrawPubs)],
+            ];
+            if (locks.canUseLocks()) {
+              if (locks.isGroupMarked(name)) {
+                opts.push(['Desbloquear', async () => {
+                  if (!locks.isSessionUnlocked()) {
+                    const pw = prompt('Contraseña de sincronización:');
+                    if (!(await locks.unlockSession(pw || ''))) return alert('Contraseña incorrecta');
+                  }
+                  locks.setGroupLocked(name, false);
+                  redrawPubs();
+                }]);
+              } else {
+                opts.push(['Bloquear', () => {
+                  if (!locks.isSessionUnlocked()) {
+                    alert('Desbloquea el candado en Configuración para marcar contenido.');
+                    return;
+                  }
+                  locks.setGroupLocked(name, true);
+                  redrawPubs();
+                }]);
+              }
+            }
+            sheet(label, opts);
+          },
         }));
       }
       fold.append(g);
@@ -3120,6 +3231,8 @@ function groupsView() {
   paintHome();
 }
 function channelsView(g) {
+  if (!locks.guardRestricted('group', g, groupDisplayName(g))) return;
+
   go(groupDisplayName(g), async (e) => {
     e._uploadCtx = { editorial: g };
     const chs = LIB.filter((c) => c.group === g);
@@ -3153,12 +3266,18 @@ function channelsView(g) {
         gridItems.push({
           label,
           sub: n ? (n === 1 ? '1 cómic' : `${n} cómics`) : '',
-          cover: () => channelCoverNode(ch, files),
+          cover: () => locks.isContentRestricted('channel', ch)
+            ? locks.lockedCoverNode(ART)
+            : channelCoverNode(ch, files),
           isUnread: n ? files.some((f) => !isComicRead(ch.id, f.id)) : true,
-          go: () => filesView(ch),
+          go: () => {
+            if (!locks.guardRestricted('channel', ch, channelDisplayName(ch))) return;
+            filesView(ch);
+          },
           longPress: () => sheet(label, [
             ['Información', () => showChannelInfo(ch)],
             ['Editar', () => showEditChannel(ch, files, () => build())],
+            ...lockToggleOpts('channel', ch, label, () => build()),
           ]),
         });
       }
@@ -3288,6 +3407,8 @@ function channelsView(g) {
   });
 }
 function filesView(ch) {
+  if (!locks.guardRestricted('channel', ch, channelDisplayName(ch))) return;
+
   go(channelDisplayName(ch), async (e) => {
     e._uploadCtx = { editorial: ch.group || 'Sin editorial', channel: ch };
     e._chId = ch.id;
@@ -3334,11 +3455,15 @@ function filesView(ch) {
           sub: sizeLabel(f, ch),
           searchText: (label + ' ' + (f.name || '') + ' ' + (seriesLabel || '')).toLowerCase(),
           isUnread: unread,
-          cover: () => comicCover(ch, f),
-          go: () => openComic(ch, f, cur),
-          longPress: () => sheet(label, opts),
+          cover: () => locks.isContentRestricted('comic', { ch, f }) ? locks.lockedCoverNode(ART) : comicCover(ch, f),
+          go: () => {
+            if (!locks.guardRestricted('comic', { ch, f }, label)) return;
+            openComic(ch, f, cur);
+          },
+          longPress: () => sheet(label, opts.concat(lockToggleOpts('comic', { ch, f }, label, redraw))),
           menu: (groupState && seriesLabel) ? () => sheet(seriesDisplayName(ch, seriesLabel), [
             ['Editar TODA la serie', () => showEditSeries(ch, seriesLabel, seriesFiles || [], redraw)],
+            ...lockToggleOpts('series', { ch, seriesLabel }, seriesDisplayName(ch, seriesLabel), redraw),
             ...(seriesFiles && seriesFiles.length > 1
               ? [seriesFiles.some((x) => !isComicRead(ch.id, x.id))
                   ? ['Marcar serie como leída', () => markSeriesRead(ch, seriesFiles, redraw)]
@@ -3408,8 +3533,16 @@ function filesView(ch) {
             sub: `${fs.length} números`,
             searchText: seriesSearch,
             isUnread: seriesUnread,
-            cover: () => seriesCoverNode(ch, seriesLabel, fs, fs.length),
-            go: () => seriesView(ch, seriesLabel, fs),
+            cover: () => locks.isContentRestricted('series', { ch, seriesLabel })
+              ? locks.lockedCoverNode(ART)
+              : seriesCoverNode(ch, seriesLabel, fs, fs.length),
+            go: () => {
+              if (!locks.guardRestricted('series', { ch, seriesLabel }, seriesDisplayName(ch, seriesLabel))) return;
+              seriesView(ch, seriesLabel, fs);
+            },
+            longPress: () => sheet(seriesDisplayName(ch, seriesLabel), [
+              ...lockToggleOpts('series', { ch, seriesLabel }, seriesDisplayName(ch, seriesLabel), redraw),
+            ]),
             longPress: () => sheet(seriesShown, seriesOpts),
             menu: () => sheet(seriesShown, seriesOpts),
           });
@@ -3428,6 +3561,8 @@ function filesView(ch) {
   });
 }
 function seriesView(ch, s, files) {
+  if (!locks.guardRestricted('series', { ch, seriesLabel: s }, seriesDisplayName(ch, s))) return;
+
   const title = seriesDisplayName(ch, s);
   go(title, (e) => {
     e._uploadCtx = { editorial: ch.group || 'Sin editorial', channel: ch, series: s };
@@ -3490,9 +3625,9 @@ function seriesView(ch, s, files) {
           sub: sizeLabel(f, ch),
           searchText: (displayLabel + ' ' + (f.name || '')).toLowerCase(),
           isUnread: unread,
-          cover: () => comicCover(ch, f),
+          cover: () => locks.isContentRestricted('comic', { ch, f }) ? locks.lockedCoverNode(ART) : comicCover(ch, f),
           go: () => openComic(ch, f, fs),
-          longPress: () => sheet(displayLabel, opts),
+          longPress: () => sheet(displayLabel, opts.concat(lockToggleOpts('comic', { ch, f }, displayLabel, redraw))),
         };
       });
       grid(items, true, 'Buscar en esta serie…');
@@ -3529,7 +3664,12 @@ const readerApi = createReader(
     pageCache,
   }
 );
-const { openComic } = readerApi;
+const { openComic: openComicRaw } = readerApi;
+function openComic(ch, f, queue, opts) {
+  const lab = comicDisplayName(ch, f, comicDisplay(f?.name || '', ch?.name) || '');
+  if (!locks.guardRestricted('comic', { ch, f }, lab)) return;
+  return openComicRaw(ch, f, queue, opts);
+}
 
 // ---------- Recarga CBR / externos ----------
 const repackTool = createRepackTool({
