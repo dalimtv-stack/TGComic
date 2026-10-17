@@ -73,47 +73,59 @@ function mapIssue(r) {
   };
 }
 
+// Caché permanente de editoriales por id de volumen (casi nunca cambian)
+const PUB_KEY = 'cv:publishers';
+const pubCache = (() => { try { return JSON.parse(localStorage.getItem(PUB_KEY) || '{}') || {}; } catch (_) { return {}; } })();
+const savePubCache = () => { try { localStorage.setItem(PUB_KEY, JSON.stringify(pubCache)); } catch (_) {} };
+const volIdOf = (x) => (x == null ? '' : (String(x).match(/(\d+)\/?(?:[?#].*)?$/) || [])[1] || '');
+const cvFail = (data) => (data && data.error && data.error !== 'OK' ? `${data.error} (código ${data.status_code})` : '');
+
 async function fetchVolumePublisher(apiDetailUrlOrId) {
-  if (apiDetailUrlOrId == null || apiDetailUrlOrId === '') return '';
+  const id = volIdOf(apiDetailUrlOrId);
+  if (!id) return '';
+  if (pubCache[id]) return pubCache[id];
   try {
-    let path = '';
-    const s = String(apiDetailUrlOrId);
-    if (/^https?:\/\//i.test(s)) {
-      const m = s.match(/\/api\/(volume\/[^/?#]+)/i);
-      path = m ? '/' + m[1].replace(/\/?$/, '/') : '';
-    } else if (/volume\//i.test(s)) {
-      path = '/' + s.replace(/^\/?api\/?/i, '').replace(/\/?$/, '/') ;
-    } else {
-      const id = s.replace(/^4050-/, '');
-      path = '/volume/4050-' + id + '/';
-    }
-    if (!path) return '';
-    const url = apiUrl(path, { field_list: 'id,name,publisher' });
-    const data = await jsonp(url);
-    return data?.results?.publisher?.name || '';
-  } catch (_) {
+    const data = await jsonp(apiUrl('/volume/4050-' + id + '/', { field_list: 'id,name,publisher' }));
+    const bad = cvFail(data);
+    if (bad) { console.warn('Comic Vine (editorial):', bad); return ''; }
+    const name = data?.results?.publisher?.name || '';
+    if (name) { pubCache[id] = name; savePubCache(); }
+    return name;
+  } catch (e) {
+    console.warn('Comic Vine (editorial):', e.message);
     return '';
   }
 }
 
+// Una sola petición para muchos volúmenes (evita el límite de peticiones por segundo/hora)
+async function fetchPublishersBatch(ids) {
+  const found = new Map();
+  for (let i = 0; i < ids.length; i += 50) {
+    const chunk = ids.slice(i, i + 50);
+    const data = await jsonp(apiUrl('/volumes/', { filter: 'id:' + chunk.join('|'), field_list: 'id,name,publisher', limit: '100' }));
+    const bad = cvFail(data);
+    if (bad) throw new Error(bad);
+    for (const v of Array.isArray(data?.results) ? data.results : []) {
+      const name = v?.publisher?.name || '';
+      if (name) found.set(String(v.id), name);
+    }
+  }
+  return found;
+}
 
 async function attachPublishers(mapped) {
-  const volMap = new Map(); // key → publisher name
-  const keys = [];
-  for (const r of mapped) {
-    const key = r.volumeApi || (r.volumeId != null ? String(r.volumeId) : '');
-    if (!key || volMap.has(key)) continue;
-    volMap.set(key, '');
-    keys.push(key);
+  const keyOf = (r) => volIdOf(r.volumeApi || r.volumeId);
+  const missing = [...new Set(mapped.filter((r) => !r.publisher).map(keyOf).filter((id) => id && !pubCache[id]))];
+  if (missing.length) {
+    try {
+      for (const [id, name] of await fetchPublishersBatch(missing)) pubCache[id] = name;
+      savePubCache();
+    } catch (e) {
+      console.warn('Comic Vine (editoriales en lote):', e.message);
+      for (const id of missing.slice(0, 12)) await fetchVolumePublisher(id); // respaldo, de uno en uno
+    }
   }
-  await Promise.all(keys.map(async (key) => {
-    volMap.set(key, await fetchVolumePublisher(key));
-  }));
-  for (const r of mapped) {
-    if (r.publisher) continue;
-    const key = r.volumeApi || (r.volumeId != null ? String(r.volumeId) : '');
-    if (key) r.publisher = volMap.get(key) || '';
-  }
+  for (const r of mapped) if (!r.publisher) r.publisher = pubCache[keyOf(r)] || '';
   return mapped;
 }
 
