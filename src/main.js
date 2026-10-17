@@ -1108,16 +1108,28 @@ function showComicInfo(ch, f, displayTitle) {
       || parsed?.series || seriesBase(f?.name || '', ch?.name) || '';
     seriesKey = String(seriesKey || '').trim();
     let series = seriesKey || '—';
-    // Si hay serie, el título es solo el número/info (#Annual - 2013), no "Serie #…"
-    // (la serie ya va en su propia fila)
-    const issueTitle = parsed ? issueDisplay(parsed) : '';
-    const parsedTitle = issueTitle
-      || comicDisplay(f?.name || '', ch?.name)
-      || '—';
-    const titleFallback = issueTitle && seriesKey ? issueTitle : parsedTitle;
-    const title = (displayTitle && String(displayTitle).trim())
-      || (ch && f ? comicDisplayName(ch, f, titleFallback) : titleFallback)
-      || '—';
+    // Título: con serie → solo "#nn - info" (como bajo la portada en la serie).
+    // Se parte del caption (Título España) o del nombre de archivo, nunca "Serie #nn".
+    const issueFromFile = parsed ? issueDisplay(parsed) : '';
+    let title = '—';
+    if (ch && f) {
+      if (seriesKey) {
+        // Forzar contexto "serie" con fallback que empieza por #
+        const fb = issueFromFile || '#';
+        title = comicDisplayName(ch, f, fb.startsWith('#') ? fb : ('#' + fb)) || fb;
+        // Por si quedó "Badlands #007"
+        if (title && !/^#/.test(title.trim())) {
+          const mh = title.match(/#\s*(.+)$/);
+          title = mh ? ('#' + mh[1].replace(/^#\s*/, '').trim()) : (issueFromFile || title);
+        }
+      } else {
+        title = comicDisplayName(ch, f, comicDisplay(f.name, ch.name) || clean(f.name))
+          || comicDisplay(f.name, ch.name)
+          || '—';
+      }
+    } else if (displayTitle) {
+      title = String(displayTitle).trim();
+    }
     const fname = f?.name || '';
     const fmt = /\.cbz$/i.test(fname) ? 'CBZ (ZIP)' : /\.cbr$/i.test(fname) ? 'CBR (RAR)' : '—';
     const pages = (ch && f) ? getPagesTotal(ch.id, f.id) : 0;

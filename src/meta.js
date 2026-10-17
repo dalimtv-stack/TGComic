@@ -76,21 +76,20 @@ export function comicDisplayName(ch, f, fallback) {
   if (custom != null && String(custom).trim()) {
     t = String(custom).trim();
   } else {
-    // Telegram altera nombres largos: Título España del caption, normalizado como archivo.
-    // En vista de serie (fallback "#…") solo el número/info, nunca "Serie #n".
+    const fb = String(fallback || '').trim();
+    // Vista serie / listado de números: fallback "#…" → solo número/info
+    const inSeriesView = /^#/.test(fb);
     try {
       const cap = parseComicCaption(f.caption || '');
       const titleEs = cap.titleEs && String(cap.titleEs).trim();
-      const fb = String(fallback || '').trim();
-      const inSeriesView = /^#/.test(fb);
       if (titleEs) {
         const asName = /\.cb[zr]$/i.test(titleEs) ? titleEs : (titleEs + '.cbz');
         const pCap = parseComicName(asName, ch.name);
         if (inSeriesView) {
+          // Nunca devolver "Serie #n" aquí
           if (pCap) t = issueDisplay(pCap);
           else {
-            // Extraer "#nn…" del título España si el parseo falla
-            const mHash = titleEs.match(/#\s*(\S[\s\S]*)$/);
+            const mHash = titleEs.match(/#\s*(.+)$/);
             t = mHash ? ('#' + mHash[1].replace(/^#\s*/, '').trim()) : fb;
           }
         } else if (pCap) {
@@ -100,7 +99,13 @@ export function comicDisplayName(ch, f, fallback) {
         }
       }
     } catch (_) {}
-    if (!t) t = fallback || '';
+    if (!t) t = fb || '';
+    // Si aún quedó "Serie #n" y el fallback era "#…", forzar solo el hash
+    if (inSeriesView && t && !/^#/.test(t)) {
+      const mHash = t.match(/#\s*(.+)$/);
+      if (mHash) t = '#' + mHash[1].replace(/^#\s*/, '').trim();
+      else t = fb;
+    }
   }
   const chName = String(ch.name || '').trim();
   if (t && chName) {
