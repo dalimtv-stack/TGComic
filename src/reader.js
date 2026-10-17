@@ -20,9 +20,10 @@ export function createReader(state, d) {
     pageCache,
   } = d;
 
-  // Android: inmersión CSS (sin Fullscreen API → sin toast de “cómo salir”)
-  // El tamaño se fuerza con visualViewport para ocupar toda el área útil.
+  // Android: CSS + Fullscreen API (única forma de ocultar barra de sistema y del navegador).
+  // El aviso del navegador al entrar es inevitable en Chrome Android; sin API las barras no se ocultan.
   const isAndroid = /Android/i.test(navigator.userAgent || '');
+  let fsRequested = false;
   function enterReaderFullscreen() {
     try {
       document.documentElement.classList.add('reader-fs');
@@ -31,9 +32,19 @@ export function createReader(state, d) {
       document.documentElement.style.overflow = 'hidden';
       document.documentElement.style.height = '100%';
       document.body.style.height = '100%';
-      // Ocultar barra de dirección en móviles (scroll trick suave)
-      try { window.scrollTo(0, 1); } catch (_) {}
     } catch (_) {}
+    // Fullscreen real: oculta status bar + nav bar Android y chrome del navegador
+    if (isAndroid && !fsRequested) {
+      fsRequested = true;
+      const root = document.documentElement;
+      const req = root.requestFullscreen || root.webkitRequestFullscreen || root.webkitRequestFullScreen;
+      if (typeof req === 'function') {
+        try {
+          const p = req.call(root, { navigationUI: 'hide' });
+          if (p && typeof p.catch === 'function') p.catch(() => {});
+        } catch (_) {}
+      }
+    }
   }
   function exitReaderFullscreen() {
     try {
@@ -44,6 +55,18 @@ export function createReader(state, d) {
       document.documentElement.style.height = '';
       document.body.style.height = '';
     } catch (_) {}
+    if (fsRequested) {
+      fsRequested = false;
+      try {
+        if (document.fullscreenElement || document.webkitFullscreenElement) {
+          const ex = document.exitFullscreen || document.webkitExitFullscreen;
+          if (typeof ex === 'function') {
+            const p = ex.call(document);
+            if (p && typeof p.catch === 'function') p.catch(() => {});
+          }
+        }
+      } catch (_) {}
+    }
   }
   function sizeReaderEl(rd) {
     if (!rd) return;

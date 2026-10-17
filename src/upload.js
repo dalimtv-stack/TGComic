@@ -7,7 +7,6 @@
 import * as zip from '@zip.js/zip.js';
 import { createExtractorFromData } from 'node-unrar-js';
 import rarWasm from 'node-unrar-js/esm/js/unrar.wasm?url';
-import { buildComicCaption, parseComicName, clean as parseClean } from './parse.js';
 
 const SEP = '::';
 const TSEP = ':';
@@ -18,7 +17,7 @@ export function createUploadTool(d) {
   const {
     el, Api, bigInt,
     kv, peerOf,
-    fetchFiles, refreshLibrary, onUploadDone,
+    fetchFiles, refreshLibrary,
     natural, formatBytes,
     jobQueue,
   } = d;
@@ -39,7 +38,7 @@ export function createUploadTool(d) {
     if (!blob || !blob.size) return blob;
     if ((blob.type || '').includes('webp') && blob.size < 1.5 * 1024 * 1024) return blob;
     const quality = Number(opts.quality);
-    const q = Number.isFinite(quality) && quality > 0 && quality <= 1 ? quality : 0.40;
+    const q = Number.isFinite(quality) && quality > 0 && quality <= 1 ? quality : 0.62;
     const doResize = opts.resize !== false;
     const maxEdge = Number(opts.maxEdge) > 0 ? Number(opts.maxEdge) : 2400;
     let bmp = null;
@@ -541,13 +540,6 @@ export function createUploadTool(d) {
           const again = fresh.find((c) => String(c.id) === entry.id)
             || fresh.find((c) => c.name.toLowerCase() === name.toLowerCase() && (c.group || '').toLowerCase() === group.toLowerCase());
           if (again) {
-            try {
-              status?.('Mensaje inicial en el canal…');
-              const peer = peerOf(again);
-              await client.sendMessage(peer, { message: name });
-            } catch (e) {
-              console.warn('[upload] no se pudo enviar el mensaje inicial del canal', e);
-            }
             status?.('Canal listo (archivado)');
             return again;
           }
@@ -561,17 +553,6 @@ export function createUploadTool(d) {
     const next = [...lib.filter((c) => String(c.id) !== entry.id), entry];
     setLIB(next);
     try { await kv.set('lib', next); } catch (_) {}
-
-    // Mensaje inicial solo en canal recién creado (nombre del canal, p.ej. "Ex Machina")
-    try {
-      status?.('Mensaje inicial en el canal…');
-      const peer = peerOf(entry);
-      await client.sendMessage(peer, { message: name });
-    } catch (e) {
-      console.warn('[upload] no se pudo enviar el mensaje inicial del canal', e);
-      status?.('Canal listo (sin mensaje inicial: ' + (e?.message || e) + ')');
-    }
-
     status?.('Canal listo (archivado)');
     return entry;
   }
@@ -581,7 +562,7 @@ export function createUploadTool(d) {
   }
 
 
-  function showUploadFrame(ctx = {}) {
+  function showUploadFrame() {
     try {
       document.querySelector('.info-frame.upload-frame')?.remove();
       const frame = el('div', 'info-frame upload-frame');
@@ -641,19 +622,31 @@ export function createUploadTool(d) {
       channelInp.placeholder = 'Nombre del canal';
       channelInp.hidden = true;
 
+      // Etiquetas claras: qué va en cada campo
+      const seriesLab = el('div', 'sync-label', 'Serie');
+      const seriesHint = el('p', 'cover-pick-hint', 'Nombre de la serie completa (sin el número). Ej: Mrs. Keagan - The Proposition 2');
       const seriesInp = el('input', 'edit-input');
       seriesInp.type = 'text';
-      seriesInp.placeholder = 'Serie (ej. Silencio)';
+      seriesInp.placeholder = 'Ej: Silencio · The Proposition 2';
+      seriesInp.setAttribute('aria-label', 'Serie');
+
+      const numberLab = el('div', 'sync-label', 'Número');
+      const numberHint = el('p', 'cover-pick-hint', 'Solo el número del cómic o Special/Extra/Anual. Si el archivo tiene #01, ese es el número (no un dígito del título de la serie).');
       const numberInp = el('input', 'edit-input');
       numberInp.type = 'text';
-      numberInp.placeholder = 'Número / Special / Extra / Anual';
+      numberInp.placeholder = 'Ej: 01 · 12 · Special · Extra';
+      numberInp.setAttribute('aria-label', 'Número');
+
+      const infoLab = el('div', 'sync-label', 'Info adicional (opcional)');
+      const infoHint = el('p', 'cover-pick-hint', 'Subtítulo o detalle tras el número. Ej: Dos caras · Batmito (1 de 2). No pongas aquí la serie ni el número.');
       const infoInp = el('input', 'edit-input');
       infoInp.type = 'text';
-      infoInp.placeholder = 'Info opcional';
+      infoInp.placeholder = 'Ej: Dos caras · (1 de 2)';
+      infoInp.setAttribute('aria-label', 'Info adicional');
 
       const includeChChk = el('input');
       includeChChk.type = 'checkbox';
-      includeChChk.checked = false;
+      includeChChk.checked = true;
       const includeChRow = el('label', 'repack-check');
       includeChRow.append(includeChChk, document.createTextNode(' Incluir nombre del canal en el archivo'));
 
@@ -675,7 +668,7 @@ export function createUploadTool(d) {
       const qualityLab = el('label', 'sync-label', 'Calidad');
       const qualityInp = el('input', 'edit-input');
       qualityInp.type = 'text';
-      qualityInp.value = '0.40';
+      qualityInp.value = '0.62';
       qualityInp.placeholder = '0.62';
       const resizeRow = el('label', 'repack-check');
       const resizeCb = el('input');
@@ -684,60 +677,6 @@ export function createUploadTool(d) {
       resizeRow.append(resizeCb, document.createTextNode(' Redimensionar (lado mayor máx. 2400 px)'));
       webpOptsBox.append(qualityLab, qualityInp, resizeRow);
       asWebpChk.onchange = () => { webpOptsBox.hidden = !asWebpChk.checked; };
-
-      const metaChk = el('input');
-      metaChk.type = 'checkbox';
-      metaChk.checked = false;
-      const metaLab = el('label', 'repack-check');
-      metaLab.append(metaChk, document.createTextNode(' Añadir ficha al caption (Telegram)'));
-      const metaBox = el('div', 'meta-telegram-box');
-      metaBox.hidden = true;
-      const mkMeta = (lab, ph) => {
-        metaBox.append(el('label', 'sync-label', lab));
-        const inp = el('input', 'edit-input');
-        inp.type = 'text';
-        inp.placeholder = ph || '';
-        inp.autocomplete = 'off';
-        inp._touched = false;
-        inp.addEventListener('input', () => { inp._touched = true; });
-        metaBox.append(inp);
-        return inp;
-      };
-      const metaTitleEs = mkMeta('Título España');
-      const metaOrig = mkMeta('Título original');
-      const metaCapSeries = mkMeta('Serie');
-      const metaWriter = mkMeta('Guionista', 'Nombre1 | Nombre2');
-      const metaArtist = mkMeta('Dibujante', 'Nombre1 | Nombre2');
-      const metaPub = mkMeta('Editorial');
-      const metaDate = mkMeta('Fecha de publicación', 'MM/AAAA o AAAA');
-      metaBox.append(el('label', 'sync-label', 'Descripción'));
-      const metaDesc = el('textarea', 'edit-input meta-desc');
-      metaDesc.rows = 3;
-      metaDesc.placeholder = 'Texto libre (saltos de línea permitidos)';
-      metaDesc._touched = false;
-      metaDesc.addEventListener('input', () => { metaDesc._touched = true; });
-      metaBox.append(metaDesc);
-
-      const fillMetaFromForm = () => {
-        const base = String(nameFinalInp.value || '')
-          .replace(/\.cb[zr]$/i, '')
-          .replace(/\.cbz$/i, '')
-          .trim();
-        if (!metaTitleEs._touched) metaTitleEs.value = base;
-        if (!metaOrig._touched) metaOrig.value = metaTitleEs.value || base;
-        if (!metaCapSeries._touched) metaCapSeries.value = String(seriesInp.value || '').trim();
-        if (!metaPub._touched) {
-          const ed = editorialSel.value === '__new__'
-            ? editorialInp.value.trim()
-            : editorialSel.value;
-          metaPub.value = ed || '';
-        }
-      };
-
-      metaChk.onchange = () => {
-        metaBox.hidden = !metaChk.checked;
-        if (metaChk.checked) fillMetaFromForm();
-      };
 
       const status = el('p', 'sync-status', '');
       const actions = el('div', 'edit-actions');
@@ -760,7 +699,6 @@ export function createUploadTool(d) {
           info: infoInp.value,
         });
         nameFinalInp.value = fname;
-        if (metaChk.checked) fillMetaFromForm();
       };
 
       const rebuildChannels = () => {
@@ -800,62 +738,76 @@ export function createUploadTool(d) {
           : 'Ningún archivo seleccionado';
         if (!pickedFile) return;
 
+        let base = String(pickedFile.name || '')
+          .replace(/\.cb[zr]$/i, '')
+          .replace(/_/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+
+        // Quitar @handles (p. ej. @Comicverso)
+        base = base.replace(/\s*@\S+/g, '').trim();
+        // Quitar [WebP] y guardar otros [tags]
+        base = base.replace(/\s*\[WebP\]/ig, '').trim();
+        const extras = [];
+        base = base.replace(/\s*\[([^\]]+)\]/g, (_, inner) => {
+          const t = String(inner || '').trim();
+          if (t && !/^webp$/i.test(t)) extras.push(t);
+          return ' ';
+        }).replace(/\s+/g, ' ').trim();
+
+        // Quitar prefijo de canal si coincide
         let chName = '';
         if (channelSel.value === '__new__') chName = channelInp.value.trim();
         else {
           const opt = [...channelSel.options].find((o) => o.value === channelSel.value);
           chName = (opt && opt._ch && opt._ch.name) || (opt && opt.textContent) || '';
         }
+        if (chName) {
+          const low = base.toLowerCase();
+          const chLow = chName.toLowerCase();
+          if (low.startsWith(chLow)) {
+            base = base.slice(chName.length).replace(/^\s*-\s*/, '').trim();
+          }
+        }
 
-        // Parseo unificado (no vacía la serie cuando se llama igual que el canal)
-        const p = parseComicName(pickedFile.name, chName);
         let series = '';
         let number = '';
         let info = '';
-        if (p) {
-          series = String(p.series || '').trim();
-          number = String(p.number || '').trim();
-          if (p.rangeEnd) number = number + ' - #' + p.rangeEnd;
-          // Info opcional: conservar paréntesis del nombre (solo en subidas)
-          let base = String(pickedFile.name || '')
-            .replace(/\.cb[zr]$/i, '')
-            .replace(/_/g, ' ')
-            .replace(/\s+/g, ' ')
-            .trim();
-          base = base.replace(/\s*@\S+/g, '').replace(/\s*\[WebP\]/ig, '').trim();
-          const numEsc = String(p.number || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-          const afterNum = base.match(new RegExp('#\\s*' + numEsc + '\\b(?:\\s*[-–—:]\\s*|\\s+)(.*)$', 'i'));
-          if (afterNum) {
-            info = String(afterNum[1] || '').trim();
-          } else {
-            info = String(p.info || '').trim();
-          }
-        } else {
-          let base = String(pickedFile.name || '')
-            .replace(/\.cb[zr]$/i, '')
-            .replace(/_/g, ' ')
-            .replace(/\s+/g, ' ')
-            .trim();
-          base = base.replace(/\s*@\S+/g, '').replace(/\s*\[WebP\]/ig, '').trim();
-          series = base;
+
+        // PRIORIDAD ABSOLUTA: si hay "#01" / "#Special", ese es el número.
+        // Así "The Proposition 2 #01" → serie="… Proposition 2", número="01"
+        // (el "2" del título de la serie no se confunde con el número del cómic).
+        const ISSUE_TAG = '(?:\\d+(?:\\.\\d+)?[a-zA-Z]?|Special|Especial|Extra|Anual|Annual|One[\\s-]?Shot|OneShot)';
+        let m = null;
+        if (/#/.test(base)) {
+          // Greedy → última "#" (la del número del cómic)
+          m = base.match(new RegExp(`^(.*)\\s*#\\s*(${ISSUE_TAG})(?:\\s*[-–—:]\\s*(.*))?$`, 'i'));
+        }
+        if (!m) {
+          // Sin "#": solo entonces ... 01 - resto
+          m = base.match(/^(.*?)\s+(\d{1,4}[a-z]?)\s*[-–—]\s+(.*)$/i);
+        }
+        if (!m) {
+          // Sin "#": ... 01 al final
+          m = base.match(/^(.*?)\s+(\d{1,4}[a-z]?)$/i);
         }
 
-        // Si el contexto ya tenía serie y el parseo no sacó ninguna, conservar la del contexto
-        if (!series && seriesInp.value.trim()) {
-          series = seriesInp.value.trim();
+        if (m) {
+          series = String(m[1] || '').trim();
+          number = String(m[2] || '').trim();
+          info = String(m[3] || '').trim();
+        } else {
+          series = base;
+        }
+        // Si tras quitar canal queda "Serie - resto" sin número, no forzar
+        if (extras.length) {
+          info = info ? (info + ' [' + extras.join('] [') + ']').trim() : extras.map((x) => '[' + x + ']').join(' ');
         }
 
         seriesInp.value = series;
         numberInp.value = number;
         infoInp.value = info;
-        // Al elegir archivo, permitir que la ficha se rellene de nuevo con estos datos
-        try {
-          metaTitleEs._touched = false;
-          metaOrig._touched = false;
-          metaCapSeries._touched = false;
-          metaPub._touched = false;
-        } catch (_) {}
-        nameFinalTouched = false;
+        updatePreview();
         updatePreview();
       };
       editorialSel.onchange = () => {
@@ -908,34 +860,10 @@ export function createUploadTool(d) {
           outName = outName.replace(/\.cbz$/i, ' [WebP].cbz');
         }
         const webpOpts = {
-          quality: parseFloat(String(qualityInp.value).replace(',', '.')) || 0.40,
+          quality: parseFloat(String(qualityInp.value).replace(',', '.')) || 0.62,
           resize: !!resizeCb.checked,
           maxEdge: 2400,
         };
-
-        let captionText = '';
-        if (metaChk && metaChk.checked) {
-          captionText = buildComicCaption({
-            fileName: outName,
-            titleEs: metaTitleEs.value,
-            originalTitle: metaOrig.value,
-            series: metaCapSeries.value,
-            writer: metaWriter.value,
-            artist: metaArtist.value,
-            publisher: metaPub.value,
-            date: metaDate.value,
-            description: metaDesc.value,
-          });
-          const capLen = captionText.length;
-          if (capLen > 1024) {
-            alert(
-              'El caption tiene ' + capLen + ' caracteres (máximo 1024 de Telegram).\n' +
-              'Acorta sobre todo la descripción u otros campos de la ficha y vuelve a intentar.\n' +
-              'El formulario no se ha cerrado.'
-            );
-            return;
-          }
-        }
 
         if (!confirm('¿Subir como «' + outName + '» al canal «' + chName + '» (' + ed + ')?')) return;
 
@@ -989,18 +917,13 @@ export function createUploadTool(d) {
             ctx.setProgress(55);
             await ctx.waitWhilePaused?.();
             st('Subiendo a Telegram…');
-            await uploadCbz(ch, outName, blob, captionText || '', st);
+            await uploadCbz(ch, outName, blob, '', st);
             blob = null;
             ctx.setProgress(90);
             st('Actualizando listado…');
             try { await fetchFiles(ch); } catch (e) { st('Listado: ' + (e?.message || e)); }
             ctx.setProgress(100);
             st('✓ Subido correctamente');
-            try {
-              if (typeof onUploadDone === 'function') await onUploadDone(ch);
-            } catch (e) {
-              console.warn('[upload] onUploadDone', e);
-            }
           } catch (e) {
             if (!e?.cancelled && !abort) {
               st('ERROR: ' + (e?.message || e));
@@ -1071,54 +994,20 @@ export function createUploadTool(d) {
       body.append(editorialSel, editorialInp);
       body.append(el('div', 'info-sec', 'Canal'));
       body.append(channelSel, channelInp);
-      body.append(el('div', 'info-sec', 'Título del archivo'));
-      body.append(seriesInp, numberInp, infoInp);
+      body.append(el('div', 'info-sec', 'Nombre del cómic'));
+      body.append(seriesLab, seriesHint, seriesInp);
+      body.append(numberLab, numberHint, numberInp);
+      body.append(infoLab, infoHint, infoInp);
       body.append(includeChRow);
       body.append(nameFinalLab, nameFinalInp);
       body.append(webpRow, webpOptsBox);
-      body.append(metaLab, metaBox);
       body.append(status);
       actions.append(cancel, goBtn);
       body.append(actions);
       box.append(head, body);
       frame.append(box);
 
-      // Prefill desde contexto (editorial / canal / serie actuales)
-      try {
-        const c = ctx || {};
-        if (c.editorial) {
-          const g = String(c.editorial);
-          const has = [...editorialSel.options].some((o) => o.value === g);
-          if (has) {
-            editorialSel.value = g;
-            editorialInp.hidden = true;
-          } else {
-            editorialSel.value = '__new__';
-            editorialInp.hidden = false;
-            editorialInp.value = g;
-          }
-        }
-        rebuildChannels();
-        if (c.channel) {
-          const id = String(c.channel.id || c.channel);
-          const name = c.channel.name || '';
-          const opt = [...channelSel.options].find((o) => o.value === id || o.textContent === name);
-          if (opt) {
-            channelSel.value = opt.value;
-            channelInp.hidden = true;
-          } else if (name) {
-            channelSel.value = '__new__';
-            channelInp.hidden = false;
-            channelInp.value = name;
-          }
-        }
-        if (c.series) {
-          seriesInp.value = String(c.series);
-        }
-      } catch (e) {
-        console.warn('[upload] ctx', e);
-        rebuildChannels();
-      }
+      rebuildChannels();
       updatePreview();
 
       // Solo cierra con Cancelar / × (no al pulsar fuera)
