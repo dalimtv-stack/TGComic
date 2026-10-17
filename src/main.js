@@ -1056,6 +1056,30 @@ function formatPeople(s) {
   return parts.length ? parts.join(', ') : (s || '—');
 }
 
+function copyInfoFrameText(bodyEl, label) {
+  try {
+    const lines = [];
+    for (const node of bodyEl.querySelectorAll('.info-sec, .info-row')) {
+      if (node.classList.contains('info-sec')) {
+        lines.push('', node.textContent.trim());
+      } else if (node.classList.contains('info-row')) {
+        const lab = node.querySelector('.info-label')?.textContent?.trim() || '';
+        const val = node.querySelector('.info-value')?.textContent?.trim() || '';
+        lines.push(lab ? (lab + ': ' + val) : val);
+      }
+    }
+    const text = lines.join('\n').replace(/^\n+/, '').trim();
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(() => {
+      // feedback breve en el head
+    }).catch(() => {
+      prompt('Copiar:', text);
+    });
+  } catch (e) {
+    console.warn('copy info', e);
+  }
+}
+
 function showDescriptionPanel(text) {
   document.querySelector('.info-frame.desc-panel')?.remove();
   const frame = el('div', 'info-frame desc-panel');
@@ -1084,9 +1108,15 @@ function showComicInfo(ch, f, displayTitle) {
       || parsed?.series || seriesBase(f?.name || '', ch?.name) || '';
     seriesKey = String(seriesKey || '').trim();
     let series = seriesKey || '—';
-    const parsedTitle = comicDisplay(f?.name || '', ch?.name) || '—';
+    // Si hay serie, el título es solo el número/info (#Annual - 2013), no "Serie #…"
+    // (la serie ya va en su propia fila)
+    const issueTitle = parsed ? issueDisplay(parsed) : '';
+    const parsedTitle = issueTitle
+      || comicDisplay(f?.name || '', ch?.name)
+      || '—';
+    const titleFallback = issueTitle && seriesKey ? issueTitle : parsedTitle;
     const title = (displayTitle && String(displayTitle).trim())
-      || (ch && f ? comicDisplayName(ch, f, parsedTitle) : parsedTitle)
+      || (ch && f ? comicDisplayName(ch, f, titleFallback) : titleFallback)
       || '—';
     const fname = f?.name || '';
     const fmt = /\.cbz$/i.test(fname) ? 'CBZ (ZIP)' : /\.cbr$/i.test(fname) ? 'CBR (RAR)' : '—';
@@ -1102,12 +1132,20 @@ function showComicInfo(ch, f, displayTitle) {
     const frame = el('div', 'info-frame comic-info');
     const box = el('div', 'info-box');
     const head = el('div', 'info-head');
-    head.append(el('span', '', 'Información'));
+    const titleSpan = el('span', 'info-head-title', 'Información');
+    titleSpan.title = 'Pulsa para copiar';
+    head.append(titleSpan);
     const close = el('button', 'btn info-close', '×');
     close.setAttribute('aria-label', 'Cerrar');
     close.onclick = () => frame.remove();
     head.append(close);
     const body = el('div', 'info-body');
+    titleSpan.onclick = (ev) => {
+      ev.stopPropagation();
+      copyInfoFrameText(body);
+      titleSpan.textContent = 'Copiado';
+      setTimeout(() => { titleSpan.textContent = 'Información'; }, 1200);
+    };
     const row = (label, value) => {
       const r = el('div', 'info-row');
       r.append(el('span', 'info-label', label), el('span', 'info-value', String(value ?? '—')));
@@ -1394,9 +1432,9 @@ function showComicVinePicker(ch, f, { onPick } = {}) {
   const parsed = parseComicName(f?.name || '', ch?.name);
   const cap = parseComicCaption(f?.caption || '');
   const qDefault = buildSearchQuery({
+    channel: ch?.name || '',
     series: cap.series || parsed?.series || seriesBase(f?.name || '', ch?.name) || '',
     number: parsed?.number || '',
-    title: cap.titleEs || comicDisplay(f?.name || '', ch?.name) || '',
     fileName: f?.name || '',
   });
 
@@ -1450,16 +1488,20 @@ function showComicVinePicker(ch, f, { onPick } = {}) {
             let detail = null;
             if (r.apiDetailUrl) detail = await fetchIssueDetail(r.apiDetailUrl);
             else detail = await fetchIssueDetail(r.id);
-            if (!detail) detail = {
-              name: r.name,
-              issueNumber: r.issueNumber,
-              volume: r.volume,
-              coverDate: r.coverDate,
-              pageCount: r.pageCount,
-              writers: [],
-              artists: [],
-              description: '',
-            };
+            if (!detail) {
+              detail = {
+                name: r.name,
+                issueNumber: r.issueNumber,
+                volume: r.volume,
+                coverDate: r.coverDate,
+                publisher: r.publisher || '',
+                writers: [],
+                artists: [],
+                description: '',
+              };
+            } else if (!detail.publisher && r.publisher) {
+              detail.publisher = r.publisher;
+            }
             frame.remove();
             onPick?.(detail);
           } catch (e) {
@@ -1607,7 +1649,6 @@ function showEditComicTitle(ch, f, currentLabel, after) {
     }
   };
 
-  const cap = parseComicCaption(f?.caption || '');
   const fichaBtn = el('button', 'btn cover-pick-device', 'Ficha Telegram completa…');
   fichaBtn.type = 'button';
   fichaBtn.onclick = () => {
@@ -1672,11 +1713,19 @@ function showSeriesInfo(ch, seriesLabel, files) {
     const frame = el('div', 'info-frame series-info');
     const box = el('div', 'info-box');
     const head = el('div', 'info-head');
-    head.append(el('span', '', 'Información'));
+    const titleSpan = el('span', 'info-head-title', 'Información');
+    titleSpan.title = 'Pulsa para copiar';
+    head.append(titleSpan);
     const close = el('button', 'btn info-close', '×');
     close.onclick = () => frame.remove();
     head.append(close);
     const body = el('div', 'info-body');
+    titleSpan.onclick = (ev) => {
+      ev.stopPropagation();
+      copyInfoFrameText(body);
+      titleSpan.textContent = 'Copiado';
+      setTimeout(() => { titleSpan.textContent = 'Información'; }, 1200);
+    };
     const row = (label, value) => {
       const r = el('div', 'info-row');
       r.append(el('span', 'info-label', label), el('span', 'info-value', String(value ?? '—')));

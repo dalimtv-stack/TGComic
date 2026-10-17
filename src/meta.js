@@ -76,23 +76,25 @@ export function comicDisplayName(ch, f, fallback) {
   if (custom != null && String(custom).trim()) {
     t = String(custom).trim();
   } else {
-    // Telegram altera nombres largos: usar Título España del caption y
-    // normalizarlo igual que un nombre de archivo (parseComicName).
+    // Telegram altera nombres largos: Título España del caption, normalizado como archivo.
+    // En vista de serie (fallback "#…") solo el número/info, nunca "Serie #n".
     try {
       const cap = parseComicCaption(f.caption || '');
       const titleEs = cap.titleEs && String(cap.titleEs).trim();
+      const fb = String(fallback || '').trim();
+      const inSeriesView = /^#/.test(fb);
       if (titleEs) {
         const asName = /\.cb[zr]$/i.test(titleEs) ? titleEs : (titleEs + '.cbz');
-        const p = parseComicName(asName, ch.name);
-        if (p) {
-          const fb = String(fallback || '').trim();
-          // En vista de serie el fallback suele ser "#nn - …" → mismo formato
-          if (/^#/.test(fb)) {
-            t = issueDisplay(p);
-          } else {
-            // Vista canal / título completo: Serie #nn - info
-            t = comicDisplay(asName, ch.name) || issueDisplay(p);
+        const pCap = parseComicName(asName, ch.name);
+        if (inSeriesView) {
+          if (pCap) t = issueDisplay(pCap);
+          else {
+            // Extraer "#nn…" del título España si el parseo falla
+            const mHash = titleEs.match(/#\s*(\S[\s\S]*)$/);
+            t = mHash ? ('#' + mHash[1].replace(/^#\s*/, '').trim()) : fb;
           }
+        } else if (pCap) {
+          t = comicDisplay(asName, ch.name) || issueDisplay(pCap);
         } else {
           t = titleEs;
         }

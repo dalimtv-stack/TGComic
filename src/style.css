@@ -426,3 +426,6 @@ textarea.meta-desc, textarea.edit-input.meta-desc{
 .continue-channel{font-size:.75rem;line-height:1.15;color:#7eb6ff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .continue-series{font-weight:650;font-size:.88rem;line-height:1.15;color:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .continue-title{font-size:.88rem;line-height:1.15;font-weight:600;color:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.info-head-title{cursor:pointer;user-select:none}
+.info-head-title:active{opacity:.7}

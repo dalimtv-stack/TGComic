@@ -112,7 +112,6 @@ export async function searchIssues(query, limit = 15) {
     r.publisher = (r.volumeApi && volMap.get(r.volumeApi)) || '';
   }
 
-  mapped.sort((a, b) => parseDateSort(a.coverDate).localeCompare(parseDateSort(b.coverDate)));
   return mapped;
 }
 
@@ -171,13 +170,13 @@ export async function fetchIssueDetail(apiDetailUrlOrId) {
   };
 }
 
-export function buildSearchQuery({ series, number, title, fileName }) {
+export function buildSearchQuery({ channel, series, number, fileName }) {
   const parts = [];
-  if (series) parts.push(series);
-  if (number) parts.push(String(number).replace(/^#/, ''));
-  else if (title) parts.push(title);
-  if (!parts.length && fileName) {
+  if (channel) parts.push(String(channel).trim());
+  if (series) parts.push(String(series).trim());
+  if (number) parts.push(String(number).replace(/^#/, '').trim());
+  if (!parts.filter(Boolean).length && fileName) {
     parts.push(String(fileName).replace(/\.cb[zr]$/i, '').replace(/_/g, ' '));
   }
-  return parts.join(' ').replace(/\s+/g, ' ').trim();
+  return parts.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
 }
