@@ -118,12 +118,32 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 .app-menu{position:fixed;z-index:40;min-width:180px;padding:.35rem;border-radius:14px;background:#1b1c20f2;-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);box-shadow:0 10px 30px #000a;border:1px solid #ffffff10}
 .app-menu-item{display:block;width:100%;text-align:left;border:0;background:transparent;color:var(--fg);font:inherit;padding:.75rem 1rem;border-radius:10px;cursor:pointer}
 .app-menu-item:active,.app-menu-item:hover{background:#ffffff10}
+/* Bloquear scroll de la app detrás de Información / formularios */
+body:has(.info-frame),
+body:has(.sheet){
+  overflow:hidden!important;
+  overscroll-behavior:none;
+}
+body:has(.info-frame) #app,
+body:has(.sheet) #app{
+  pointer-events:none;
+  /* evita que el gesto se propague al listado de detrás */
+  touch-action:none;
+}
 .info-frame{
   position:fixed;inset:0;z-index:60;background:#000a;
   display:flex;align-items:center;justify-content:center;
   padding:max(0.75rem, var(--sat)) 0.75rem max(0.75rem, var(--sab));
   overflow:auto;-webkit-overflow-scrolling:touch;
+  overscroll-behavior:contain;
+  touch-action:pan-y;
   box-sizing:border-box;
+  pointer-events:auto;
+}
+.info-frame .info-box,
+.info-frame .box{
+  pointer-events:auto;
+  touch-action:pan-y;
 }
 .info-box{
   width:min(480px,100%);
@@ -431,10 +451,18 @@ textarea.meta-desc, textarea.edit-input.meta-desc{
 .info-head-title:active{opacity:.7}
 
 .meta-desc-lg{
-  min-height:10rem;
-  max-height:50vh;
+  min-height:min(18rem, 42vh);
+  height:min(18rem, 42vh);
+  max-height:60vh;
   resize:vertical;
-  line-height:1.35;
+  line-height:1.4;
+  font-size:.95rem;
+  padding:.75rem 1rem!important;
+  box-sizing:border-box;
+}
+textarea.meta-desc-lg.edit-input{
+  height:min(18rem, 42vh);
+  min-height:min(18rem, 42vh);
 }
 
 .meta-sel-bar{display:flex;gap:.5rem;flex-wrap:wrap;margin:.4rem 0 .2rem}
