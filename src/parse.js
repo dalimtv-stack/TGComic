@@ -90,8 +90,9 @@ export function parseComicName(name, channelName) {
       if (out) return out;
     }
   }
-  // Serie #n [- info]  (info no empieza por #n de rango ya cubierto)
-  const re2 = new RegExp(`^(.+?)\\s*#\\s*(${ISSUE_TAG})(?:\\s*-?\\s+(.+))?\\s*$`, 'i');
+  // Serie #n [- info]  — greedy para coger la última "#n"
+  // (evita que un dígito del título de serie, p.ej. "Proposition 2 #01", robe el número)
+  const re2 = new RegExp(`^(.+)\\s*#\\s*(${ISSUE_TAG})(?:\\s*-?\\s+(.+))?\\s*$`, 'i');
   const m2 = raw.match(re2);
   if (m2) {
     let info = m2[3] || '';
