@@ -800,28 +800,44 @@ function getUploadContext() {
   }
   return {};
 }
-function go(title, render) { stack.push({ title, render }); history.pushState(null, ''); show(); }
+function go(title, render) {
+  // Guardar posición de scroll de la vista actual antes de entrar en otra
+  if (stack.length) {
+    const cur = stack[stack.length - 1];
+    cur.scrollY = window.scrollY || document.documentElement.scrollTop || 0;
+  }
+  stack.push({ title, render });
+  history.pushState(null, '');
+  show();
+}
 function show() {
   cleanup?.(); cleanup = null;
   const e = stack[stack.length - 1];
   titleEl.textContent = e.title;
   backBtn.hidden = stack.length < 2;
   $('#top')?.classList.toggle('home', stack.length < 2);
-  // Reset scroll al cambiar de vista (evita entrar "descentrado")
-  window.scrollTo(0, 0);
-  document.documentElement.scrollTop = 0;
-  document.body.scrollTop = 0;
-  lastScrollY = 0;
   headerHidden = false;
   $('#top')?.classList.remove('hide');
+  const restoreY = (typeof e.scrollY === 'number' && e.scrollY > 0) ? e.scrollY : 0;
+  const applyScroll = () => {
+    try {
+      window.scrollTo(0, restoreY);
+      document.documentElement.scrollTop = restoreY;
+      document.body.scrollTop = restoreY;
+      lastScrollY = restoreY;
+    } catch (_) {}
+  };
+  // Al entrar en vista nueva (sin scroll guardado) ir arriba; al volver restaurar
+  applyScroll();
   e.render(e);
-  // Panel/chip de recarga o subida: solo en home, nunca en el lector
   try { repackTool?.syncFloatingUi?.(); } catch (_) {}
   try { uploadTool?.syncFloatingUi?.(); } catch (_) {}
-  // Por si el render asíncrono deja el scroll más abajo
+  // Render async (canal/serie): reaplicar scroll varias veces
   requestAnimationFrame(() => {
-    window.scrollTo(0, 0);
-    lastScrollY = 0;
+    applyScroll();
+    setTimeout(applyScroll, 50);
+    setTimeout(applyScroll, 150);
+    setTimeout(applyScroll, 350);
   });
 }
 backBtn.onclick = () => history.back();
@@ -1279,8 +1295,7 @@ function grid(items, withSearch, searchPlaceholder) {
   nodes.push(g);
   app.replaceChildren(...nodes);
   draw();
-  window.scrollTo(0, 0);
-  lastScrollY = 0;
+  // No forzar scroll a 0: show()/go() restauran la posición al volver del lector
 }
 function sheet(title, opts) {
   const bg = el('div', 'sheet'), box = el('div', 'box'), close = () => bg.remove();
@@ -1396,14 +1411,21 @@ function showCaptionEditor(ch, f, after, opts = {}) {
       save.disabled = true;
       await updateTelegramCaption(ch, f, caption);
       frame.remove();
-      // Solo tras guardar: recargar "Editar datos del comic" si estaba abierto
       const editWasOpen = !!document.querySelector('.info-frame.edit-comic');
       document.querySelector('.info-frame.edit-comic')?.remove();
       document.querySelector('.info-frame.comic-info')?.remove();
+      // Actualizar listado/portadas detrás (caption afecta título visible)
+      try { after?.(); } catch (_) {}
+      try {
+        const top = stack[stack.length - 1];
+        if (top && !top._isComic && !document.getElementById('rd')) {
+          top.scrollY = window.scrollY || document.documentElement.scrollTop || 0;
+          show();
+        }
+      } catch (_) {}
+      // Si veníamos de editar cómic, reabrir el formulario ya con datos nuevos
       if (editWasOpen || opts.reopenEdit) {
         showEditComicTitle(ch, f, opts.currentLabel || '', after);
-      } else {
-        after?.();
       }
     } catch (e) {
       alert('No se pudo guardar el caption: ' + (e?.message || e));
