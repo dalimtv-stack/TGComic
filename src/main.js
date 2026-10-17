@@ -33,6 +33,9 @@ import { createUploadTool } from './upload.js';
 import { createPageCache } from './pageCache.js';
 import { createJobQueue } from './jobQueue.js';
 import { exportLibraryData, importLibraryData, downloadJson } from './dataPort.js';
+import {
+  comicVineConfigured, searchIssues, fetchIssueDetail, buildSearchQuery,
+} from './comicvine.js';
 
 const apiId = Number(import.meta.env.VITE_API_ID);
 const apiHash = import.meta.env.VITE_API_HASH;
@@ -1260,6 +1263,233 @@ async function updateTelegramCaption(ch, f, caption) {
   f.caption = String(caption || '');
 }
 
+
+/** Formulario completo de ficha Telegram + Identificar (Comic Vine) */
+function showCaptionEditor(ch, f, after) {
+  document.querySelector('.info-frame.caption-editor')?.remove();
+  const cap = parseComicCaption(f?.caption || '');
+  const parsed = parseComicName(f?.name || '', ch?.name);
+  const frame = el('div', 'info-frame caption-editor');
+  const box = el('div', 'info-box');
+  const head = el('div', 'info-head');
+  head.append(el('span', '', 'Ficha Telegram'));
+  const close = el('button', 'btn info-close', '×');
+  close.onclick = () => frame.remove();
+  head.append(close);
+  const body = el('div', 'info-body');
+
+  const idBtn = el('button', 'btn-identify', 'Identificar');
+  idBtn.type = 'button';
+  body.append(idBtn);
+  body.append(el('p', 'cover-pick-hint', 'Busca en Comic Vine y rellena los campos. Necesitas VITE_COMICVINE_API_KEY.'));
+
+  const mk = (lab, val, ph) => {
+    body.append(el('label', 'sync-label', lab));
+    const inp = el('input', 'edit-input');
+    inp.type = 'text';
+    inp.value = val || '';
+    inp.placeholder = ph || '';
+    inp.autocomplete = 'off';
+    body.append(inp);
+    return inp;
+  };
+  const inpFileName = mk('Nombre de archivo', cap.fileName || (f?.name || ''));
+  const inpTitleEs = mk('Título España', cap.titleEs);
+  const inpOrig = mk('Título original', cap.originalTitle);
+  const inpSeries = mk('Serie', cap.series || parsed?.series || '');
+  const inpWriter = mk('Guionista', cap.writer, 'Nombre1 | Nombre2');
+  const inpArtist = mk('Dibujante', cap.artist, 'Nombre1 | Nombre2');
+  const inpPub = mk('Editorial', cap.publisher);
+  const inpDate = mk('Fecha de publicación', cap.date, 'MM/AAAA o AAAA');
+  body.append(el('label', 'sync-label', 'Descripción'));
+  const inpDesc = el('textarea', 'edit-input meta-desc');
+  inpDesc.rows = 4;
+  inpDesc.value = cap.description || '';
+  body.append(inpDesc);
+
+  const actions = el('div', 'edit-actions');
+  const cancel = el('button', 'btn', 'Cancelar');
+  cancel.onclick = () => frame.remove();
+  const save = el('button', 'btn edit-save', 'Guardar en Telegram');
+  save.onclick = async () => {
+    const caption = buildComicCaption({
+      fileName: inpFileName.value,
+      titleEs: inpTitleEs.value,
+      originalTitle: inpOrig.value,
+      series: inpSeries.value,
+      writer: inpWriter.value,
+      artist: inpArtist.value,
+      publisher: inpPub.value,
+      date: inpDate.value,
+      description: inpDesc.value,
+    });
+    if (caption.length > 1024) {
+      alert('El caption tiene ' + caption.length + ' caracteres (máx. 1024). Acorta la descripción.');
+      return;
+    }
+    try {
+      save.disabled = true;
+      await updateTelegramCaption(ch, f, caption);
+      frame.remove();
+      after?.();
+    } catch (e) {
+      alert('No se pudo guardar el caption: ' + (e?.message || e));
+    } finally {
+      save.disabled = false;
+    }
+  };
+  actions.append(cancel, save);
+  body.append(actions);
+  box.append(head, body);
+  frame.append(box);
+  document.body.append(frame);
+
+  idBtn.onclick = () => showComicVinePicker(ch, f, {
+    onPick: (detail) => {
+      if (!detail) return;
+      // Título España: Serie #nn - name si hay name
+      const num = detail.issueNumber ? ('#' + String(detail.issueNumber).replace(/^#/, '')) : '';
+      const titleEs = [detail.volume, num, detail.name].filter(Boolean).join(' ').replace(/\s+/g, ' ')
+        .replace(/(\S)\s+#/, '$1 #');
+      // Mejor: "Volume #nn - Name"
+      let tEs = '';
+      if (detail.volume && detail.issueNumber) {
+        tEs = detail.volume + ' #' + String(detail.issueNumber).replace(/^#/, '');
+        if (detail.name) tEs += ' - ' + detail.name;
+      } else {
+        tEs = detail.name || detail.volume || '';
+      }
+      if (tEs && !inpTitleEs.value.trim()) inpTitleEs.value = tEs;
+      else if (tEs) inpTitleEs.value = tEs;
+      if (detail.name) inpOrig.value = detail.name;
+      if (detail.volume) inpSeries.value = detail.volume;
+      if (detail.writers?.length) inpWriter.value = detail.writers.join(' | ');
+      if (detail.artists?.length) inpArtist.value = detail.artists.join(' | ');
+      if (detail.coverDate) inpDate.value = detail.coverDate;
+      if (detail.description) inpDesc.value = detail.description;
+    },
+  });
+}
+
+function showComicVinePicker(ch, f, { onPick } = {}) {
+  document.querySelector('.info-frame.cv-picker')?.remove();
+  const frame = el('div', 'info-frame cv-picker');
+  const box = el('div', 'info-box');
+  const head = el('div', 'info-head');
+  head.append(el('span', '', 'Identificar (Comic Vine)'));
+  const close = el('button', 'btn info-close', '×');
+  close.onclick = () => frame.remove();
+  head.append(close);
+  const body = el('div', 'info-body');
+
+  const ourPages = (ch && f) ? getPagesTotal(ch.id, f.id) : 0;
+  const pagesInfo = el('p', 'cv-our-pages',
+    ourPages > 0
+      ? ('Páginas de tu archivo: ' + ourPages)
+      : 'Páginas de tu archivo: desconocido (ábrelo una vez en el lector para contarlas)'
+  );
+  body.append(pagesInfo);
+
+  const parsed = parseComicName(f?.name || '', ch?.name);
+  const cap = parseComicCaption(f?.caption || '');
+  const qDefault = buildSearchQuery({
+    series: cap.series || parsed?.series || seriesBase(f?.name || '', ch?.name) || '',
+    number: parsed?.number || '',
+    title: cap.titleEs || comicDisplay(f?.name || '', ch?.name) || '',
+    fileName: f?.name || '',
+  });
+
+  body.append(el('label', 'sync-label', 'Búsqueda'));
+  const qInp = el('input', 'edit-input');
+  qInp.type = 'text';
+  qInp.value = qDefault;
+  body.append(qInp);
+  const searchBtn = el('button', 'btn edit-save', 'Buscar');
+  searchBtn.type = 'button';
+  body.append(searchBtn);
+  const status = el('p', 'sync-status', '');
+  body.append(status);
+  const list = el('div', 'cv-results');
+  body.append(list);
+
+  const runSearch = async () => {
+    list.replaceChildren();
+    if (!comicVineConfigured()) {
+      status.textContent = 'Configura VITE_COMICVINE_API_KEY en Vercel (.env).';
+      status.className = 'sync-status sync-err';
+      return;
+    }
+    const q = qInp.value.trim();
+    if (!q) {
+      status.textContent = 'Escribe algo para buscar';
+      return;
+    }
+    searchBtn.disabled = true;
+    status.className = 'sync-status';
+    status.textContent = 'Buscando en Comic Vine…';
+    try {
+      const results = await searchIssues(q, 12);
+      status.textContent = results.length ? (results.length + ' resultados') : 'Sin resultados';
+      for (const r of results) {
+        const btn = el('button', 'cv-result');
+        btn.type = 'button';
+        const title = [r.volume, r.issueNumber ? ('#' + r.issueNumber) : '', r.name].filter(Boolean).join(' ');
+        btn.append(el('b', '', title || ('Issue ' + r.id)));
+        const sub = [];
+        if (r.coverDate) sub.push(r.coverDate);
+        if (r.volume) sub.push(r.volume);
+        if (sub.length) btn.append(el('span', 'cv-sub', sub.join(' · ')));
+        const pg = (r.pageCount != null && !Number.isNaN(r.pageCount))
+          ? ('Páginas (Comic Vine): ' + r.pageCount)
+          : 'Páginas (Comic Vine): —';
+        btn.append(el('span', 'cv-pages', pg));
+        btn.onclick = async () => {
+          btn.disabled = true;
+          status.textContent = 'Cargando ficha…';
+          try {
+            let detail = null;
+            if (r.apiDetailUrl) detail = await fetchIssueDetail(r.apiDetailUrl);
+            else detail = await fetchIssueDetail(r.id);
+            if (!detail) detail = {
+              name: r.name,
+              issueNumber: r.issueNumber,
+              volume: r.volume,
+              coverDate: r.coverDate,
+              pageCount: r.pageCount,
+              writers: [],
+              artists: [],
+              description: '',
+            };
+            frame.remove();
+            onPick?.(detail);
+          } catch (e) {
+            status.textContent = 'Error: ' + (e?.message || e);
+            status.className = 'sync-status sync-err';
+            btn.disabled = false;
+          }
+        };
+        list.append(btn);
+      }
+    } catch (e) {
+      status.textContent = 'Error: ' + (e?.message || e);
+      status.className = 'sync-status sync-err';
+    } finally {
+      searchBtn.disabled = false;
+    }
+  };
+
+  searchBtn.onclick = () => runSearch();
+  qInp.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); runSearch(); }
+  });
+
+  box.append(head, body);
+  frame.append(box);
+  document.body.append(frame);
+  // Auto-buscar si hay query
+  if (qDefault) setTimeout(runSearch, 100);
+}
+
 function showEditComicTitle(ch, f, currentLabel, after) {
   document.querySelector('.info-frame.edit-comic')?.remove();
   const fallbackTitle = comicDisplay(f?.name || '', ch?.name) || clean(f?.name || '') || '';
@@ -1378,6 +1608,14 @@ function showEditComicTitle(ch, f, currentLabel, after) {
   };
 
   const cap = parseComicCaption(f?.caption || '');
+  const fichaBtn = el('button', 'btn cover-pick-device', 'Ficha Telegram completa…');
+  fichaBtn.type = 'button';
+  fichaBtn.onclick = () => {
+    // No cerramos el form de título; abrimos ficha encima
+    showCaptionEditor(ch, f, after);
+  };
+  body.append(fichaBtn);
+
   const metaChk = el('input');
   metaChk.type = 'checkbox';
   metaChk.checked = false; // siempre desmarcado por defecto
@@ -2552,6 +2790,7 @@ function groupsView() {
               img.src = URL.createObjectURL(b);
             }).catch(() => {});
             const meta = el('div', 'continue-meta');
+            const channelLab = channelDisplayName(ch) || ch.name || '';
             let seriesLab = '';
             try {
               const ov = getComicSeriesOverride(ch, f);
@@ -2560,7 +2799,8 @@ function groupsView() {
               seriesLab = sk ? (seriesDisplayName(ch, sk) || sk) : '';
             } catch (_) {}
             const titleLab = comicDisplayName(ch, f, comicDisplay(f.name, ch.name) || clean(f.name));
-            if (seriesLab) meta.append(el('b', 'continue-series', seriesLab));
+            if (channelLab) meta.append(el('span', 'continue-channel', channelLab));
+            if (seriesLab) meta.append(el('span', 'continue-series', seriesLab));
             meta.append(el('span', 'continue-title', titleLab));
             meta.append(el('small', '', sizeLabel(f, ch)));
             if (prog) {
