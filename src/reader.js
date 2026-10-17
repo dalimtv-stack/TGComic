@@ -20,7 +20,8 @@ export function createReader(state, d) {
     pageCache,
   } = d;
 
-  // —— Android: inmersión solo CSS (sin Fullscreen API → sin toast de “cómo salir”) ——
+  // Android: inmersión CSS (sin Fullscreen API → sin toast de “cómo salir”)
+  // El tamaño se fuerza con visualViewport para ocupar toda el área útil.
   const isAndroid = /Android/i.test(navigator.userAgent || '');
   function enterReaderFullscreen() {
     try {
@@ -28,8 +29,11 @@ export function createReader(state, d) {
       document.body.classList.add('reader-fs');
       document.body.style.overflow = 'hidden';
       document.documentElement.style.overflow = 'hidden';
+      document.documentElement.style.height = '100%';
+      document.body.style.height = '100%';
+      // Ocultar barra de dirección en móviles (scroll trick suave)
+      try { window.scrollTo(0, 1); } catch (_) {}
     } catch (_) {}
-    // NO usar requestFullscreen: en Chrome Android muestra un mensaje molesto abajo
   }
   function exitReaderFullscreen() {
     try {
@@ -37,6 +41,21 @@ export function createReader(state, d) {
       document.body.classList.remove('reader-fs');
       document.body.style.overflow = '';
       document.documentElement.style.overflow = '';
+      document.documentElement.style.height = '';
+      document.body.style.height = '';
+    } catch (_) {}
+  }
+  function sizeReaderEl(rd) {
+    if (!rd) return;
+    try {
+      const w = Math.round(window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth);
+      const h = Math.round(window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight);
+      rd.style.width = w + 'px';
+      rd.style.height = h + 'px';
+      rd.style.maxWidth = w + 'px';
+      rd.style.maxHeight = h + 'px';
+      rd.style.top = '0';
+      rd.style.left = '0';
     } catch (_) {}
   }
 
@@ -225,7 +244,8 @@ export function createReader(state, d) {
       document.body.append(rd);
       document.body.style.overflow = 'hidden';
       try { enterReaderFullscreen(); } catch (_) {}
-      // Android: franja invisible a la izquierda para salir del lector (gesto atrás)
+      try { sizeReaderEl(rd); } catch (_) {}
+      // Android: franja invisible a la izquierda para salir del lector
       if (isAndroid) {
         const edgeBack = el('div', 'edge-back');
         edgeBack.setAttribute('aria-hidden', 'true');
@@ -239,7 +259,6 @@ export function createReader(state, d) {
           if (ebx == null || !e.touches[0]) return;
           const dx = e.touches[0].clientX - ebx;
           const dy = e.touches[0].clientY - eby;
-          // Si el gesto es claramente horizontal hacia la derecha, reclamarlo
           if (dx > 12 && Math.abs(dx) > Math.abs(dy)) {
             try { e.preventDefault(); } catch (_) {}
           }
@@ -251,9 +270,7 @@ export function createReader(state, d) {
           const dx = t.clientX - ebx;
           const dy = t.clientY - eby;
           ebx = null;
-          if (dx > 48 && Math.abs(dy) < 110) {
-            history.back();
-          }
+          if (dx > 48 && Math.abs(dy) < 110) history.back();
         }, { passive: true });
         rd.append(edgeBack);
       }
@@ -636,6 +653,7 @@ export function createReader(state, d) {
         observers._wheel = onWheel;
         const onOrientPage = () => {
           resetMobileViewport();
+          try { sizeReaderEl(rd); } catch (_) {}
           const w = Math.round(window.visualViewport?.width || window.innerWidth);
           const h = Math.round(window.visualViewport?.height || window.innerHeight);
           rd.style.width = w + 'px';
@@ -965,6 +983,7 @@ export function createReader(state, d) {
           const stay = Math.max(0, Math.min(pages.length - 1, n));
 
           resetMobileViewport();
+          try { sizeReaderEl(rd); } catch (_) {}
           const w = vw(), h = vh();
           rd.style.width = w + 'px';
           rd.style.height = h + 'px';
@@ -1156,7 +1175,6 @@ export function createReader(state, d) {
         document.querySelector('.mosaic')?.remove();
         rd.remove();
         // Si se remonta el modo al instante, enterReaderFullscreen vuelve a poner la clase.
-        // Si se sale del lector, se queda limpio.
         try {
           if (!document.getElementById('rd')) exitReaderFullscreen();
           else enterReaderFullscreen();

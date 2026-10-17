@@ -935,13 +935,56 @@ addEventListener('popstate', () => { if (stack.length > 1) { stack.pop(); show()
 const msg = (t) => app.replaceChildren(el('div', 'msg', t));
 const alive = (e) => stack[stack.length - 1] === e;
 
+// Gesto atrás (borde izquierdo → derecha) al navegar series/canales/editoriales
+(() => {
+  let sx = null, sy = 0;
+  const edge = 28;
+  const onStart = (e) => {
+    if (document.getElementById('rd')) { sx = null; return; }
+    if (document.querySelector('.info-frame, .sheet, .mosaic')) { sx = null; return; }
+    if (stack.length < 2) { sx = null; return; }
+    if (!e.touches || e.touches.length !== 1) { sx = null; return; }
+    const x = e.touches[0].clientX;
+    if (x > edge) { sx = null; return; }
+    sx = x;
+    sy = e.touches[0].clientY;
+  };
+  const onMove = (e) => {
+    if (sx == null || !e.touches?.[0]) return;
+    const dx = e.touches[0].clientX - sx;
+    const dy = e.touches[0].clientY - sy;
+    if (dx > 14 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+      try { e.preventDefault(); } catch (_) {}
+    }
+  };
+  const onEnd = (e) => {
+    if (sx == null) return;
+    const t = e.changedTouches?.[0];
+    const startX = sx;
+    sx = null;
+    if (!t || document.getElementById('rd')) return;
+    if (stack.length < 2) return;
+    const dx = t.clientX - startX;
+    const dy = t.clientY - sy;
+    if (startX <= edge && dx > 56 && Math.abs(dy) < 100) {
+      try { history.back(); } catch (_) {}
+    }
+  };
+  document.addEventListener('touchstart', onStart, { passive: true, capture: true });
+  document.addEventListener('touchmove', onMove, { passive: false, capture: true });
+  document.addEventListener('touchend', onEnd, { passive: true, capture: true });
+})();
+
 const ART = { groups: {}, channels: {} };
 const artNorm = (s) => s.normalize('NFC').trim().toLowerCase();
+const artLoose = (s) => artNorm(String(s || '').replace(/[\s_\-]+/g, ''));
 const reg = (kind, files) => {
   for (const [p, url] of Object.entries(files)) {
     const base = decodeURIComponent(p.split('/').pop()).replace(/\.\w+$/i, '').trim();
     ART[kind][artNorm(base)] = url;
     ART[kind][base.normalize('NFD').trim().toLowerCase()] = url;
+    // Sin espacios: WildStorm / Wild Storm / Wildstorm → misma clave
+    ART[kind][artLoose(base)] = url;
   }
 };
 reg('groups', import.meta.glob(['/groups/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP}', '/src/groups/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP}'], { eager: true, query: '?url', import: 'default' }));
@@ -975,34 +1018,38 @@ function art(kind, name, ch) {
   const nfd = name.normalize('NFD').trim();
   const key = `art:${kind}:${artNorm(nfc)}`;
   const exts = ['jpg', 'jpeg', 'png', 'webp', 'avif', 'gif', 'JPG', 'JPEG', 'PNG', 'WEBP', 'AVIF', 'GIF'];
-  // Variantes: espacios, CamelCase partido (WildStorm → Wild Storm), sin espacios
+  // Variantes: espacios, CamelCase (WildStorm → Wild Storm), sin espacios
+  // En GitHub el archivo real es p.ej. "Wildstorm.WEBP" (s minúscula)
   const splitCamel = (s) => String(s || '').replace(/([a-z])([A-Z])/g, '$1 $2');
   const noSpace = (s) => String(s || '').replace(/[\s_\-]+/g, '');
+  const titleCase = (s) => String(s || '').replace(/\w\S*/g, (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
   const nameVars = [...new Set([
     nfc, nfd, name.trim(),
     splitCamel(nfc), splitCamel(nfd),
     noSpace(nfc), noSpace(nfd),
+    titleCase(nfc), titleCase(splitCamel(nfc)),
+    nfc.toLowerCase(), nfc.toUpperCase(),
   ].filter(Boolean))];
   const candidates = [];
   const seen = new Set();
   const add = (u) => { if (u && !seen.has(u)) { seen.add(u); candidates.push(u); } };
   const artBag = ART[kind] || {};
-  const targetLoose = artNorm(noSpace(nfc));
+  const targetLoose = artLoose(nfc);
   for (const n of nameVars) {
     add(artBag[artNorm(n)]);
+    add(artBag[artLoose(n)]);
     add(artBag[n.normalize('NFD').trim().toLowerCase()]);
   }
-  // Emparejado flexible: "WildStorm" ↔ "Wild Storm" ↔ "wildstorm"
+  // Emparejado flexible por mapa ART (WildStorm ↔ Wildstorm ↔ Wild Storm)
   try {
     for (const [k, url] of Object.entries(artBag)) {
-      if (artNorm(noSpace(k)) === targetLoose) add(url);
+      if (artLoose(k) === targetLoose) add(url);
     }
   } catch (_) {}
   for (const n of nameVars) {
     for (const e of exts) {
       add(`/${kind}/${encodeURIComponent(n)}.${e}`);
-      // Ruta sin encode (algunos Android fallan con %20)
-      if (/\s/.test(n)) add(`/${kind}/${n}.${e}`);
+      add(`/${kind}/${n}.${e}`);
     }
   }
 
@@ -1100,8 +1147,17 @@ function art(kind, name, ch) {
 /** Pulsación larga: el menú se abre AL SOLTAR (si no, el touchend cierra el sheet) */
 function bindLongPress(node, fn, ms = 480) {
   if (!fn || !node) return;
+  // Evitar doble menú en Android (touchend + contextmenu)
+  if (node.dataset.lpBound === '1') return;
+  node.dataset.lpBound = '1';
   let timer = null, sx = 0, sy = 0, armed = false, opened = false;
   const clear = () => { if (timer) { clearTimeout(timer); timer = null; } };
+  const openOnce = (e) => {
+    if (opened) return;
+    opened = true;
+    try { e?.preventDefault?.(); e?.stopPropagation?.(); } catch (_) {}
+    setTimeout(() => { try { fn(e); } catch (_) {} }, 10);
+  };
   const onStart = (e) => {
     const pt = e.touches ? e.touches[0] : e;
     sx = pt.clientX; sy = pt.clientY;
@@ -1111,7 +1167,6 @@ function bindLongPress(node, fn, ms = 480) {
     timer = setTimeout(() => {
       armed = true;
       try { navigator.vibrate?.(12); } catch (_) {}
-      // Feedback visual opcional en la tarjeta
       node.classList.add('long-press');
     }, ms);
   };
@@ -1126,13 +1181,7 @@ function bindLongPress(node, fn, ms = 480) {
   const onEnd = (e) => {
     clear();
     node.classList.remove('long-press');
-    if (armed && !opened) {
-      opened = true;
-      e.preventDefault();
-      e.stopPropagation();
-      // Abrir en el siguiente tick para no chocar con el touchend
-      setTimeout(() => fn(e), 10);
-    }
+    if (armed) openOnce(e);
   };
   node.addEventListener('touchstart', onStart, { passive: true });
   node.addEventListener('touchmove', onMove, { passive: true });
@@ -1142,11 +1191,11 @@ function bindLongPress(node, fn, ms = 480) {
     armed = false;
     node.classList.remove('long-press');
   }, { passive: true });
-  // Escritorio: clic derecho
+  // Escritorio: clic derecho (y algunos Android que disparan contextmenu)
   node.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    fn(e);
+    openOnce(e);
   }, true);
   node.addEventListener('click', (e) => {
     if (opened || armed) {
@@ -1392,6 +1441,8 @@ function grid(items, withSearch, searchPlaceholder) {
   // No forzar scroll a 0: show()/go() restauran la posición al volver del lector
 }
 function sheet(title, opts) {
+  // Un solo menú a la vez (Android a veces abre dos)
+  document.querySelectorAll('.sheet').forEach((s) => s.remove());
   const bg = el('div', 'sheet'), box = el('div', 'box'), close = () => bg.remove();
   box.append(el('div', 'sh-title', title));
   for (const [label, fn] of opts) { const b = el('button', 'btn', label); b.onclick = () => { close(); fn(); }; box.append(b); }
