@@ -77,6 +77,21 @@ async function fetchVolumePublisher(apiDetailUrl) {
   }
 }
 
+
+async function attachPublishers(mapped) {
+  const volMap = new Map();
+  for (const r of mapped) {
+    if (r.volumeApi && !volMap.has(r.volumeApi)) volMap.set(r.volumeApi, '');
+  }
+  await Promise.all([...volMap.keys()].map(async (u) => {
+    volMap.set(u, await fetchVolumePublisher(u));
+  }));
+  for (const r of mapped) {
+    if (!r.publisher && r.volumeApi) r.publisher = volMap.get(r.volumeApi) || '';
+  }
+  return mapped;
+}
+
 export async function searchIssues(query, limit = 25) {
   if (!API_KEY) throw new Error('Falta VITE_COMICVINE_API_KEY en las variables de entorno');
   const q = String(query || '').trim();
@@ -278,8 +293,10 @@ export async function searchIssuesSmart(opts = {}) {
     return String(a.issueNumber || '').localeCompare(String(b.issueNumber || ''), undefined, { numeric: true });
   });
 
-  // Sin slice agresivo: devolver todo lo encontrado (tope alto)
-  return out.slice(0, 80);
+  // Editorial en cada resultado (por volume, en paralelo)
+  const limited = out.slice(0, 80);
+  await attachPublishers(limited);
+  return limited;
 }
 
 export async function fetchIssueDetail(apiDetailUrlOrId) {
