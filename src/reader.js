@@ -20,42 +20,21 @@ export function createReader(state, d) {
     pageCache,
   } = d;
 
-  // —— Android: pantalla completa real + gesto atrás desde el borde ——
+  // —— Android: inmersión solo CSS (sin Fullscreen API → sin toast de “cómo salir”) ——
   const isAndroid = /Android/i.test(navigator.userAgent || '');
   function enterReaderFullscreen() {
     try {
       document.documentElement.classList.add('reader-fs');
       document.body.classList.add('reader-fs');
-    } catch (_) {}
-    if (!isAndroid) return;
-    try {
-      const root = document.documentElement;
-      const req = root.requestFullscreen || root.webkitRequestFullscreen || root.webkitRequestFullScreen;
-      if (req && !document.fullscreenElement) {
-        const p = req.call(root, { navigationUI: 'hide' });
-        if (p && typeof p.catch === 'function') p.catch(() => {});
-      }
-    } catch (_) {}
-    try {
       document.body.style.overflow = 'hidden';
       document.documentElement.style.overflow = 'hidden';
     } catch (_) {}
+    // NO usar requestFullscreen: en Chrome Android muestra un mensaje molesto abajo
   }
   function exitReaderFullscreen() {
     try {
       document.documentElement.classList.remove('reader-fs');
       document.body.classList.remove('reader-fs');
-    } catch (_) {}
-    try {
-      if (document.fullscreenElement) {
-        const ex = document.exitFullscreen || document.webkitExitFullscreen;
-        if (ex) {
-          const p = ex.call(document);
-          if (p && typeof p.catch === 'function') p.catch(() => {});
-        }
-      }
-    } catch (_) {}
-    try {
       document.body.style.overflow = '';
       document.documentElement.style.overflow = '';
     } catch (_) {}
@@ -246,6 +225,38 @@ export function createReader(state, d) {
       document.body.append(rd);
       document.body.style.overflow = 'hidden';
       try { enterReaderFullscreen(); } catch (_) {}
+      // Android: franja invisible a la izquierda para salir del lector (gesto atrás)
+      if (isAndroid) {
+        const edgeBack = el('div', 'edge-back');
+        edgeBack.setAttribute('aria-hidden', 'true');
+        let ebx = null, eby = 0;
+        edgeBack.addEventListener('touchstart', (e) => {
+          if (e.touches.length !== 1) { ebx = null; return; }
+          ebx = e.touches[0].clientX;
+          eby = e.touches[0].clientY;
+        }, { passive: true });
+        edgeBack.addEventListener('touchmove', (e) => {
+          if (ebx == null || !e.touches[0]) return;
+          const dx = e.touches[0].clientX - ebx;
+          const dy = e.touches[0].clientY - eby;
+          // Si el gesto es claramente horizontal hacia la derecha, reclamarlo
+          if (dx > 12 && Math.abs(dx) > Math.abs(dy)) {
+            try { e.preventDefault(); } catch (_) {}
+          }
+        }, { passive: false });
+        edgeBack.addEventListener('touchend', (e) => {
+          if (ebx == null) return;
+          const t = e.changedTouches?.[0];
+          if (!t) { ebx = null; return; }
+          const dx = t.clientX - ebx;
+          const dy = t.clientY - eby;
+          ebx = null;
+          if (dx > 48 && Math.abs(dy) < 110) {
+            history.back();
+          }
+        }, { passive: true });
+        rd.append(edgeBack);
+      }
       let uiTimer = setTimeout(() => rd.classList.add('ui-off'), 2500);
       const pokeUI = () => {
         rd.classList.remove('ui-off');
@@ -509,8 +520,8 @@ export function createReader(state, d) {
           pinch = null;
           if (e.touches.length !== 1) { sx = null; return; }
           const x = e.touches[0].clientX, y = e.touches[0].clientY;
-          // iOS: no capturar borde izquierdo (gesto atrás del sistema).
-          // Android: sí, para poder salir deslizando desde la izquierda.
+          // iOS: no capturar borde izquierdo (gesto del sistema).
+          // Android: sí (salida del lector); la franja .edge-back también captura.
           if (!isAndroid && x < 48) { sx = null; return; }
           sx = x; sy = y; moved = false;
         }, { passive: true });
@@ -567,8 +578,8 @@ export function createReader(state, d) {
           }
 
           if (moved) {
-            // Android: borde izquierdo → derecha = salir (como gesto atrás de iOS)
-            if (isAndroid && startX < 28 && dx > 70 && Math.abs(dy) < 80) {
+            // Android: borde izquierdo → derecha = salir
+            if (isAndroid && startX < 40 && dx > 50 && Math.abs(dy) < 100) {
               history.back();
               return;
             }
@@ -1076,19 +1087,7 @@ export function createReader(state, d) {
               activeSlot.scrollTop = Math.max(0, baseTop - dy);
             }
           };
-          const onTe = (e) => {
-            // Android: salida por borde izquierdo en horizontal continuo
-            if (isAndroid && sx != null) {
-              const dx0 = (e?.changedTouches?.[0]?.clientX ?? lastX) - sx;
-              const dy0 = (e?.changedTouches?.[0]?.clientY ?? sy) - sy;
-              if (sx < 28 && dx0 > 70 && Math.abs(dy0) < 80) {
-                history.back();
-                axis = null;
-                activeSlot = null;
-                velX = 0;
-                return;
-              }
-            }
+          const onTe = () => {
             if (axis === 'x') {
               const w = Math.max(1, sizes[n] || rd.clientWidth);
               const offset = rd.scrollLeft - posOf(n);
@@ -1154,10 +1153,15 @@ export function createReader(state, d) {
         try { rd.style.width = ''; rd.style.height = ''; } catch (_) {}
         for (const i of [...urls.keys()]) drop(i);
         document.onkeydown = null;
-        try { exitReaderFullscreen(); } catch (_) {}
-        document.body.style.overflow = '';
         document.querySelector('.mosaic')?.remove();
-        rd.remove(); try { window.dispatchEvent(new CustomEvent('tgcomic:reader', { detail: { open: false } })); } catch (_) {};
+        rd.remove();
+        // Si se remonta el modo al instante, enterReaderFullscreen vuelve a poner la clase.
+        // Si se sale del lector, se queda limpio.
+        try {
+          if (!document.getElementById('rd')) exitReaderFullscreen();
+          else enterReaderFullscreen();
+        } catch (_) {}
+        try { window.dispatchEvent(new CustomEvent('tgcomic:reader', { detail: { open: false } })); } catch (_) {}
       };
     };
     let unmount = mount();

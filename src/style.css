@@ -127,7 +127,6 @@ body:has(.sheet){
 body:has(.info-frame) #app,
 body:has(.sheet) #app{
   pointer-events:none;
-  /* evita que el gesto se propague al listado de detrás */
   touch-action:none;
 }
 .info-frame{
@@ -144,6 +143,8 @@ body:has(.sheet) #app{
 .info-frame .box{
   pointer-events:auto;
   touch-action:pan-y;
+  overscroll-behavior:contain;
+  -webkit-overflow-scrolling:touch;
 }
 .info-box{
   width:min(480px,100%);
@@ -392,7 +393,7 @@ body:has(.sheet) #app{
 .webp-opts .sync-label{margin-top:.15rem}
 .webp-opts .edit-input{margin:.2rem 0 .45rem}
 
-/* Android / móvil: pantalla completa real en el lector */
+/* Inmersión del lector (CSS, sin Fullscreen API) */
 html.reader-fs,body.reader-fs{
   overflow:hidden!important;
   height:100%!important;
@@ -415,6 +416,28 @@ body.reader-fs #rd{
   margin:0!important;
   padding:0!important;
   background:#000;
+}
+/* Franja de gesto atrás en Android */
+#rd .edge-back{
+  position:fixed;
+  left:0;top:0;bottom:0;
+  width:32px;
+  z-index:13;
+  touch-action:pan-y;
+  background:transparent;
+}
+
+/* Bloqueo de scroll de fondo con info abierta (refuerzo Android) */
+html.body-scroll-lock,
+body.body-scroll-lock{
+  overflow:hidden!important;
+  overscroll-behavior:none;
+  touch-action:none;
+  height:100%;
+}
+body.body-scroll-lock #app{
+  pointer-events:none;
+  touch-action:none;
 }
 
 /* Chips de serie al editar cómic */

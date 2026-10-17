@@ -61,6 +61,40 @@ function resetMobileViewport() {
 }
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+
+/** Bloquea el scroll de la webapp detrás de Información / formularios (Android). */
+function lockAppScroll() {
+  if (document.body.classList.contains('body-scroll-lock')) return;
+  const y = window.scrollY || document.documentElement.scrollTop || 0;
+  document.body.dataset.lockY = String(y);
+  document.body.classList.add('body-scroll-lock');
+  document.documentElement.classList.add('body-scroll-lock');
+  document.body.style.position = 'fixed';
+  document.body.style.top = `-${y}px`;
+  document.body.style.left = '0';
+  document.body.style.right = '0';
+  document.body.style.width = '100%';
+}
+function unlockAppScroll() {
+  if (document.querySelector('.info-frame, .sheet')) return;
+  const y = Math.max(0, +(document.body.dataset.lockY || 0) || 0);
+  document.body.classList.remove('body-scroll-lock');
+  document.documentElement.classList.remove('body-scroll-lock');
+  document.body.style.position = '';
+  document.body.style.top = '';
+  document.body.style.left = '';
+  document.body.style.right = '';
+  document.body.style.width = '';
+  delete document.body.dataset.lockY;
+  try { window.scrollTo(0, y); } catch (_) {}
+}
+try {
+  const _scrollLockMo = new MutationObserver(() => {
+    if (document.querySelector('.info-frame, .sheet')) lockAppScroll();
+    else unlockAppScroll();
+  });
+  _scrollLockMo.observe(document.body, { childList: true });
+} catch (_) {}
 // Progreso por canal+mensaje (evita colisiones entre canales)
 const sizeLabel = (f, ch) => {
   const mb = `${Math.round(f.size / MB)} MB`;
@@ -941,16 +975,35 @@ function art(kind, name, ch) {
   const nfd = name.normalize('NFD').trim();
   const key = `art:${kind}:${artNorm(nfc)}`;
   const exts = ['jpg', 'jpeg', 'png', 'webp', 'avif', 'gif', 'JPG', 'JPEG', 'PNG', 'WEBP', 'AVIF', 'GIF'];
-  const nameVars = [...new Set([nfc, nfd, name.trim()].filter(Boolean))];
+  // Variantes: espacios, CamelCase partido (WildStorm → Wild Storm), sin espacios
+  const splitCamel = (s) => String(s || '').replace(/([a-z])([A-Z])/g, '$1 $2');
+  const noSpace = (s) => String(s || '').replace(/[\s_\-]+/g, '');
+  const nameVars = [...new Set([
+    nfc, nfd, name.trim(),
+    splitCamel(nfc), splitCamel(nfd),
+    noSpace(nfc), noSpace(nfd),
+  ].filter(Boolean))];
   const candidates = [];
   const seen = new Set();
   const add = (u) => { if (u && !seen.has(u)) { seen.add(u); candidates.push(u); } };
+  const artBag = ART[kind] || {};
+  const targetLoose = artNorm(noSpace(nfc));
   for (const n of nameVars) {
-    add(ART[kind][artNorm(n)]);
-    add(ART[kind][n.normalize('NFD').trim().toLowerCase()]);
+    add(artBag[artNorm(n)]);
+    add(artBag[n.normalize('NFD').trim().toLowerCase()]);
   }
+  // Emparejado flexible: "WildStorm" ↔ "Wild Storm" ↔ "wildstorm"
+  try {
+    for (const [k, url] of Object.entries(artBag)) {
+      if (artNorm(noSpace(k)) === targetLoose) add(url);
+    }
+  } catch (_) {}
   for (const n of nameVars) {
-    for (const e of exts) add(`/${kind}/${encodeURIComponent(n)}.${e}`);
+    for (const e of exts) {
+      add(`/${kind}/${encodeURIComponent(n)}.${e}`);
+      // Ruta sin encode (algunos Android fallan con %20)
+      if (/\s/.test(n)) add(`/${kind}/${n}.${e}`);
+    }
   }
 
   const showBlob = (blob) => {
@@ -1048,17 +1101,7 @@ function art(kind, name, ch) {
 function bindLongPress(node, fn, ms = 480) {
   if (!fn || !node) return;
   let timer = null, sx = 0, sy = 0, armed = false, opened = false;
-  let lastOpenAt = 0;
   const clear = () => { if (timer) { clearTimeout(timer); timer = null; } };
-  const openOnce = (e) => {
-    // Android dispara touchend + contextmenu → un solo menú
-    const now = Date.now();
-    if (now - lastOpenAt < 500) return;
-    lastOpenAt = now;
-    opened = true;
-    try { document.querySelectorAll('.sheet').forEach((s) => s.remove()); } catch (_) {}
-    try { fn(e); } catch (err) { console.error(err); }
-  };
   const onStart = (e) => {
     const pt = e.touches ? e.touches[0] : e;
     sx = pt.clientX; sy = pt.clientY;
@@ -1068,6 +1111,7 @@ function bindLongPress(node, fn, ms = 480) {
     timer = setTimeout(() => {
       armed = true;
       try { navigator.vibrate?.(12); } catch (_) {}
+      // Feedback visual opcional en la tarjeta
       node.classList.add('long-press');
     }, ms);
   };
@@ -1083,9 +1127,11 @@ function bindLongPress(node, fn, ms = 480) {
     clear();
     node.classList.remove('long-press');
     if (armed && !opened) {
+      opened = true;
       e.preventDefault();
       e.stopPropagation();
-      setTimeout(() => openOnce(e), 10);
+      // Abrir en el siguiente tick para no chocar con el touchend
+      setTimeout(() => fn(e), 10);
     }
   };
   node.addEventListener('touchstart', onStart, { passive: true });
@@ -1096,11 +1142,11 @@ function bindLongPress(node, fn, ms = 480) {
     armed = false;
     node.classList.remove('long-press');
   }, { passive: true });
-  // Escritorio: clic derecho (en Android se ignora si ya abrió por long-press)
+  // Escritorio: clic derecho
   node.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    openOnce(e);
+    fn(e);
   }, true);
   node.addEventListener('click', (e) => {
     if (opened || armed) {
@@ -1346,8 +1392,6 @@ function grid(items, withSearch, searchPlaceholder) {
   // No forzar scroll a 0: show()/go() restauran la posición al volver del lector
 }
 function sheet(title, opts) {
-  // Android: un solo sheet (evitar doble menú por touchend + contextmenu)
-  try { document.querySelectorAll('.sheet').forEach((s) => s.remove()); } catch (_) {}
   const bg = el('div', 'sheet'), box = el('div', 'box'), close = () => bg.remove();
   box.append(el('div', 'sh-title', title));
   for (const [label, fn] of opts) { const b = el('button', 'btn', label); b.onclick = () => { close(); fn(); }; box.append(b); }
@@ -1467,55 +1511,13 @@ function showCaptionEditor(ch, f, after, opts = {}) {
     return ctrl;
   };
 
-  // Valores locales si no hay ficha en el caption de Telegram
-  // (al desmarcar checks de Identificar se restauran estos prev)
-  const seriesKeyLocal = String(
-    (ch && f ? getComicSeriesOverride(ch, f) : null)
-    || parsed?.series
-    || seriesBase(f?.name || '', ch?.name)
-    || ''
-  ).trim();
-  const seriesLocal = seriesKeyLocal
-    ? (seriesDisplayName(ch, seriesKeyLocal) || seriesKeyLocal)
-    : '';
-  const issueFromFile = parsed ? issueDisplay(parsed) : '';
-  let titleLocal = '';
-  if (cap.titleEs && String(cap.titleEs).trim()) {
-    titleLocal = String(cap.titleEs).trim();
-  } else if (seriesKeyLocal) {
-    const fb = issueFromFile || '';
-    const fbHash = fb && !String(fb).startsWith('#') ? ('#' + fb) : fb;
-    titleLocal = comicDisplayName(ch, f, fbHash || '#') || issueFromFile || '';
-    if (titleLocal && !/^#/.test(String(titleLocal).trim())) {
-      const mh = String(titleLocal).match(/#\s*(.+)$/);
-      titleLocal = mh ? ('#' + mh[1].replace(/^#\s*/, '').trim()) : (issueFromFile || titleLocal);
-    }
-  } else {
-    titleLocal = comicDisplayName(
-      ch, f,
-      comicDisplay(f?.name || '', ch?.name) || clean(f?.name || '')
-    ) || comicDisplay(f?.name || '', ch?.name) || '';
-  }
-  const pubLocal = (cap.publisher && String(cap.publisher).trim())
-    ? String(cap.publisher).trim()
-    : (ch?.group ? (groupDisplayName(ch.group) || ch.group) : '');
-
   const fileNameCtrl = mkField('Nombre de archivo', cap.fileName || (f?.name || ''));
-  const titleEsCtrl = mkField(
-    'Título España',
-    (cap.titleEs && String(cap.titleEs).trim()) ? cap.titleEs : titleLocal
-  );
-  const origCtrl = mkField('Título original', cap.originalTitle || '');
-  const seriesCtrl = mkField(
-    'Serie',
-    (cap.series && String(cap.series).trim()) ? cap.series : seriesLocal
-  );
+  const titleEsCtrl = mkField('Título España', cap.titleEs);
+  const origCtrl = mkField('Título original', cap.originalTitle);
+  const seriesCtrl = mkField('Serie', cap.series || parsed?.series || '');
   const writerCtrl = mkField('Guionista', cap.writer, 'Nombre1 | Nombre2');
   const artistCtrl = mkField('Dibujante', cap.artist, 'Nombre1 | Nombre2');
-  const pubCtrl = mkField(
-    'Editorial',
-    (cap.publisher && String(cap.publisher).trim()) ? cap.publisher : pubLocal
-  );
+  const pubCtrl = mkField('Editorial', cap.publisher);
   const dateCtrl = mkField('Fecha de publicación', cap.date, 'MM/AAAA o AAAA');
   const descCtrl = mkField('Descripción', cap.description || '', '', true);
 
@@ -2851,7 +2853,7 @@ function cardNode(i) {
     t.title = 'Opciones';
     t.setAttribute('role', 'button');
   } else t.onclick = i.go;
-  // No bindLongPress en el título: en Android dos binds + contextmenu = dos menús
+  if (i.longPress) bindLongPress(t, i.longPress);
   name.append(t);
   c.append(name);
   if (i.sub) c.append(el('small', '', i.sub));
