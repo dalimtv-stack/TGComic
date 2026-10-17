@@ -392,6 +392,31 @@ body:has(.sheet) #app{
 .webp-opts .sync-label{margin-top:.15rem}
 .webp-opts .edit-input{margin:.2rem 0 .45rem}
 
+/* Android / móvil: pantalla completa real en el lector */
+html.reader-fs,body.reader-fs{
+  overflow:hidden!important;
+  height:100%!important;
+  height:100dvh!important;
+  overscroll-behavior:none;
+  touch-action:manipulation;
+}
+body.reader-fs #top{
+  visibility:hidden!important;
+  pointer-events:none!important;
+}
+body.reader-fs #rd{
+  position:fixed!important;
+  inset:0!important;
+  width:100%!important;
+  height:100%!important;
+  height:100dvh!important;
+  max-height:100dvh!important;
+  z-index:200!important;
+  margin:0!important;
+  padding:0!important;
+  background:#000;
+}
+
 /* Chips de serie al editar cómic */
 .series-pick{display:flex;flex-wrap:wrap;gap:6px;margin:.35rem 0 .5rem}
 .series-chip{

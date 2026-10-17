@@ -1048,7 +1048,17 @@ function art(kind, name, ch) {
 function bindLongPress(node, fn, ms = 480) {
   if (!fn || !node) return;
   let timer = null, sx = 0, sy = 0, armed = false, opened = false;
+  let lastOpenAt = 0;
   const clear = () => { if (timer) { clearTimeout(timer); timer = null; } };
+  const openOnce = (e) => {
+    // Android dispara touchend + contextmenu → un solo menú
+    const now = Date.now();
+    if (now - lastOpenAt < 500) return;
+    lastOpenAt = now;
+    opened = true;
+    try { document.querySelectorAll('.sheet').forEach((s) => s.remove()); } catch (_) {}
+    try { fn(e); } catch (err) { console.error(err); }
+  };
   const onStart = (e) => {
     const pt = e.touches ? e.touches[0] : e;
     sx = pt.clientX; sy = pt.clientY;
@@ -1058,7 +1068,6 @@ function bindLongPress(node, fn, ms = 480) {
     timer = setTimeout(() => {
       armed = true;
       try { navigator.vibrate?.(12); } catch (_) {}
-      // Feedback visual opcional en la tarjeta
       node.classList.add('long-press');
     }, ms);
   };
@@ -1074,11 +1083,9 @@ function bindLongPress(node, fn, ms = 480) {
     clear();
     node.classList.remove('long-press');
     if (armed && !opened) {
-      opened = true;
       e.preventDefault();
       e.stopPropagation();
-      // Abrir en el siguiente tick para no chocar con el touchend
-      setTimeout(() => fn(e), 10);
+      setTimeout(() => openOnce(e), 10);
     }
   };
   node.addEventListener('touchstart', onStart, { passive: true });
@@ -1089,11 +1096,11 @@ function bindLongPress(node, fn, ms = 480) {
     armed = false;
     node.classList.remove('long-press');
   }, { passive: true });
-  // Escritorio: clic derecho
+  // Escritorio: clic derecho (en Android se ignora si ya abrió por long-press)
   node.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    fn(e);
+    openOnce(e);
   }, true);
   node.addEventListener('click', (e) => {
     if (opened || armed) {
@@ -1339,6 +1346,8 @@ function grid(items, withSearch, searchPlaceholder) {
   // No forzar scroll a 0: show()/go() restauran la posición al volver del lector
 }
 function sheet(title, opts) {
+  // Android: un solo sheet (evitar doble menú por touchend + contextmenu)
+  try { document.querySelectorAll('.sheet').forEach((s) => s.remove()); } catch (_) {}
   const bg = el('div', 'sheet'), box = el('div', 'box'), close = () => bg.remove();
   box.append(el('div', 'sh-title', title));
   for (const [label, fn] of opts) { const b = el('button', 'btn', label); b.onclick = () => { close(); fn(); }; box.append(b); }
@@ -1458,13 +1467,55 @@ function showCaptionEditor(ch, f, after, opts = {}) {
     return ctrl;
   };
 
+  // Valores locales si no hay ficha en el caption de Telegram
+  // (al desmarcar checks de Identificar se restauran estos prev)
+  const seriesKeyLocal = String(
+    (ch && f ? getComicSeriesOverride(ch, f) : null)
+    || parsed?.series
+    || seriesBase(f?.name || '', ch?.name)
+    || ''
+  ).trim();
+  const seriesLocal = seriesKeyLocal
+    ? (seriesDisplayName(ch, seriesKeyLocal) || seriesKeyLocal)
+    : '';
+  const issueFromFile = parsed ? issueDisplay(parsed) : '';
+  let titleLocal = '';
+  if (cap.titleEs && String(cap.titleEs).trim()) {
+    titleLocal = String(cap.titleEs).trim();
+  } else if (seriesKeyLocal) {
+    const fb = issueFromFile || '';
+    const fbHash = fb && !String(fb).startsWith('#') ? ('#' + fb) : fb;
+    titleLocal = comicDisplayName(ch, f, fbHash || '#') || issueFromFile || '';
+    if (titleLocal && !/^#/.test(String(titleLocal).trim())) {
+      const mh = String(titleLocal).match(/#\s*(.+)$/);
+      titleLocal = mh ? ('#' + mh[1].replace(/^#\s*/, '').trim()) : (issueFromFile || titleLocal);
+    }
+  } else {
+    titleLocal = comicDisplayName(
+      ch, f,
+      comicDisplay(f?.name || '', ch?.name) || clean(f?.name || '')
+    ) || comicDisplay(f?.name || '', ch?.name) || '';
+  }
+  const pubLocal = (cap.publisher && String(cap.publisher).trim())
+    ? String(cap.publisher).trim()
+    : (ch?.group ? (groupDisplayName(ch.group) || ch.group) : '');
+
   const fileNameCtrl = mkField('Nombre de archivo', cap.fileName || (f?.name || ''));
-  const titleEsCtrl = mkField('Título España', cap.titleEs);
-  const origCtrl = mkField('Título original', cap.originalTitle);
-  const seriesCtrl = mkField('Serie', cap.series || parsed?.series || '');
+  const titleEsCtrl = mkField(
+    'Título España',
+    (cap.titleEs && String(cap.titleEs).trim()) ? cap.titleEs : titleLocal
+  );
+  const origCtrl = mkField('Título original', cap.originalTitle || '');
+  const seriesCtrl = mkField(
+    'Serie',
+    (cap.series && String(cap.series).trim()) ? cap.series : seriesLocal
+  );
   const writerCtrl = mkField('Guionista', cap.writer, 'Nombre1 | Nombre2');
   const artistCtrl = mkField('Dibujante', cap.artist, 'Nombre1 | Nombre2');
-  const pubCtrl = mkField('Editorial', cap.publisher);
+  const pubCtrl = mkField(
+    'Editorial',
+    (cap.publisher && String(cap.publisher).trim()) ? cap.publisher : pubLocal
+  );
   const dateCtrl = mkField('Fecha de publicación', cap.date, 'MM/AAAA o AAAA');
   const descCtrl = mkField('Descripción', cap.description || '', '', true);
 
@@ -2800,7 +2851,7 @@ function cardNode(i) {
     t.title = 'Opciones';
     t.setAttribute('role', 'button');
   } else t.onclick = i.go;
-  if (i.longPress) bindLongPress(t, i.longPress);
+  // No bindLongPress en el título: en Android dos binds + contextmenu = dos menús
   name.append(t);
   c.append(name);
   if (i.sub) c.append(el('small', '', i.sub));

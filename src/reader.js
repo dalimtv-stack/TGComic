@@ -20,6 +20,47 @@ export function createReader(state, d) {
     pageCache,
   } = d;
 
+  // —— Android: pantalla completa real + gesto atrás desde el borde ——
+  const isAndroid = /Android/i.test(navigator.userAgent || '');
+  function enterReaderFullscreen() {
+    try {
+      document.documentElement.classList.add('reader-fs');
+      document.body.classList.add('reader-fs');
+    } catch (_) {}
+    if (!isAndroid) return;
+    try {
+      const root = document.documentElement;
+      const req = root.requestFullscreen || root.webkitRequestFullscreen || root.webkitRequestFullScreen;
+      if (req && !document.fullscreenElement) {
+        const p = req.call(root, { navigationUI: 'hide' });
+        if (p && typeof p.catch === 'function') p.catch(() => {});
+      }
+    } catch (_) {}
+    try {
+      document.body.style.overflow = 'hidden';
+      document.documentElement.style.overflow = 'hidden';
+    } catch (_) {}
+  }
+  function exitReaderFullscreen() {
+    try {
+      document.documentElement.classList.remove('reader-fs');
+      document.body.classList.remove('reader-fs');
+    } catch (_) {}
+    try {
+      if (document.fullscreenElement) {
+        const ex = document.exitFullscreen || document.webkitExitFullscreen;
+        if (ex) {
+          const p = ex.call(document);
+          if (p && typeof p.catch === 'function') p.catch(() => {});
+        }
+      }
+    } catch (_) {}
+    try {
+      document.body.style.overflow = '';
+      document.documentElement.style.overflow = '';
+    } catch (_) {}
+  }
+
   function networkPreloadRadius() {
     try {
       const c = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
@@ -204,6 +245,7 @@ export function createReader(state, d) {
       bot.append(cluster);
       document.body.append(rd);
       document.body.style.overflow = 'hidden';
+      try { enterReaderFullscreen(); } catch (_) {}
       let uiTimer = setTimeout(() => rd.classList.add('ui-off'), 2500);
       const pokeUI = () => {
         rd.classList.remove('ui-off');
@@ -467,7 +509,9 @@ export function createReader(state, d) {
           pinch = null;
           if (e.touches.length !== 1) { sx = null; return; }
           const x = e.touches[0].clientX, y = e.touches[0].clientY;
-          if (x < 48) { sx = null; return; }
+          // iOS: no capturar borde izquierdo (gesto atrás del sistema).
+          // Android: sí, para poder salir deslizando desde la izquierda.
+          if (!isAndroid && x < 48) { sx = null; return; }
           sx = x; sy = y; moved = false;
         }, { passive: true });
 
@@ -510,6 +554,7 @@ export function createReader(state, d) {
           if (sx === null) return;
           if ((window.visualViewport?.scale || 1) > 1.05) { sx = null; return; }
           const x = e.changedTouches[0].clientX, y = e.changedTouches[0].clientY;
+          const startX = sx;
           const dx = x - sx, dy = y - sy;
           sx = null;
           armSuppressClick();
@@ -522,6 +567,11 @@ export function createReader(state, d) {
           }
 
           if (moved) {
+            // Android: borde izquierdo → derecha = salir (como gesto atrás de iOS)
+            if (isAndroid && startX < 28 && dx > 70 && Math.abs(dy) < 80) {
+              history.back();
+              return;
+            }
             if (dy > 90 && dy > 1.6 * Math.abs(dx)) {
               history.back();
               return;
@@ -1026,7 +1076,19 @@ export function createReader(state, d) {
               activeSlot.scrollTop = Math.max(0, baseTop - dy);
             }
           };
-          const onTe = () => {
+          const onTe = (e) => {
+            // Android: salida por borde izquierdo en horizontal continuo
+            if (isAndroid && sx != null) {
+              const dx0 = (e?.changedTouches?.[0]?.clientX ?? lastX) - sx;
+              const dy0 = (e?.changedTouches?.[0]?.clientY ?? sy) - sy;
+              if (sx < 28 && dx0 > 70 && Math.abs(dy0) < 80) {
+                history.back();
+                axis = null;
+                activeSlot = null;
+                velX = 0;
+                return;
+              }
+            }
             if (axis === 'x') {
               const w = Math.max(1, sizes[n] || rd.clientWidth);
               const offset = rd.scrollLeft - posOf(n);
@@ -1092,6 +1154,7 @@ export function createReader(state, d) {
         try { rd.style.width = ''; rd.style.height = ''; } catch (_) {}
         for (const i of [...urls.keys()]) drop(i);
         document.onkeydown = null;
+        try { exitReaderFullscreen(); } catch (_) {}
         document.body.style.overflow = '';
         document.querySelector('.mosaic')?.remove();
         rd.remove(); try { window.dispatchEvent(new CustomEvent('tgcomic:reader', { detail: { open: false } })); } catch (_) {};
