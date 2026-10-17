@@ -1397,24 +1397,17 @@ function showCaptionEditor(ch, f, after) {
   idBtn.onclick = () => showComicVinePicker(ch, f, {
     onPick: (detail) => {
       if (!detail) return;
-      // Título España: Serie #nn - name si hay name
-      const num = detail.issueNumber ? ('#' + String(detail.issueNumber).replace(/^#/, '')) : '';
-      const titleEs = [detail.volume, num, detail.name].filter(Boolean).join(' ').replace(/\s+/g, ' ')
-        .replace(/(\S)\s+#/, '$1 #');
-      // Mejor: "Volume #nn - Name"
-      let tEs = '';
-      if (detail.volume && detail.issueNumber) {
-        tEs = detail.volume + ' #' + String(detail.issueNumber).replace(/^#/, '');
-        if (detail.name) tEs += ' - ' + detail.name;
-      } else {
-        tEs = detail.name || detail.volume || '';
-      }
-      // Comic Vine suele traer un solo "name": copiar a ambos títulos
-      const oneTitle = (detail.name || '').trim();
-      if (tEs) inpTitleEs.value = tEs;
-      else if (oneTitle) inpTitleEs.value = oneTitle;
-      if (oneTitle) inpOrig.value = oneTitle;
-      else if (tEs) inpOrig.value = tEs;
+      // Sin canal ni serie en los títulos (van en sus campos).
+      // Formato: "#n - nombre" o solo "#n" / nombre.
+      const num = String(detail.issueNumber || '').replace(/^#/, '').trim();
+      const story = String(detail.name || '').trim();
+      let titleLine = '';
+      if (num && story) titleLine = '#' + num + ' - ' + story;
+      else if (num) titleLine = '#' + num;
+      else titleLine = story;
+      // Mismo valor en ambos títulos (CV no distingue ES/EN)
+      inpTitleEs.value = titleLine;
+      inpOrig.value = titleLine;
       if (detail.volume) inpSeries.value = detail.volume;
       if (detail.writers?.length) inpWriter.value = detail.writers.join(' | ');
       if (detail.artists?.length) inpArtist.value = detail.artists.join(' | ');
@@ -1522,8 +1515,14 @@ function showComicVinePicker(ch, f, { onPick } = {}) {
                 artists: [],
                 description: '',
               };
-            } else if (!detail.publisher && r.publisher) {
-              detail.publisher = r.publisher;
+            } else {
+              // Preferir número/nombre del resultado de la lista si el detalle los trae vacíos
+              if (!detail.issueNumber && r.issueNumber) detail.issueNumber = r.issueNumber;
+              if (!detail.name && r.name) detail.name = r.name;
+              if (!detail.volume && r.volume) detail.volume = r.volume;
+              if (!detail.publisher && r.publisher) detail.publisher = r.publisher;
+              // Si el detalle trae name vacío pero sí número, no dejar títulos distintos
+              if (r.issueNumber && !detail.issueNumber) detail.issueNumber = r.issueNumber;
             }
             frame.remove();
             onPick?.(detail);

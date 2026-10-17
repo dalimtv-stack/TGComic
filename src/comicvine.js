@@ -190,108 +190,96 @@ export async function listIssuesForVolume(volumeId, issueNumber, limit = 100) {
 }
 
 /**
- * Búsqueda combinada (mejor cobertura que un solo /search/).
- * @param {{ query?: string, series?: string, number?: string }} opts
+ * Búsqueda rápida: pocas llamadas + ranking (número y serie al principio).
  */
 export async function searchIssuesSmart(opts = {}) {
   if (!API_KEY) throw new Error('Falta VITE_COMICVINE_API_KEY en las variables de entorno');
   const query = String(opts.query || '').trim();
   const series = String(opts.series || '').trim();
   const number = String(opts.number || '').replace(/^#/, '').trim();
+  const numNorm = (number.replace(/^0+/, '') || number).toLowerCase();
+
   const seen = new Set();
   const out = [];
   const add = (arr) => {
     for (const r of arr || []) {
-      const id = r.id;
-      if (id == null || seen.has(id)) continue;
-      seen.add(id);
+      if (r.id == null || seen.has(r.id)) continue;
+      seen.add(r.id);
       out.push(r);
     }
   };
 
-  const tasks = [];
+  // --- 1) Una sola búsqueda de issues (serie + número, sin canal) ---
+  const issueQuery = [series, number].filter(Boolean).join(' ')
+    || query
+    || '';
+  if (issueQuery) {
+    add(await searchIssues(issueQuery, 20).catch(() => []));
+  }
 
-  // 1) Query tal cual
-  if (query) tasks.push(searchIssues(query, 30).catch(() => []));
+  // --- 2) Volumen → issues (máx. 2 queries de volumen, 2 volúmenes) ---
+  const volQ = [];
+  if (series) volQ.push(series);
+  if (query) {
+    const qNoNum = query.replace(/#?\s*\d+[a-z]?\s*$/i, '').replace(/\s*-\s*/g, ' ').trim();
+    if (qNoNum && qNoNum.toLowerCase() !== series.toLowerCase()) volQ.push(qNoNum);
+  }
+  // Última palabra (Badlands)
+  for (const b of [...volQ]) {
+    const parts = b.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) volQ.push(parts[parts.length - 1]);
+  }
+  const uniqVolQ = [...new Set(volQ.map((s) => s.trim()).filter(Boolean))].slice(0, 2);
 
-  // 2) Serie + número (sin canal)
-  if (series) {
-    const q2 = [series, number].filter(Boolean).join(' ');
-    if (q2 && q2.toLowerCase() !== query.toLowerCase()) {
-      tasks.push(searchIssues(q2, 30).catch(() => []));
+  const volLists = await Promise.all(uniqVolQ.map((vq) => searchVolumes(vq, 5).catch(() => [])));
+  const vols = [];
+  const seenV = new Set();
+  for (const list of volLists) {
+    for (const v of list) {
+      if (seenV.has(v.id)) continue;
+      seenV.add(v.id);
+      vols.push(v);
     }
   }
+  const serLow = (series || uniqVolQ[0] || '').toLowerCase();
+  vols.sort((a, b) => {
+    const score = (n) => {
+      const x = (n || '').toLowerCase();
+      if (!serLow) return 2;
+      if (x === serLow) return 0;
+      if (x.includes(serLow) || serLow.includes(x)) return 1;
+      return 2;
+    };
+    return score(a.name) - score(b.name);
+  });
 
-  // 3) Solo número + serie al revés a veces ayuda
-  if (series && number) {
-    tasks.push(searchIssues(number + ' ' + series, 15).catch(() => []));
-  }
-
-  const batches = await Promise.all(tasks);
-  for (const b of batches) add(b);
-
-  // 4) Volumen → listado de issues (mucho más fiable que search)
-  if (series || query) {
+  for (const v of vols.slice(0, 2)) {
     try {
-      const volQueries = [];
-      if (series) volQueries.push(series);
-      if (series && query && query.toLowerCase() !== series.toLowerCase()) {
-        volQueries.push(query.replace(/\s*-\s*/g, ' ').trim());
-      }
-      if (query) {
-        const qNoNum = query.replace(/#?\s*\d+[a-z]?\s*$/i, '').replace(/\s*-\s*/g, ' ').trim();
-        if (qNoNum) volQueries.push(qNoNum);
-      }
-      // Variantes "Crossed Badlands" / "Crossed: Badlands"
-      for (const base of [...volQueries]) {
-        if (base.includes('-')) volQueries.push(base.replace(/\s*-\s*/g, ' ').trim());
-        if (base.includes(' ')) volQueries.push(base.replace(/\s+/g, ': ').replace(/: :/g, ':').trim());
-        // Si parece "Canal Serie", probar solo la última palabra (Badlands)
-        const parts = base.split(/\s+/).filter(Boolean);
-        if (parts.length >= 2) volQueries.push(parts[parts.length - 1]);
-      }
-      const uniqVolQ = [...new Set(volQueries.map((s) => s.trim()).filter(Boolean))];
-      const vols = [];
-      const seenV = new Set();
-      for (const vq of uniqVolQ.slice(0, 6)) {
-        const found = await searchVolumes(vq, 10).catch(() => []);
-        for (const v of found) {
-          if (seenV.has(v.id)) continue;
-          seenV.add(v.id);
-          vols.push(v);
-        }
-      }
-
-      // Priorizar nombre de volumen más parecido a serie o query
-      const serLow = (series || query.replace(/#?\s*\d+[a-z]?\s*$/i, '').trim() || '').toLowerCase();
-      vols.sort((a, b) => {
-        const score = (n) => {
-          const x = n.toLowerCase();
-          if (!serLow) return 2;
-          if (x === serLow) return 0;
-          if (x.includes(serLow) || serLow.includes(x)) return 1;
-          return 2;
-        };
-        return score(a.name) - score(b.name);
-      });
-      for (const v of vols.slice(0, 8)) {
-        try {
-          // Listar issues del volumen; el número se filtra dentro de listIssuesForVolume
-          const issues = await listIssuesForVolume(v.id, number, 100);
-          if (issues.length) {
-            add(issues);
-          } else if (number) {
-            // Sin match de número: mostrar issues del volumen para elegir a mano
-            const all = await listIssuesForVolume(v.id, '', 50);
-            add(all);
-          }
-        } catch (_) {}
-      }
+      const issues = await listIssuesForVolume(v.id, number, 80);
+      add(issues);
     } catch (_) {}
   }
 
-  await attachPublishers(out);
-  return out;
+  // Ranking: número exacto primero, luego volumen ≈ serie
+  const scoreOf = (r) => {
+    let s = 0;
+    const n = String(r.issueNumber || '').trim();
+    const nNorm = (n.replace(/^0+/, '') || n).toLowerCase();
+    if (number) {
+      if (n.toLowerCase() === number.toLowerCase() || nNorm === numNorm) s += 100;
+      else if (nNorm && numNorm && nNorm.startsWith(numNorm)) s += 40;
+    }
+    const vol = String(r.volume || '').toLowerCase();
+    if (serLow) {
+      if (vol === serLow) s += 50;
+      else if (vol.includes(serLow) || serLow.includes(vol)) s += 25;
+    }
+    return s;
+  };
+  out.sort((a, b) => scoreOf(b) - scoreOf(a));
+
+  // Sin editoriales en listado (rápido); se cargan al elegir ficha
+  return out.slice(0, 20);
 }
 
 export async function fetchIssueDetail(apiDetailUrlOrId) {
