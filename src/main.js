@@ -1682,6 +1682,18 @@ function showEditComicTitle(ch, f, currentLabel, after) {
       } catch (_) {}
     }
     if (!titleSave || titleSave === fallbackTitle) titleSave = '';
+    // No guardar como personalizado títulos auto (Serie #n / del caption)
+    if (titleSave) {
+      try {
+        const p = parseComicName(f?.name || '', ch?.name);
+        const auto = p ? ((p.series + ' ' + issueDisplay(p)).trim()) : '';
+        const auto2 = comicDisplay(f?.name || '', ch?.name) || '';
+        const cap = parseComicCaption(f?.caption || '');
+        const te = (cap.titleEs || '').trim();
+        if (titleSave === auto || titleSave === auto2 || (te && titleSave === te)) titleSave = '';
+        if (p?.series && titleSave.toLowerCase() === (p.series + ' ' + issueDisplay(p)).toLowerCase()) titleSave = '';
+      } catch (_) {}
+    }
 
     // Serie desde el <select>
     let seriesSave = '';

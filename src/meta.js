@@ -71,14 +71,16 @@ export function comicRenameMap(ch) {
 export function comicDisplayName(ch, f, fallback) {
   if (!ch || !f) return fallback || '';
   const m = comicRenameMap(ch);
-  const custom = m[String(f.id)];
-  let t = '';
-  if (custom != null && String(custom).trim()) {
-    t = String(custom).trim();
-  } else {
-    const fb = String(fallback || '').trim();
-    // Vista serie / listado de números: fallback "#…" → solo número/info
-    const inSeriesView = /^#/.test(fb);
+  let custom = m[String(f.id)];
+  if (custom != null) custom = String(custom).trim();
+  else custom = '';
+
+  const fb = String(fallback || '').trim();
+  const inSeriesView = /^#/.test(fb);
+  const chName = String(ch.name || '').trim();
+
+  // Título derivado del caption / archivo (sin personalización)
+  const derived = () => {
     try {
       const cap = parseComicCaption(f.caption || '');
       const titleEs = cap.titleEs && String(cap.titleEs).trim();
@@ -86,28 +88,67 @@ export function comicDisplayName(ch, f, fallback) {
         const asName = /\.cb[zr]$/i.test(titleEs) ? titleEs : (titleEs + '.cbz');
         const pCap = parseComicName(asName, ch.name);
         if (inSeriesView) {
-          // Nunca devolver "Serie #n" aquí
-          if (pCap) t = issueDisplay(pCap);
-          else {
-            const mHash = titleEs.match(/#\s*(.+)$/);
-            t = mHash ? ('#' + mHash[1].replace(/^#\s*/, '').trim()) : fb;
-          }
-        } else if (pCap) {
-          t = comicDisplay(asName, ch.name) || issueDisplay(pCap);
-        } else {
-          t = titleEs;
+          if (pCap) return issueDisplay(pCap);
+          const mHash = titleEs.match(/#\s*(.+)$/);
+          return mHash ? ('#' + mHash[1].replace(/^#\s*/, '').trim()) : fb;
         }
+        if (pCap) return comicDisplay(asName, ch.name) || issueDisplay(pCap);
+        return titleEs;
       }
     } catch (_) {}
-    if (!t) t = fb || '';
-    // Si aún quedó "Serie #n" y el fallback era "#…", forzar solo el hash
+    return '';
+  };
+
+  // ¿El "personalizado" es en realidad un auto-título erróneo (Serie #n, Canal - …)?
+  const isBogusCustom = (c) => {
+    if (!c) return true;
+    const low = c.toLowerCase();
+    try {
+      const pFile = parseComicName(f.name || '', ch.name);
+      const cap = parseComicCaption(f.caption || '');
+      const titleEs = cap.titleEs && String(cap.titleEs).trim();
+      const pCap = titleEs
+        ? parseComicName((/\.cb[zr]$/i.test(titleEs) ? titleEs : titleEs + '.cbz'), ch.name)
+        : null;
+      const candidates = [];
+      if (pFile) {
+        candidates.push(comicDisplay(f.name, ch.name));
+        candidates.push((pFile.series + ' ' + issueDisplay(pFile)).trim());
+        candidates.push(issueDisplay(pFile));
+      }
+      if (pCap) {
+        const asName = (/\.cb[zr]$/i.test(titleEs) ? titleEs : titleEs + '.cbz');
+        candidates.push(comicDisplay(asName, ch.name));
+        candidates.push((pCap.series + ' ' + issueDisplay(pCap)).trim());
+        candidates.push(issueDisplay(pCap));
+        candidates.push(titleEs);
+      }
+      if (chName) {
+        candidates.push(chName + ' - ' + c);
+        candidates.push(c.replace(new RegExp('^' + chName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*-\\s*', 'i'), '').trim());
+      }
+      for (const x of candidates) {
+        if (x && String(x).trim().toLowerCase() === low) return true;
+      }
+      // "Badlands #007" cuando la serie del parseo es Badlands
+      const p = pCap || pFile;
+      if (p?.series && low === (p.series + ' ' + issueDisplay(p)).toLowerCase()) return true;
+      if (p?.series && low.startsWith(p.series.toLowerCase() + ' #')) return true;
+    } catch (_) {}
+    return false;
+  };
+
+  let t = '';
+  if (custom && !isBogusCustom(custom)) {
+    t = custom;
+  } else {
+    t = derived() || fb || '';
     if (inSeriesView && t && !/^#/.test(t)) {
       const mHash = t.match(/#\s*(.+)$/);
-      if (mHash) t = '#' + mHash[1].replace(/^#\s*/, '').trim();
-      else t = fb;
+      t = mHash ? ('#' + mHash[1].replace(/^#\s*/, '').trim()) : fb;
     }
   }
-  const chName = String(ch.name || '').trim();
+
   if (t && chName) {
     try {
       const esc = chName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
