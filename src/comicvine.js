@@ -476,21 +476,22 @@ export async function fetchIssueDetail(apiDetailUrlOrId) {
   const writers = [];
   const pencilers = [];
   const artists = [];
-  const inkers = [];
   for (const c of credits) {
     const role = String(c.role || '').toLowerCase().trim();
     const n = c.name || '';
     if (!n) continue;
-    if (/(^|\b)cover(\b|$)/.test(role) && !/penciler|penciller|inker/.test(role.replace(/cover/g, ''))) {
+    // Portada / cover → no dibujante interior
+    if (/(^|\b)cover(\b|$)/.test(role)) {
       if (/writer|script/.test(role)) writers.push(n);
       continue;
     }
     if (/writer|script/.test(role)) writers.push(n);
+    // Dibujante: solo penciler/penciller o artist puro (sin inker ni "artist, inker")
+    if (/inker/.test(role)) continue;
     if (/penciler|penciller/.test(role)) pencilers.push(n);
-    else if (/(^|\b)artist(\b|$)/.test(role) && !/colorist|letterer|inker/.test(role)) artists.push(n);
-    else if (/inker/.test(role)) inkers.push(n);
+    else if (/(^|\b)artist(\b|$)/.test(role) && !/colorist|letterer/.test(role)) artists.push(n);
   }
-  const artistsFinal = [...new Set([...pencilers, ...artists, ...inkers])];
+  const artistsFinal = [...new Set([...pencilers, ...artists])];
   let desc = String(r.description || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
   if (desc.length > 1200) desc = desc.slice(0, 1200) + '…';
   let date = r.cover_date || '';

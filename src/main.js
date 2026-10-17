@@ -502,7 +502,7 @@ const paintLockMenu = () => {
 paintLockMenu();
 const menuRepackBtn = el('button', 'app-menu-item', 'Recargar CBR / externos');
 const menuUploadBtn = el('button', 'app-menu-item', 'Subir cómic');
-menuPanel.append(menuInfoBtn, menuCfgBtn, menuSyncBtn, menuLockBtn, menuUploadBtn, menuRepackBtn, menuUnreadBtn);
+menuPanel.append(menuInfoBtn, menuCfgBtn, menuSyncBtn, menuUploadBtn, menuRepackBtn, menuUnreadBtn, menuLockBtn);
 actions.append(menuBtn);
 document.body.append(menuPanel);
 
