@@ -47,28 +47,47 @@ function apiUrl(path, params = {}) {
   return BASE + path + (path.includes('?') ? '&' : '?') + q.toString();
 }
 
+function volumeDetailUrl(volume) {
+  if (!volume) return '';
+  if (volume.api_detail_url) return volume.api_detail_url;
+  const id = volume.id != null ? String(volume.id).replace(/^4050-/, '') : '';
+  if (!id) return '';
+  return BASE + '/volume/4050-' + id + '/';
+}
+
 function mapIssue(r) {
+  const vol = r.volume || {};
+  const volumeId = vol.id != null ? vol.id : null;
   return {
     id: r.id,
     name: r.name || '',
     issueNumber: r.issue_number != null ? String(r.issue_number) : '',
-    volume: r.volume?.name || '',
-    volumeApi: r.volume?.api_detail_url || '',
-    volumeId: r.volume?.id != null ? r.volume.id : null,
+    volume: vol.name || '',
+    volumeApi: volumeDetailUrl(vol),
+    volumeId,
     coverDate: r.cover_date || '',
-    publisher: r.publisher?.name || (r.volume && r.volume.publisher && r.volume.publisher.name) || '',
+    publisher: r.publisher?.name || vol.publisher?.name || '',
     siteUrl: r.site_detail_url || '',
     image: r.image?.thumb_url || r.image?.small_url || r.image?.icon_url || '',
     apiDetailUrl: r.api_detail_url || '',
   };
 }
 
-async function fetchVolumePublisher(apiDetailUrl) {
-  if (!apiDetailUrl) return '';
+async function fetchVolumePublisher(apiDetailUrlOrId) {
+  if (apiDetailUrlOrId == null || apiDetailUrlOrId === '') return '';
   try {
-    const m = String(apiDetailUrl).match(/\/api\/(volume\/[^/?#]+)/i);
-    if (!m) return '';
-    const path = '/' + m[1].replace(/\/?$/, '/');
+    let path = '';
+    const s = String(apiDetailUrlOrId);
+    if (/^https?:\/\//i.test(s)) {
+      const m = s.match(/\/api\/(volume\/[^/?#]+)/i);
+      path = m ? '/' + m[1].replace(/\/?$/, '/') : '';
+    } else if (/volume\//i.test(s)) {
+      path = '/' + s.replace(/^\/?api\/?/i, '').replace(/\/?$/, '/') ;
+    } else {
+      const id = s.replace(/^4050-/, '');
+      path = '/volume/4050-' + id + '/';
+    }
+    if (!path) return '';
     const url = apiUrl(path, { field_list: 'id,name,publisher' });
     const data = await jsonp(url);
     return data?.results?.publisher?.name || '';
@@ -79,15 +98,21 @@ async function fetchVolumePublisher(apiDetailUrl) {
 
 
 async function attachPublishers(mapped) {
-  const volMap = new Map();
+  const volMap = new Map(); // key → publisher name
+  const keys = [];
   for (const r of mapped) {
-    if (r.volumeApi && !volMap.has(r.volumeApi)) volMap.set(r.volumeApi, '');
+    const key = r.volumeApi || (r.volumeId != null ? String(r.volumeId) : '');
+    if (!key || volMap.has(key)) continue;
+    volMap.set(key, '');
+    keys.push(key);
   }
-  await Promise.all([...volMap.keys()].map(async (u) => {
-    volMap.set(u, await fetchVolumePublisher(u));
+  await Promise.all(keys.map(async (key) => {
+    volMap.set(key, await fetchVolumePublisher(key));
   }));
   for (const r of mapped) {
-    if (!r.publisher && r.volumeApi) r.publisher = volMap.get(r.volumeApi) || '';
+    if (r.publisher) continue;
+    const key = r.volumeApi || (r.volumeId != null ? String(r.volumeId) : '');
+    if (key) r.publisher = volMap.get(key) || '';
   }
   return mapped;
 }
@@ -269,7 +294,17 @@ export async function searchIssuesSmart(opts = {}) {
   // (antes el cómic salía; no limitar a 2)
   const topVols = vols.slice(0, 8);
   const issueLists = await Promise.all(
-    topVols.map((v) => listIssuesForVolume(v.id, null, 100).catch(() => []))
+    topVols.map(async (v) => {
+      const list = await listIssuesForVolume(v.id, null, 100).catch(() => []);
+      // El search de volume ya trae publisher: reutilizarlo
+      for (const i of list) {
+        if (!i.publisher && v.publisher) i.publisher = v.publisher;
+        if (!i.volumeApi && v.apiDetailUrl) i.volumeApi = v.apiDetailUrl;
+        if (i.volumeId == null && v.id != null) i.volumeId = v.id;
+        if (!i.volume && v.name) i.volume = v.name;
+      }
+      return list;
+    })
   );
   for (const list of issueLists) add(list);
 
