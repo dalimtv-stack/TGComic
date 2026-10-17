@@ -489,3 +489,6 @@ textarea.meta-desc-lg.edit-input{
 .continue-cover.locked-cover,.continue-cover.locked-cover img{
   width:100%;height:100%;border-radius:8px;
 }
+
+.card-locked .hit{margin-bottom:0}
+.card-locked{cursor:default}

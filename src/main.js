@@ -479,6 +479,7 @@ menuPanel.hidden = true;
 const menuInfoBtn = el('button', 'app-menu-item', 'Información');
 const menuCfgBtn = el('button', 'app-menu-item', 'Configuración Visor');
 const menuSyncBtn = el('button', 'app-menu-item', 'Sincronización');
+const menuLockBtn = el('button', 'app-menu-item', '');
 const menuUnreadBtn = el('button', 'app-menu-item menu-check', '');
 const paintUnreadMenu = () => {
   const on = pref('showUnreadOnly', '0') === '1';
@@ -486,9 +487,22 @@ const paintUnreadMenu = () => {
   menuUnreadBtn.classList.toggle('on', on);
 };
 paintUnreadMenu();
+const paintLockMenu = () => {
+  if (!locks.canUseLocks()) {
+    menuLockBtn.textContent = '🔒 Candado (activa sync)';
+    menuLockBtn.disabled = true;
+  } else if (locks.isSessionUnlocked()) {
+    menuLockBtn.textContent = '🔓 Contenido desbloqueado';
+    menuLockBtn.disabled = false;
+  } else {
+    menuLockBtn.textContent = '🔒 Contenido bloqueado';
+    menuLockBtn.disabled = false;
+  }
+};
+paintLockMenu();
 const menuRepackBtn = el('button', 'app-menu-item', 'Recargar CBR / externos');
 const menuUploadBtn = el('button', 'app-menu-item', 'Subir cómic');
-menuPanel.append(menuInfoBtn, menuCfgBtn, menuSyncBtn, menuUploadBtn, menuRepackBtn, menuUnreadBtn);
+menuPanel.append(menuInfoBtn, menuCfgBtn, menuSyncBtn, menuLockBtn, menuUploadBtn, menuRepackBtn, menuUnreadBtn);
 actions.append(menuBtn);
 document.body.append(menuPanel);
 
@@ -670,40 +684,6 @@ function showViewerConfig() {
   head.append(close);
   const body = el('div', 'info-body');
 
-  // Candado de contenido (+18)
-  {
-    const lockRow = el('div', 'cfg-lock-row');
-    const lockBtn = el('button', 'cfg-lock-btn', locks.isSessionUnlocked() ? '🔓 Contenido desbloqueado' : '🔒 Contenido bloqueado');
-    lockBtn.type = 'button';
-    const lockHint = el('p', 'cover-pick-hint', locks.canUseLocks()
-      ? 'Al abrir la app siempre está bloqueado. Pulsa el candado e introduce la contraseña de sincronización para ver contenido marcado.'
-      : 'Inicia sesión de sincronización para poder usar el candado de contenido.');
-    lockBtn.disabled = !locks.canUseLocks();
-    lockBtn.onclick = async () => {
-      if (!locks.canUseLocks()) {
-        alert('Configura antes la sincronización (usuario y contraseña).');
-        return;
-      }
-      if (locks.isSessionUnlocked()) {
-        locks.lockSession();
-        lockBtn.textContent = '🔒 Contenido bloqueado';
-        try { groupsView(); } catch (_) {}
-        return;
-      }
-      const pw = prompt('Contraseña de sincronización para desbloquear contenido:');
-      if (pw == null) return;
-      const ok = await locks.unlockSession(pw);
-      if (!ok) {
-        alert('Contraseña incorrecta');
-        return;
-      }
-      lockBtn.textContent = '🔓 Contenido desbloqueado';
-      try { groupsView(); } catch (_) {}
-    };
-    lockRow.append(lockBtn);
-    body.append(lockRow, lockHint);
-  }
-
 
 
   const section = (title) => {
@@ -779,6 +759,30 @@ function showViewerConfig() {
   document.body.append(frame);
 }
 menuCfgBtn.onclick = (ev) => { ev.stopPropagation(); showViewerConfig(); };
+menuLockBtn.onclick = async (ev) => {
+  ev.stopPropagation();
+  closeAppMenu();
+  if (!locks.canUseLocks()) {
+    alert('Inicia sesión de sincronización para usar el candado de contenido.');
+    return;
+  }
+  if (locks.isSessionUnlocked()) {
+    locks.lockSession();
+    paintLockMenu();
+    try { groupsView(); } catch (_) {}
+    return;
+  }
+  const pw = prompt('Contraseña de sincronización para desbloquear contenido:');
+  if (pw == null) return;
+  const ok = await locks.unlockSession(pw);
+  if (!ok) {
+    alert('Contraseña incorrecta');
+    return;
+  }
+  paintLockMenu();
+  try { groupsView(); } catch (_) {}
+};
+
 menuRepackBtn.onclick = (ev) => {
   ev.stopPropagation();
   closeAppMenu();
@@ -2776,10 +2780,20 @@ function showChannelCoverPicker(ch, files, after) {
 }
 
 function cardNode(i) {
-  const c = el('div', 'card'), hit = el('button', 'hit'), name = el('div', 'name'), t = el('b', '', i.label);
+  const c = el('div', 'card');
+  if (i.hiddenMeta) c.classList.add('card-locked');
+  const hit = el('button', 'hit');
   hit.append(i.cover());
   hit.onclick = i.go;
   if (i.longPress) bindLongPress(hit, i.longPress);
+  c.append(hit);
+  // Contenido bloqueado: solo portada (Blur_candado), sin nombre ni subtítulo
+  if (i.hiddenMeta) {
+    hit.setAttribute('aria-label', 'Contenido bloqueado');
+    return c;
+  }
+  const name = el('div', 'name');
+  const t = el('b', '', i.label);
   if (i.menu) {
     t.classList.add('has-menu');
     t.onclick = (ev) => { ev.stopPropagation(); i.menu(); };
@@ -2788,7 +2802,7 @@ function cardNode(i) {
   } else t.onclick = i.go;
   if (i.longPress) bindLongPress(t, i.longPress);
   name.append(t);
-  c.append(hit, name);
+  c.append(name);
   if (i.sub) c.append(el('small', '', i.sub));
   return c;
 }
@@ -3117,8 +3131,9 @@ function groupsView() {
         const label = groupDisplayName(name);
         const gRestricted = locks.isContentRestricted('group', name);
         g.append(cardNode({
-          label,
-          sub: n === 1 ? '1 canal' : `${n} canales`,
+          label: gRestricted ? '' : label,
+          sub: gRestricted ? '' : (n === 1 ? '1 canal' : `${n} canales`),
+          hiddenMeta: gRestricted,
           cover: () => gRestricted ? locks.lockedCoverNode(ART) : groupCoverNode(name),
           go: () => {
             if (!locks.guardRestricted('group', name, label)) return;
@@ -3269,6 +3284,9 @@ function channelsView(g) {
           cover: () => locks.isContentRestricted('channel', ch)
             ? locks.lockedCoverNode(ART)
             : channelCoverNode(ch, files),
+          hiddenMeta: locks.isContentRestricted('channel', ch),
+          label: locks.isContentRestricted('channel', ch) ? '' : label,
+          sub: locks.isContentRestricted('channel', ch) ? '' : (n ? (n === 1 ? '1 cómic' : `${n} cómics`) : ''),
           isUnread: n ? files.some((f) => !isComicRead(ch.id, f.id)) : true,
           go: () => {
             if (!locks.guardRestricted('channel', ch, channelDisplayName(ch))) return;
@@ -3308,18 +3326,7 @@ function channelsView(g) {
       const paintGrid = () => {
         gridHost.hidden = false;
         resultsHost.hidden = true;
-        gridHost.replaceChildren(...gridItems.map((i) => {
-          const c = el('div', 'card'), hit = el('button', 'hit'), name = el('div', 'name'), t = el('b', '', i.label);
-          hit.append(i.cover());
-          hit.onclick = i.go;
-          if (i.longPress) bindLongPress(hit, i.longPress);
-          t.onclick = i.go;
-          if (i.longPress) bindLongPress(t, i.longPress);
-          name.append(t);
-          c.append(hit, name);
-          if (i.sub) c.append(el('small', '', i.sub));
-          return c;
-        }));
+        gridHost.replaceChildren(...gridItems.map((i) => cardNode(i)));
       };
 
       const showResults = (list, q) => {
@@ -3450,12 +3457,14 @@ function filesView(ch) {
           try { repackTool?.offerWebpVersion?.(ch, f); }
           catch (e) { alert(e?.message || e); }
         }]);
+        const comicRestricted = locks.isContentRestricted('comic', { ch, f });
         return {
-          label,
-          sub: sizeLabel(f, ch),
+          label: comicRestricted ? '' : label,
+          sub: comicRestricted ? '' : sizeLabel(f, ch),
           searchText: (label + ' ' + (f.name || '') + ' ' + (seriesLabel || '')).toLowerCase(),
           isUnread: unread,
-          cover: () => locks.isContentRestricted('comic', { ch, f }) ? locks.lockedCoverNode(ART) : comicCover(ch, f),
+          cover: () => comicRestricted ? locks.lockedCoverNode(ART) : comicCover(ch, f),
+          hiddenMeta: comicRestricted,
           go: () => {
             if (!locks.guardRestricted('comic', { ch, f }, label)) return;
             openComic(ch, f, cur);
@@ -3536,6 +3545,8 @@ function filesView(ch) {
             cover: () => locks.isContentRestricted('series', { ch, seriesLabel })
               ? locks.lockedCoverNode(ART)
               : seriesCoverNode(ch, seriesLabel, fs, fs.length),
+            hiddenMeta: locks.isContentRestricted('series', { ch, seriesLabel }),
+            label: locks.isContentRestricted('series', { ch, seriesLabel }) ? '' : seriesShown,
             go: () => {
               if (!locks.guardRestricted('series', { ch, seriesLabel }, seriesDisplayName(ch, seriesLabel))) return;
               seriesView(ch, seriesLabel, fs);
@@ -3626,6 +3637,7 @@ function seriesView(ch, s, files) {
           searchText: (displayLabel + ' ' + (f.name || '')).toLowerCase(),
           isUnread: unread,
           cover: () => locks.isContentRestricted('comic', { ch, f }) ? locks.lockedCoverNode(ART) : comicCover(ch, f),
+          hiddenMeta: locks.isContentRestricted('comic', { ch, f }),
           go: () => openComic(ch, f, fs),
           longPress: () => sheet(displayLabel, opts.concat(lockToggleOpts('comic', { ch, f }, displayLabel, redraw))),
         };

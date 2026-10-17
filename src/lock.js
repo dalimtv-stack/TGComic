@@ -173,29 +173,62 @@ export function guardRestricted(kind, ref, label) {
 }
 
 /** URL de portada borrosa (GitHub groups / ART) */
+/** URL de portada borrosa (ART groups o /groups/) */
 export function lockedCoverUrl(ART) {
   try {
     if (ART?.groups) {
       const keys = Object.keys(ART.groups);
-      const hit = keys.find((k) => /blur[_\s-]?candado/i.test(k) || k.toLowerCase() === 'blur_candado');
-      if (hit) return ART.groups[hit];
+      const hit = keys.find((k) => {
+        const low = k.toLowerCase().replace(/\s+/g, '_');
+        return low === 'blur_candado'
+          || low.includes('blur_candado')
+          || /blur[_\s-]*candado/i.test(k);
+      });
+      if (hit && ART.groups[hit]) return ART.groups[hit];
+      // A veces la clave es la ruta completa del módulo
+      for (const k of keys) {
+        if (/blur[_\s-]*candado/i.test(k) && ART.groups[k]) return ART.groups[k];
+      }
     }
   } catch (_) {}
-  // Rutas públicas habituales
-  return '/groups/Blur_candado.png';
+  return '';
 }
+
+const PUBLIC_CANDIDATES = [
+  '/groups/Blur_candado.PNG',
+  '/groups/Blur_candado.png',
+  '/groups/Blur_candado.webp',
+  '/groups/Blur_candado.WEBP',
+  '/groups/blur_candado.png',
+  '/groups/blur_candado.PNG',
+];
 
 export function lockedCoverNode(ART) {
   const d = document.createElement('div');
   d.className = 'cover locked-cover';
+  d.setAttribute('aria-label', 'Contenido bloqueado');
   const img = new Image();
-  img.alt = 'Bloqueado';
-  img.loading = 'lazy';
-  img.onerror = () => {
-    d.textContent = '🔒';
-    d.classList.add('locked-cover-fallback');
+  img.alt = '';
+  img.draggable = false;
+  const list = [];
+  const fromArt = lockedCoverUrl(ART);
+  if (fromArt) list.push(fromArt);
+  for (const u of PUBLIC_CANDIDATES) if (!list.includes(u)) list.push(u);
+  let i = 0;
+  const tryNext = () => {
+    if (i >= list.length) {
+      img.remove();
+      d.textContent = '🔒';
+      d.classList.add('locked-cover-fallback');
+      return;
+    }
+    img.src = list[i++];
   };
-  img.src = lockedCoverUrl(ART);
+  img.onload = () => {
+    if (!d.contains(img)) d.replaceChildren(img);
+  };
+  img.onerror = () => tryNext();
   d.append(img);
+  tryNext();
   return d;
 }
