@@ -1,10 +1,12 @@
 /**
- * Búsqueda en Comic Vine (JSONP).
+ * Búsqueda Comic Vine (JSONP).
  * Requiere VITE_COMICVINE_API_KEY
  *
- * Estrategia: /search/ issues + /search/ volumes → /issues/?filter=volume:ID
- * Listamos issues del volumen SIN filtrar por número en la API (poco fiable);
- * el número solo sirve para ordenar el listado.
+ * Misma cobertura que cuando el resultado salía (aunque fuera penúltimo):
+ *  - varias /search/ de issues
+ *  - varias /search/ de volumes
+ *  - /issues/?filter=volume:ID (y 4050-ID)
+ * Solo se ordena al final; no se elimina ningún resultado encontrado.
  */
 const API_KEY = (import.meta.env.VITE_COMICVINE_API_KEY || '').trim();
 const BASE = 'https://comicvine.gamespot.com/api';
@@ -20,7 +22,7 @@ function jsonp(url) {
     const timer = setTimeout(() => {
       cleanup();
       reject(new Error('Comic Vine: tiempo de espera agotado'));
-    }, 25000);
+    }, 30000);
     const cleanup = () => {
       clearTimeout(timer);
       try { delete window[cb]; } catch (_) { window[cb] = undefined; }
@@ -54,7 +56,7 @@ function mapIssue(r) {
     volumeApi: r.volume?.api_detail_url || '',
     volumeId: r.volume?.id != null ? r.volume.id : null,
     coverDate: r.cover_date || '',
-    publisher: '',
+    publisher: r.publisher?.name || (r.volume && r.volume.publisher && r.volume.publisher.name) || '',
     siteUrl: r.site_detail_url || '',
     image: r.image?.thumb_url || r.image?.small_url || r.image?.icon_url || '',
     apiDetailUrl: r.api_detail_url || '',
@@ -75,7 +77,6 @@ async function fetchVolumePublisher(apiDetailUrl) {
   }
 }
 
-/** Búsqueda libre de issues */
 export async function searchIssues(query, limit = 25) {
   if (!API_KEY) throw new Error('Falta VITE_COMICVINE_API_KEY en las variables de entorno');
   const q = String(query || '').trim();
@@ -91,7 +92,6 @@ export async function searchIssues(query, limit = 25) {
   return (Array.isArray(data?.results) ? data.results : []).map(mapIssue);
 }
 
-/** Busca volúmenes por nombre */
 export async function searchVolumes(query, limit = 10) {
   if (!API_KEY) throw new Error('Falta VITE_COMICVINE_API_KEY');
   const q = String(query || '').trim();
@@ -115,10 +115,12 @@ export async function searchVolumes(query, limit = 10) {
 }
 
 /**
- * Todos los issues de un volume (sin filtrar por número en la API).
- * Prueba volume:ID y volume:4050-ID.
+ * Lista issues de un volume.
+ * 1) Intenta filter volume:ID
+ * 2) Si vacío, volume:4050-ID
+ * No filtra por número aquí (la API falla a menudo); el número solo ordena fuera.
  */
-export async function listIssuesForVolume(volumeId, _issueNumber, limit = 100) {
+export async function listIssuesForVolume(volumeId, issueNumber, limit = 100) {
   if (!API_KEY) throw new Error('Falta VITE_COMICVINE_API_KEY');
   const vid = String(volumeId || '').replace(/^4050-/, '').trim();
   if (!vid) return [];
@@ -129,7 +131,7 @@ export async function listIssuesForVolume(volumeId, _issueNumber, limit = 100) {
       limit: String(Math.min(100, limit)),
       offset: '0',
       field_list: 'id,name,issue_number,volume,cover_date,site_detail_url,image,api_detail_url',
-      sort: 'issue_number:asc',
+      sort: 'cover_date:asc',
     });
     const data = await jsonp(url);
     if (data?.error && data.error !== 'OK') throw new Error('Comic Vine: ' + data.error);
@@ -155,11 +157,12 @@ export async function listIssuesForVolume(volumeId, _issueNumber, limit = 100) {
 function normNum(n) {
   const s = String(n || '').replace(/^#/, '').trim().toLowerCase();
   if (!s) return '';
-  return s.replace(/^0+/, '') || s;
+  const stripped = s.replace(/^0+/, '');
+  return stripped || s;
 }
 
 /**
- * Búsqueda combinada + ranking (el número buscado sale primero, sin excluir el resto).
+ * Cobertura amplia (la que encontraba el cómic) + ranking al final.
  */
 export async function searchIssuesSmart(opts = {}) {
   if (!API_KEY) throw new Error('Falta VITE_COMICVINE_API_KEY en las variables de entorno');
@@ -178,54 +181,63 @@ export async function searchIssuesSmart(opts = {}) {
     }
   };
 
-  // 1) Búsquedas de issues en paralelo
-  const issueQs = new Set();
-  if (query) issueQs.add(query);
-  if (series) issueQs.add(series);
+  // —— 1) Issues /search/ (como cuando sí salía) ——
+  const issueQueries = [];
+  if (query) issueQueries.push(query);
+  if (series) issueQueries.push(series);
   if (series && number) {
-    issueQs.add(series + ' ' + number);
-    issueQs.add(series + ' #' + number);
+    issueQueries.push(series + ' ' + number);
+    issueQueries.push(series + ' #' + number);
+    issueQueries.push(number + ' ' + series);
   }
-  if (query && number && !query.includes(number)) {
-    issueQs.add(query + ' ' + number);
+  if (query && series && query.toLowerCase() !== series.toLowerCase()) {
+    issueQueries.push(query.replace(/\s*-\s*/g, ' '));
   }
+  const uniqIssueQ = [...new Set(issueQueries.map((s) => s.trim()).filter(Boolean))];
+  // Paralelo pero todas las queries (hasta 6)
   const issueBatches = await Promise.all(
-    [...issueQs].slice(0, 4).map((q) => searchIssues(q, 25).catch(() => []))
+    uniqIssueQ.slice(0, 6).map((q) => searchIssues(q, 30).catch(() => []))
   );
   for (const b of issueBatches) add(b);
 
-  // 2) Volúmenes → listar issues (paralelo)
-  const volQs = new Set();
-  if (series) volQs.add(series);
+  // —— 2) Volumes /search/ + /issues/ por volume ——
+  const volQueries = [];
+  if (series) volQueries.push(series);
   if (query) {
     const qNoNum = query
       .replace(/#?\s*\d+[a-z]?\s*$/i, '')
       .replace(/\s*-\s*/g, ' ')
       .trim();
-    if (qNoNum) volQs.add(qNoNum);
+    if (qNoNum) volQueries.push(qNoNum);
+    volQueries.push(query.replace(/\s*-\s*/g, ' ').trim());
   }
-  for (const b of [...volQs]) {
-    const parts = b.split(/\s+/).filter(Boolean);
+  for (const base of [...volQueries]) {
+    if (!base) continue;
+    if (base.includes('-')) volQueries.push(base.replace(/\s*-\s*/g, ' ').trim());
+    const parts = base.split(/\s+/).filter(Boolean);
     if (parts.length >= 2) {
-      volQs.add(parts[parts.length - 1]);
-      volQs.add(parts.join(' '));
+      volQueries.push(parts[parts.length - 1]);
+      volQueries.push(parts.join(' '));
+      // "Crossed Badlands" → también "Crossed: Badlands"
+      if (parts.length === 2) volQueries.push(parts[0] + ': ' + parts[1]);
     }
   }
+  const uniqVolQ = [...new Set(volQueries.map((s) => s.trim()).filter(Boolean))];
 
   const volLists = await Promise.all(
-    [...volQs].slice(0, 5).map((vq) => searchVolumes(vq, 10).catch(() => []))
+    uniqVolQ.slice(0, 6).map((vq) => searchVolumes(vq, 10).catch(() => []))
   );
   const vols = [];
   const seenV = new Set();
   for (const list of volLists) {
     for (const v of list) {
-      if (seenV.has(v.id)) continue;
+      if (v.id == null || seenV.has(v.id)) continue;
       seenV.add(v.id);
       vols.push(v);
     }
   }
 
-  const serLow = (series || [...volQs][0] || '').toLowerCase();
+  const serLow = (series || uniqVolQ[0] || '').toLowerCase();
   vols.sort((a, b) => {
     const score = (n) => {
       const x = (n || '').toLowerCase();
@@ -238,20 +250,20 @@ export async function searchIssuesSmart(opts = {}) {
     return score(a.name) - score(b.name);
   });
 
-  // Hasta 5 volúmenes: listar TODOS sus issues (sin filtrar número en API)
+  // Misma cobertura de antes: varios volúmenes, TODOS sus issues
+  // (antes el cómic salía; no limitar a 2)
+  const topVols = vols.slice(0, 8);
   const issueLists = await Promise.all(
-    vols.slice(0, 5).map((v) => listIssuesForVolume(v.id, null, 100).catch(() => []))
+    topVols.map((v) => listIssuesForVolume(v.id, null, 100).catch(() => []))
   );
   for (const list of issueLists) add(list);
 
-  // Ranking: no se elimina nada; solo se ordena
+  // —— Ranking SOLO ordena; no borra ——
   const scoreOf = (r) => {
     let s = 0;
     const nNorm = normNum(r.issueNumber);
-    if (numNorm) {
-      if (nNorm === numNorm) s += 100;
-      else if (nNorm && (nNorm === numNorm || String(r.issueNumber).toLowerCase() === number.toLowerCase())) s += 100;
-    }
+    if (numNorm && nNorm === numNorm) s += 100;
+    else if (number && String(r.issueNumber || '').toLowerCase() === number.toLowerCase()) s += 100;
     const vol = String(r.volume || '').toLowerCase();
     if (serLow) {
       if (vol === serLow) s += 50;
@@ -260,15 +272,14 @@ export async function searchIssuesSmart(opts = {}) {
     }
     return s;
   };
-
   out.sort((a, b) => {
     const d = scoreOf(b) - scoreOf(a);
     if (d) return d;
     return String(a.issueNumber || '').localeCompare(String(b.issueNumber || ''), undefined, { numeric: true });
   });
 
-  // Más resultados en pantalla (antes se cortaba y podía quedar fuera)
-  return out.slice(0, 40);
+  // Sin slice agresivo: devolver todo lo encontrado (tope alto)
+  return out.slice(0, 80);
 }
 
 export async function fetchIssueDetail(apiDetailUrlOrId) {
