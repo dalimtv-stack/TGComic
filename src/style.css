@@ -429,3 +429,10 @@ textarea.meta-desc, textarea.edit-input.meta-desc{
 
 .info-head-title{cursor:pointer;user-select:none}
 .info-head-title:active{opacity:.7}
+
+.meta-desc-lg{
+  min-height:10rem;
+  max-height:50vh;
+  resize:vertical;
+  line-height:1.35;
+}

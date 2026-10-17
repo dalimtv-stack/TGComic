@@ -1174,8 +1174,8 @@ function showComicInfo(ch, f, displayTitle) {
     body.append(row('Páginas', pagesLabel));
     body.append(row('Formato pág.', pageFmt));
     const hasFicha = !!(cap.fileName || cap.titleEs || cap.originalTitle || cap.series || cap.writer || cap.artist || cap.publisher || cap.date || cap.description);
+    body.append(el('div', 'info-sec', 'Ficha en Telegram'));
     if (hasFicha) {
-      body.append(el('div', 'info-sec', 'Ficha en Telegram'));
       if (cap.fileName) body.append(row('Nombre de archivo', cap.fileName));
       if (cap.titleEs) body.append(row('Título España', cap.titleEs));
       if (cap.originalTitle) body.append(row('Título original', cap.originalTitle));
@@ -1193,9 +1193,24 @@ function showComicInfo(ch, f, displayTitle) {
         };
         body.append(descBtn);
       }
-    } else if (f?.caption) {
-      body.append(el('div', 'info-sec', 'Ficha en Telegram'));
+    } else if (f?.caption && String(f.caption).trim()) {
       body.append(el('p', 'cover-pick-hint', String(f.caption).slice(0, 800)));
+      const fillBtn = el('button', 'btn cover-pick-device', 'Rellenar Ficha Telegram');
+      fillBtn.type = 'button';
+      fillBtn.onclick = () => {
+        frame.remove();
+        showCaptionEditor(ch, f, () => showComicInfo(ch, f, displayTitle));
+      };
+      body.append(fillBtn);
+    } else {
+      body.append(el('p', 'cover-pick-hint', 'Sin datos en Telegram'));
+      const fillBtn = el('button', 'btn cover-pick-device', 'Rellenar Ficha Telegram');
+      fillBtn.type = 'button';
+      fillBtn.onclick = () => {
+        frame.remove();
+        showCaptionEditor(ch, f, () => showComicInfo(ch, f, displayTitle));
+      };
+      body.append(fillBtn);
     }
     box.append(head, body);
     frame.append(box);
@@ -1315,7 +1330,7 @@ async function updateTelegramCaption(ch, f, caption) {
 
 
 /** Formulario completo de ficha Telegram + Identificar (Comic Vine) */
-function showCaptionEditor(ch, f, after) {
+function showCaptionEditor(ch, f, after, opts = {}) {
   document.querySelector('.info-frame.caption-editor')?.remove();
   const cap = parseComicCaption(f?.caption || '');
   const parsed = parseComicName(f?.name || '', ch?.name);
@@ -1352,8 +1367,8 @@ function showCaptionEditor(ch, f, after) {
   const inpPub = mk('Editorial', cap.publisher);
   const inpDate = mk('Fecha de publicación', cap.date, 'MM/AAAA o AAAA');
   body.append(el('label', 'sync-label', 'Descripción'));
-  const inpDesc = el('textarea', 'edit-input meta-desc');
-  inpDesc.rows = 4;
+  const inpDesc = el('textarea', 'edit-input meta-desc meta-desc-lg');
+  inpDesc.rows = 10;
   inpDesc.value = cap.description || '';
   body.append(inpDesc);
 
@@ -1381,7 +1396,15 @@ function showCaptionEditor(ch, f, after) {
       save.disabled = true;
       await updateTelegramCaption(ch, f, caption);
       frame.remove();
-      after?.();
+      // Solo tras guardar: recargar "Editar datos del comic" si estaba abierto
+      const editWasOpen = !!document.querySelector('.info-frame.edit-comic');
+      document.querySelector('.info-frame.edit-comic')?.remove();
+      document.querySelector('.info-frame.comic-info')?.remove();
+      if (editWasOpen || opts.reopenEdit) {
+        showEditComicTitle(ch, f, opts.currentLabel || '', after);
+      } else {
+        after?.();
+      }
     } catch (e) {
       alert('No se pudo guardar el caption: ' + (e?.message || e));
     } finally {
@@ -1671,10 +1694,10 @@ function showEditComicTitle(ch, f, currentLabel, after) {
     }
   };
 
-  const fichaBtn = el('button', 'btn cover-pick-device', 'Ficha Telegram completa…');
+  const fichaBtn = el('button', 'btn cover-pick-device', 'Ficha Telegram');
   fichaBtn.type = 'button';
   fichaBtn.onclick = () => {
-    showCaptionEditor(ch, f, after);
+    showCaptionEditor(ch, f, after, { reopenEdit: true, currentLabel: currentLabel || currentTitle });
   };
   body.append(fichaBtn);
 
