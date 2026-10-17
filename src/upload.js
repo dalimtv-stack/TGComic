@@ -193,20 +193,73 @@ export function createUploadTool(d) {
     return `${ch}${TSEP}${ed}${SEP}${LIBRARY_LABEL}${POST}`;
   }
 
-  function composeFileName({ channel, series, number, info }) {
+  function composeFileName({ channel, series, number, title, info }) {
     const ch = String(channel || '').trim();
     const ser = String(series || '').trim();
     const num = String(number || '').trim();
-    const inf = String(info || '').trim().replace(/\s*\[[^\]]*\]/g, '').trim();
+    const tit = String(title || '').trim();
+    const inf = String(info || '').trim();
     let body = '';
     if (ser && num) body = `${ser} #${num}`;
     else if (ser) body = ser;
     else if (num) body = `#${num}`;
     else body = 'comic';
-    if (inf) body += ` - ${inf}`;
-    // Preferir con canal si hay serie (formato completo del proyecto)
+    const extra = [tit, inf].filter(Boolean).join(' - ');
+    if (extra) body += ` - ${extra}`;
     const base = (ch && ser) ? `${ch} - ${body}` : body;
     return base.replace(/_/g, ' ').replace(/\s+/g, ' ').trim() + '.cbz';
+  }
+
+  /** Parsea nombre de archivo → { series, number, title/info } priorizando #n */
+  function parseUploadBase(fileName, channelName) {
+    let base = String(fileName || '')
+      .replace(/\.cb[zr]$/i, '')
+      .replace(/_/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    base = base.replace(/\s*@\S+/g, '').trim();
+    base = base.replace(/\s*\[WebP\]/ig, '').trim();
+    const extras = [];
+    base = base.replace(/\s*\[([^\]]+)\]/g, (_, inner) => {
+      const t = String(inner || '').trim();
+      if (t && !/^webp$/i.test(t)) extras.push(t);
+      return ' ';
+    }).replace(/\s+/g, ' ').trim();
+    const chName = String(channelName || '').trim();
+    if (chName) {
+      const low = base.toLowerCase();
+      const chLow = chName.toLowerCase();
+      if (low.startsWith(chLow)) {
+        base = base.slice(chName.length).replace(/^\s*-\s*/, '').trim();
+      }
+    }
+    const ISSUE_TAG = '(?:\\d+(?:\\.\\d+)?[a-zA-Z]?|Special|Especial|Extra|Anual|Annual|One[\\s-]?Shot|OneShot)';
+    let m = null;
+    if (/#/.test(base)) {
+      m = base.match(new RegExp(`^(.*)\\s*#\\s*(${ISSUE_TAG})(?:\\s*[-–—:]\\s*(.*))?$`, 'i'));
+    }
+    if (!m) m = base.match(/^(.*?)\s+(\d{1,4}[a-z]?)\s*[-–—]\s+(.*)$/i);
+    if (!m) m = base.match(/^(.*?)\s+(\d{1,4}[a-z]?)$/i);
+    let series = '', number = '', title = '';
+    if (m) {
+      series = String(m[1] || '').trim();
+      number = String(m[2] || '').trim();
+      title = String(m[3] || '').trim();
+    } else {
+      series = base;
+    }
+    const info = extras.length ? extras.map((x) => '[' + x + ']').join(' ') : '';
+    return { series, number, title, info };
+  }
+
+  function uiAlert(msg) {
+    if (typeof window.appAlert === 'function') return window.appAlert(String(msg || ''));
+    alert(String(msg || ''));
+    return Promise.resolve();
+  }
+  function uiConfirm(msg) {
+    if (typeof window.appConfirm === 'function') return window.appConfirm(String(msg || ''));
+    return Promise.resolve(confirm(String(msg || '')));
   }
 
   function isRarHeader(u8) {
@@ -575,7 +628,7 @@ export function createUploadTool(d) {
 
       const body = el('div', 'info-body');
       body.append(el('p', 'cover-pick-hint',
-        'Elige un CBZ/CBR del dispositivo. Si el canal no existe se crea (archivado) con el formato Canal:Editorial::Comics::tgstorage.'
+        'Puedes elegir varios CBZ/CBR de la misma serie. Si el canal no existe se crea (archivado) con el formato Canal:Editorial::Comics::tgstorage.'
       ));
 
       const lib = Array.isArray(getLIB()) ? getLIB() : [];
@@ -586,14 +639,13 @@ export function createUploadTool(d) {
         (channelsByGroup[g] ||= []).push(c);
       }
 
-      // Controles
-      const fileBtn = el('button', 'btn cover-pick-device', 'Elegir archivo CBZ / CBR');
+      const fileBtn = el('button', 'btn cover-pick-device', 'Elegir archivo(s) CBZ / CBR');
       const fileInput = el('input');
       fileInput.type = 'file';
       fileInput.accept = '.cbz,.cbr,application/zip,application/x-rar-compressed,*/*';
+      fileInput.multiple = true;
       fileInput.hidden = true;
       const fileLabel = el('p', 'sync-status', 'Ningún archivo seleccionado');
-      let pickedFile = null;
 
       const editorialSel = el('select', 'edit-input upload-select');
       const optNewEd = el('option');
@@ -622,27 +674,13 @@ export function createUploadTool(d) {
       channelInp.placeholder = 'Nombre del canal';
       channelInp.hidden = true;
 
-      // Etiquetas claras: qué va en cada campo
-      const seriesLab = el('div', 'sync-label', 'Serie');
-      const seriesHint = el('p', 'cover-pick-hint', 'Nombre de la serie completa (sin el número). Ej: Mrs. Keagan - The Proposition 2');
+      // Serie GLOBAL (misma para todos los archivos)
+      const seriesLab = el('div', 'sync-label', 'Serie (global)');
+      const seriesHint = el('p', 'cover-pick-hint', 'Se aplica a todos los archivos de esta subida. Ej: Mrs. Keagan - The Proposition 2');
       const seriesInp = el('input', 'edit-input');
       seriesInp.type = 'text';
-      seriesInp.placeholder = 'Ej: Silencio · The Proposition 2';
-      seriesInp.setAttribute('aria-label', 'Serie');
-
-      const numberLab = el('div', 'sync-label', 'Número');
-      const numberHint = el('p', 'cover-pick-hint', 'Solo el número del cómic o Special/Extra/Anual. Si el archivo tiene #01, ese es el número (no un dígito del título de la serie).');
-      const numberInp = el('input', 'edit-input');
-      numberInp.type = 'text';
-      numberInp.placeholder = 'Ej: 01 · 12 · Special · Extra';
-      numberInp.setAttribute('aria-label', 'Número');
-
-      const infoLab = el('div', 'sync-label', 'Info adicional (opcional)');
-      const infoHint = el('p', 'cover-pick-hint', 'Subtítulo o detalle tras el número. Ej: Dos caras · Batmito (1 de 2). No pongas aquí la serie ni el número.');
-      const infoInp = el('input', 'edit-input');
-      infoInp.type = 'text';
-      infoInp.placeholder = 'Ej: Dos caras · (1 de 2)';
-      infoInp.setAttribute('aria-label', 'Info adicional');
+      seriesInp.placeholder = 'Nombre de la serie';
+      seriesInp.setAttribute('aria-label', 'Serie global');
 
       const includeChChk = el('input');
       includeChChk.type = 'checkbox';
@@ -650,26 +688,16 @@ export function createUploadTool(d) {
       const includeChRow = el('label', 'repack-check');
       includeChRow.append(includeChChk, document.createTextNode(' Incluir nombre del canal en el archivo'));
 
-      const nameFinalLab = el('div', 'sync-label', 'Nombre final del archivo');
-      const nameFinalInp = el('input', 'edit-input upload-preview');
-      nameFinalInp.type = 'text';
-      nameFinalInp.placeholder = 'nombre.cbz';
-      let nameFinalTouched = false;
-      nameFinalInp.oninput = () => { nameFinalTouched = true; };
-
       const asWebpChk = el('input');
       asWebpChk.type = 'checkbox';
-      asWebpChk.id = 'upload-as-webp';
       const webpRow = el('label', 'repack-check');
       webpRow.append(asWebpChk, document.createTextNode(' Convertir páginas a WebP (añade [WebP] al nombre)'));
-
       const webpOptsBox = el('div', 'webp-opts');
       webpOptsBox.hidden = true;
       const qualityLab = el('label', 'sync-label', 'Calidad');
       const qualityInp = el('input', 'edit-input');
       qualityInp.type = 'text';
       qualityInp.value = '0.62';
-      qualityInp.placeholder = '0.62';
       const resizeRow = el('label', 'repack-check');
       const resizeCb = el('input');
       resizeCb.type = 'checkbox';
@@ -678,10 +706,12 @@ export function createUploadTool(d) {
       webpOptsBox.append(qualityLab, qualityInp, resizeRow);
       asWebpChk.onchange = () => { webpOptsBox.hidden = !asWebpChk.checked; };
 
-      const status = el('p', 'sync-status', '');
-      const actions = el('div', 'edit-actions');
-      const cancel = el('button', 'btn', 'Cancelar');
-      const goBtn = el('button', 'btn edit-save', 'Subir');
+      const filesSec = el('div', 'info-sec', 'Cómics a subir');
+      const filesHint = el('p', 'cover-pick-hint', 'Por cada archivo puedes editar Título, Numeración e Info. La serie de arriba es común.');
+      const filesList = el('div', 'upload-files-list');
+
+      /** @type {{ file: File, titleInp: HTMLInputElement, numberInp: HTMLInputElement, infoInp: HTMLInputElement, nameInp: HTMLInputElement, nameTouched: boolean }[]} */
+      let rows = [];
 
       const currentChannelName = () => {
         if (channelSel.value === '__new__') return channelInp.value.trim();
@@ -689,16 +719,24 @@ export function createUploadTool(d) {
         return (opt?._ch?.name || opt?.textContent || '').trim();
       };
 
-      const updatePreview = () => {
-        if (nameFinalTouched) return;
+      const updateRowPreview = (row) => {
+        if (row.nameTouched) return;
         const chName = includeChChk.checked ? currentChannelName() : '';
-        const fname = composeFileName({
+        let fname = composeFileName({
           channel: chName,
           series: seriesInp.value,
-          number: numberInp.value,
-          info: infoInp.value,
+          number: row.numberInp.value,
+          title: row.titleInp.value,
+          info: row.infoInp.value,
         });
-        nameFinalInp.value = fname;
+        if (asWebpChk.checked && !/\[WebP\]/i.test(fname)) {
+          fname = fname.replace(/\.cbz$/i, ' [WebP].cbz');
+        }
+        row.nameInp.value = fname;
+      };
+
+      const updateAllPreviews = () => {
+        for (const row of rows) updateRowPreview(row);
       };
 
       const rebuildChannels = () => {
@@ -727,147 +765,154 @@ export function createUploadTool(d) {
           channelSel.value = '__new__';
           channelInp.hidden = false;
         }
-        updatePreview();
+        updateAllPreviews();
+      };
+
+      const addFileRow = (file, parsed) => {
+        const rowEl = el('div', 'upload-file-row');
+        const head = el('div', 'upload-file-name', file.name);
+        const meta = el('small', '', (formatBytes?.(file.size) || file.size + ' B'));
+        head.append(document.createTextNode(' · '), meta);
+
+        const tLab = el('div', 'sync-label', 'Título');
+        const titleInp = el('input', 'edit-input');
+        titleInp.type = 'text';
+        titleInp.placeholder = 'Subtítulo opcional';
+        titleInp.value = parsed.title || '';
+
+        const nLab = el('div', 'sync-label', 'Numeración');
+        const numberInp = el('input', 'edit-input');
+        numberInp.type = 'text';
+        numberInp.placeholder = '01 · Special · Extra';
+        numberInp.value = parsed.number || '';
+
+        const iLab = el('div', 'sync-label', 'Info opcional');
+        const infoInp = el('input', 'edit-input');
+        infoInp.type = 'text';
+        infoInp.placeholder = '[tags] u otra nota';
+        infoInp.value = parsed.info || '';
+
+        const nameLab = el('div', 'sync-label', 'Nombre final');
+        const nameInp = el('input', 'edit-input upload-preview');
+        nameInp.type = 'text';
+        let nameTouched = false;
+        nameInp.oninput = () => { nameTouched = true; row.nameTouched = true; };
+
+        const row = { file, titleInp, numberInp, infoInp, nameInp, nameTouched: false, rowEl };
+        titleInp.oninput = () => { row.nameTouched = false; nameTouched = false; updateRowPreview(row); };
+        numberInp.oninput = () => { row.nameTouched = false; nameTouched = false; updateRowPreview(row); };
+        infoInp.oninput = () => { row.nameTouched = false; nameTouched = false; updateRowPreview(row); };
+
+        rowEl.append(head, tLab, titleInp, nLab, numberInp, iLab, infoInp, nameLab, nameInp);
+        filesList.append(rowEl);
+        rows.push(row);
+        updateRowPreview(row);
+      };
+
+      const rebuildFileRows = () => {
+        rows = [];
+        filesList.replaceChildren();
+        const list = fileInput.files ? [...fileInput.files] : [];
+        if (!list.length) {
+          fileLabel.textContent = 'Ningún archivo seleccionado';
+          return;
+        }
+        fileLabel.textContent = list.length === 1
+          ? (list[0].name + ' (' + (formatBytes?.(list[0].size) || list[0].size + ' B') + ')')
+          : (list.length + ' archivos seleccionados');
+        const chName = currentChannelName();
+        const parsedList = list.map((f) => parseUploadBase(f.name, chName));
+        // Serie global: si la mayoría coincide, usarla
+        const seriesCounts = {};
+        for (const p of parsedList) {
+          const s = p.series || '';
+          if (s) seriesCounts[s] = (seriesCounts[s] || 0) + 1;
+        }
+        let bestSeries = '';
+        let bestN = 0;
+        for (const [s, n] of Object.entries(seriesCounts)) {
+          if (n > bestN) { bestSeries = s; bestN = n; }
+        }
+        if (bestSeries && !seriesInp.value.trim()) seriesInp.value = bestSeries;
+        for (let i = 0; i < list.length; i++) {
+          addFileRow(list[i], parsedList[i]);
+        }
       };
 
       fileBtn.onclick = () => fileInput.click();
-      fileInput.onchange = () => {
-        pickedFile = fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
-        fileLabel.textContent = pickedFile
-          ? (pickedFile.name + ' (' + (formatBytes?.(pickedFile.size) || pickedFile.size + ' B') + ')')
-          : 'Ningún archivo seleccionado';
-        if (!pickedFile) return;
+      fileInput.onchange = () => rebuildFileRows();
 
-        let base = String(pickedFile.name || '')
-          .replace(/\.cb[zr]$/i, '')
-          .replace(/_/g, ' ')
-          .replace(/\s+/g, ' ')
-          .trim();
-
-        // Quitar @handles (p. ej. @Comicverso)
-        base = base.replace(/\s*@\S+/g, '').trim();
-        // Quitar [WebP] y guardar otros [tags]
-        base = base.replace(/\s*\[WebP\]/ig, '').trim();
-        const extras = [];
-        base = base.replace(/\s*\[([^\]]+)\]/g, (_, inner) => {
-          const t = String(inner || '').trim();
-          if (t && !/^webp$/i.test(t)) extras.push(t);
-          return ' ';
-        }).replace(/\s+/g, ' ').trim();
-
-        // Quitar prefijo de canal si coincide
-        let chName = '';
-        if (channelSel.value === '__new__') chName = channelInp.value.trim();
-        else {
-          const opt = [...channelSel.options].find((o) => o.value === channelSel.value);
-          chName = (opt && opt._ch && opt._ch.name) || (opt && opt.textContent) || '';
-        }
-        if (chName) {
-          const low = base.toLowerCase();
-          const chLow = chName.toLowerCase();
-          if (low.startsWith(chLow)) {
-            base = base.slice(chName.length).replace(/^\s*-\s*/, '').trim();
-          }
-        }
-
-        let series = '';
-        let number = '';
-        let info = '';
-
-        // PRIORIDAD ABSOLUTA: si hay "#01" / "#Special", ese es el número.
-        // Así "The Proposition 2 #01" → serie="… Proposition 2", número="01"
-        // (el "2" del título de la serie no se confunde con el número del cómic).
-        const ISSUE_TAG = '(?:\\d+(?:\\.\\d+)?[a-zA-Z]?|Special|Especial|Extra|Anual|Annual|One[\\s-]?Shot|OneShot)';
-        let m = null;
-        if (/#/.test(base)) {
-          // Greedy → última "#" (la del número del cómic)
-          m = base.match(new RegExp(`^(.*)\\s*#\\s*(${ISSUE_TAG})(?:\\s*[-–—:]\\s*(.*))?$`, 'i'));
-        }
-        if (!m) {
-          // Sin "#": solo entonces ... 01 - resto
-          m = base.match(/^(.*?)\s+(\d{1,4}[a-z]?)\s*[-–—]\s+(.*)$/i);
-        }
-        if (!m) {
-          // Sin "#": ... 01 al final
-          m = base.match(/^(.*?)\s+(\d{1,4}[a-z]?)$/i);
-        }
-
-        if (m) {
-          series = String(m[1] || '').trim();
-          number = String(m[2] || '').trim();
-          info = String(m[3] || '').trim();
-        } else {
-          series = base;
-        }
-        // Si tras quitar canal queda "Serie - resto" sin número, no forzar
-        if (extras.length) {
-          info = info ? (info + ' [' + extras.join('] [') + ']').trim() : extras.map((x) => '[' + x + ']').join(' ');
-        }
-
-        seriesInp.value = series;
-        numberInp.value = number;
-        infoInp.value = info;
-        updatePreview();
-        updatePreview();
-      };
       editorialSel.onchange = () => {
         editorialInp.hidden = editorialSel.value !== '__new__';
         rebuildChannels();
       };
-      editorialInp.oninput = () => { if (editorialSel.value === '__new__') rebuildChannels(); else updatePreview(); };
+      editorialInp.oninput = () => { if (editorialSel.value === '__new__') rebuildChannels(); else updateAllPreviews(); };
       channelSel.onchange = () => {
         channelInp.hidden = channelSel.value !== '__new__';
-        nameFinalTouched = false;
-        updatePreview();
+        updateAllPreviews();
       };
-      channelInp.oninput = () => { nameFinalTouched = false; updatePreview(); };
-      seriesInp.oninput = () => { nameFinalTouched = false; updatePreview(); };
-      numberInp.oninput = () => { nameFinalTouched = false; updatePreview(); };
-      infoInp.oninput = () => { nameFinalTouched = false; updatePreview(); };
-      includeChChk.onchange = () => { nameFinalTouched = false; updatePreview(); };
+      channelInp.oninput = () => updateAllPreviews();
+      seriesInp.oninput = () => updateAllPreviews();
+      includeChChk.onchange = () => updateAllPreviews();
+      asWebpChk.onchange = () => {
+        webpOptsBox.hidden = !asWebpChk.checked;
+        updateAllPreviews();
+      };
 
+      const status = el('p', 'sync-status', '');
+      const actions = el('div', 'edit-actions');
+      const cancel = el('button', 'btn', 'Cancelar');
+      const goBtn = el('button', 'btn edit-save', 'Subir');
       cancel.onclick = () => { frame.remove(); };
+
       goBtn.onclick = async () => {
         if (busy) {
-          alert('Ya hay una subida en curso');
+          await uiAlert('Ya hay una subida en curso');
           return;
         }
-        if (!pickedFile) {
-          alert('Selecciona un archivo');
+        if (!rows.length) {
+          await uiAlert('Selecciona al menos un archivo');
           return;
         }
         const ed = editorialSel.value === '__new__' ? editorialInp.value.trim() : editorialSel.value;
-        let chName = currentChannelName();
-        if (!ed) { alert('Indica la editorial'); return; }
-        if (!chName) { alert('Indica el canal'); return; }
+        const chName = currentChannelName();
+        if (!ed) { await uiAlert('Indica la editorial'); return; }
+        if (!chName) { await uiAlert('Indica el canal'); return; }
 
-        if (!nameFinalTouched) updatePreview();
-        let outName = String(nameFinalInp.value || '').trim();
-        if (!outName) {
-          outName = composeFileName({
-            channel: includeChChk.checked ? chName : '',
-            series: seriesInp.value,
-            number: numberInp.value,
-            info: infoInp.value,
-          });
-        }
-        outName = outName.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
-        if (!/\.cbz$/i.test(outName)) outName = outName.replace(/\.cb[zr]$/i, '') + '.cbz';
-        if (!/\.cbz$/i.test(outName)) outName += '.cbz';
-
-        const wantWebp = !!(asWebpChk && asWebpChk.checked);
-        if (wantWebp && !/\[WebP\]/i.test(outName)) {
-          outName = outName.replace(/\.cbz$/i, ' [WebP].cbz');
-        }
+        const wantWebp = !!asWebpChk.checked;
         const webpOpts = {
           quality: parseFloat(String(qualityInp.value).replace(',', '.')) || 0.62,
           resize: !!resizeCb.checked,
           maxEdge: 2400,
         };
 
-        if (!confirm('¿Subir como «' + outName + '» al canal «' + chName + '» (' + ed + ')?')) return;
+        const jobs = rows.map((row) => {
+          let outName = String(row.nameInp.value || '').trim();
+          if (!outName || !row.nameTouched) {
+            outName = composeFileName({
+              channel: includeChChk.checked ? chName : '',
+              series: seriesInp.value,
+              number: row.numberInp.value,
+              title: row.titleInp.value,
+              info: row.infoInp.value,
+            });
+          }
+          outName = outName.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+          if (!/\.cbz$/i.test(outName)) outName = outName.replace(/\.cb[zr]$/i, '') + '.cbz';
+          if (wantWebp && !/\[WebP\]/i.test(outName)) {
+            outName = outName.replace(/\.cbz$/i, ' [WebP].cbz');
+          }
+          return { file: row.file, outName };
+        });
 
-        const fileRef = pickedFile;
+        const summary = jobs.length === 1
+          ? `¿Subir como «${jobs[0].outName}» al canal «${chName}» (${ed})?`
+          : `¿Subir ${jobs.length} cómics al canal «${chName}» (${ed})?\n\n` + jobs.map((j) => '· ' + j.outName).join('\n');
+        if (!(await uiConfirm(summary))) return;
+
+        frame.remove();
+        showUploadProgressPanel();
+
         const postErrorPlaceholder = async (ch, fileName, errMsg) => {
           if (!ch) return;
           try {
@@ -886,120 +931,101 @@ export function createUploadTool(d) {
           }
         };
 
-        const runJob = async (ctx) => {
-          let ch = null;
-          const st = (msg) => {
-            try { ctx.log(msg); } catch (_) {}
-            try { logLine(msg); } catch (_) {}
-            const s = String(msg || '');
-            if (/Empaquetando|WebP|Extrayendo/i.test(s)) {
-              try { ctx.setProgress?.(45); } catch (_) {}
-            }
-            const m = s.match(/(\d{1,3})\s*%\s*$/);
-            if (m) {
-              const pct = Number(m[1]) || 0;
-              if (/Subiendo/i.test(s)) try { ctx.setProgress?.(70 + Math.round(pct * 0.25)); } catch (_) {}
-              else if (/Descargando|Leyendo/i.test(s)) try { ctx.setProgress?.(15 + Math.round(pct * 0.2)); } catch (_) {}
+        // Encolar un trabajo por archivo (misma serie / canal)
+        for (const job of jobs) {
+          const fileRef = job.file;
+          const outName = job.outName;
+          const runOne = async (ctx) => {
+            let ch = null;
+            const st = (msg) => {
+              try { ctx.log(msg); } catch (_) {}
+              try { logLine(msg); } catch (_) {}
+              const s = String(msg || '');
+              if (/Empaquetando|WebP|Extrayendo/i.test(s)) {
+                try { ctx.setProgress?.(45); } catch (_) {}
+              }
+              const m = s.match(/(\d{1,3})\s*%\s*$/);
+              if (m) {
+                const pct = Number(m[1]) || 0;
+                if (/Subiendo/i.test(s)) try { ctx.setProgress?.(70 + Math.round(pct * 0.25)); } catch (_) {}
+                else if (/Descargando|Leyendo/i.test(s)) try { ctx.setProgress?.(15 + Math.round(pct * 0.2)); } catch (_) {}
+              }
+            };
+            try {
+              abort = false;
+              st('[' + outName + '] Preparando canal…');
+              ctx.setProgress(10);
+              await yieldTick();
+              await ctx.waitWhilePaused?.();
+              if (ctx.isAborted?.()) throw Object.assign(new Error('cancelado'), { cancelled: true });
+              ch = await ensureChannel(chName, ed, st);
+              ctx.setProgress(20);
+              st('[' + outName + '] ' + (wantWebp ? 'Convirtiendo a CBZ WebP…' : 'Convirtiendo a CBZ si hace falta…'));
+              await yieldTick();
+              let blob = await localFileToCbzBlob(fileRef, st, { asWebp: wantWebp, webpOpts });
+              ctx.setProgress(55);
+              st('[' + outName + '] Preparando subida… (' + (formatBytes?.(blob.size) || blob.size) + ')');
+              await yieldTick();
+              await ctx.waitWhilePaused?.();
+              if (ctx.isAborted?.()) throw Object.assign(new Error('cancelado'), { cancelled: true });
+              st('[' + outName + '] Subiendo…');
+              ctx.setProgress(70);
+              await uploadCbz(ch, blob, outName, st);
+              ctx.setProgress(100);
+              st('[' + outName + '] Listo');
+              try {
+                const files = await fetchFiles(ch);
+                await kv.set('f:' + ch.id, files);
+              } catch (_) {}
+            } catch (e) {
+              if (e?.cancelled) {
+                st('[' + outName + '] Cancelado');
+                throw e;
+              }
+              const errMsg = e?.message || String(e);
+              st('[' + outName + '] ERROR: ' + errMsg);
+              try { await postErrorPlaceholder(ch, outName, errMsg); } catch (_) {}
+              throw e;
             }
           };
-          try {
-            abort = false;
-            st('Preparando canal…');
-            ctx.setProgress(10);
-            await yieldTick();
-            await ctx.waitWhilePaused?.();
-            if (ctx.isAborted?.()) throw Object.assign(new Error('cancelado'), { cancelled: true });
-            ch = await ensureChannel(chName, ed, st);
-            ctx.setProgress(20);
-            st(wantWebp ? 'Convirtiendo a CBZ WebP…' : 'Convirtiendo a CBZ si hace falta…');
-            await yieldTick();
-            let blob = await localFileToCbzBlob(fileRef, st, { asWebp: wantWebp, webpOpts });
-            ctx.setProgress(55);
-            await ctx.waitWhilePaused?.();
-            st('Subiendo a Telegram…');
-            await uploadCbz(ch, outName, blob, '', st);
-            blob = null;
-            ctx.setProgress(90);
-            st('Actualizando listado…');
-            try { await fetchFiles(ch); } catch (e) { st('Listado: ' + (e?.message || e)); }
-            ctx.setProgress(100);
-            st('✓ Subido correctamente');
-          } catch (e) {
-            if (!e?.cancelled && !abort) {
-              st('ERROR: ' + (e?.message || e));
-              await postErrorPlaceholder(ch, outName, e?.message || e);
-            }
-            throw e;
-          }
-        };
 
-        frame.remove();
-        busy = true;
-        abort = false;
-
-        if (jobQueue && typeof jobQueue.enqueue === 'function') {
-          jobQueue.enqueue({
-            type: 'upload',
-            label: outName,
-            run: async (ctx) => {
-              try {
-                ctx.log('Archivo: ' + fileRef.name);
-                ctx.log('Destino: ' + chName + ' · ' + ed);
-                ctx.log('Nombre final: ' + outName);
-                if (wantWebp) ctx.log('Modo WebP (solo si reduce tamaño)');
-                await runJob(ctx);
-              } finally {
-                busy = false;
-              }
-            },
-          });
-          try { jobQueue.show(); } catch (_) {}
-          busy = false;
-        } else {
-          showUploadProgressPanel();
-          const logEl = document.getElementById('upload-log');
-          if (logEl) logEl.replaceChildren();
-          setFill(0);
-          logLine('Archivo: ' + fileRef.name);
-          logLine('Destino: ' + chName + ' · ' + ed);
-          logLine('Nombre final: ' + outName);
-          if (wantWebp) logLine('Modo WebP (solo si reduce tamaño)');
-          try {
-            await runJob({
-              log: logLine,
-              setProgress: setFill,
-              waitWhilePaused: async () => {},
-              isAborted: () => abort,
+          if (jobQueue && typeof jobQueue.enqueue === 'function') {
+            jobQueue.enqueue({
+              id: 'upload:' + outName + ':' + Date.now() + ':' + Math.random().toString(36).slice(2, 6),
+              label: outName,
+              run: runOne,
             });
-          } catch (e) {
-            if (e?.cancelled) logLine('Cancelado');
-            else {
-              console.error('[upload]', e);
-              logLine('ERROR: ' + (e?.message || e));
+          } else {
+            // Fallback secuencial sin cola
+            busy = true;
+            try {
+              await runOne({
+                log: logLine,
+                setProgress: () => {},
+                waitWhilePaused: async () => {},
+                isAborted: () => abort,
+              });
+            } catch (e) {
+              if (!e?.cancelled) console.error('[upload]', e);
+            } finally {
+              busy = false;
+              syncFloatingUi();
             }
-          } finally {
-            busy = false;
-            abort = false;
-            const btnStop = document.getElementById('upload-stop');
-            if (btnStop) btnStop.textContent = 'Cerrar';
-            syncFloatingUi();
           }
         }
+        syncFloatingUi();
       };
 
-      // Montar DOM
-      body.append(el('div', 'info-sec', 'Archivo'));
+      body.append(el('div', 'info-sec', 'Archivos'));
       body.append(fileBtn, fileInput, fileLabel);
       body.append(el('div', 'info-sec', 'Editorial'));
       body.append(editorialSel, editorialInp);
       body.append(el('div', 'info-sec', 'Canal'));
       body.append(channelSel, channelInp);
-      body.append(el('div', 'info-sec', 'Nombre del cómic'));
+      body.append(el('div', 'info-sec', 'Serie'));
       body.append(seriesLab, seriesHint, seriesInp);
-      body.append(numberLab, numberHint, numberInp);
-      body.append(infoLab, infoHint, infoInp);
       body.append(includeChRow);
-      body.append(nameFinalLab, nameFinalInp);
+      body.append(filesSec, filesHint, filesList);
       body.append(webpRow, webpOptsBox);
       body.append(status);
       actions.append(cancel, goBtn);
@@ -1008,13 +1034,10 @@ export function createUploadTool(d) {
       frame.append(box);
 
       rebuildChannels();
-      updatePreview();
-
-      // Solo cierra con Cancelar / × (no al pulsar fuera)
       document.body.append(frame);
     } catch (e) {
       console.error('[upload] showUploadFrame', e);
-      alert('No se pudo abrir el formulario de subida: ' + (e?.message || e));
+      uiAlert('No se pudo abrir el formulario de subida: ' + (e?.message || e));
     }
   }
 

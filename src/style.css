@@ -453,6 +453,41 @@ body.body-scroll-lock #app{
   touch-action:none;
 }
 
+/* Diálogos centrados (alert/confirm de la app) */
+.app-dialog{
+  position:fixed;inset:0;z-index:120;
+  display:flex;align-items:center;justify-content:center;
+  padding:1rem;background:#000a;
+  box-sizing:border-box;
+}
+.app-dialog-box{
+  width:min(420px,100%);
+  background:var(--card);border-radius:16px;
+  box-shadow:0 16px 48px #000c;
+  padding:1.1rem 1.15rem 1rem;
+  box-sizing:border-box;
+}
+.app-dialog-title{font-weight:700;font-size:1.05rem;margin-bottom:.35rem}
+.app-dialog-msg{
+  color:var(--fg);font-size:.95rem;line-height:1.45;
+  white-space:pre-wrap;word-break:break-word;
+  margin:.25rem 0 1rem;max-height:50vh;overflow:auto;
+}
+.app-dialog-actions{display:flex;gap:.5rem;justify-content:flex-end;flex-wrap:wrap}
+.app-dialog-actions .btn{min-width:88px;height:44px}
+
+/* Lista de archivos en subida múltiple */
+.upload-files-list{display:flex;flex-direction:column;gap:.75rem;margin:.35rem 0 1rem}
+.upload-file-row{
+  padding:.75rem;border-radius:12px;background:#ffffff0a;
+  border:1px solid #ffffff10;
+}
+.upload-file-name{
+  font-weight:650;font-size:.88rem;word-break:break-word;
+  margin-bottom:.45rem;color:var(--fg);
+}
+.upload-file-name small{color:var(--mut);font-weight:500}
+
 /* Chips de serie al editar cómic */
 .series-pick{display:flex;flex-wrap:wrap;gap:6px;margin:.35rem 0 .5rem}
 .series-chip{

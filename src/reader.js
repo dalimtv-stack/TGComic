@@ -23,7 +23,8 @@ export function createReader(state, d) {
   // Android: CSS + Fullscreen API (única forma de ocultar barra de sistema y del navegador).
   // El aviso del navegador al entrar es inevitable en Chrome Android; sin API las barras no se ocultan.
   const isAndroid = /Android/i.test(navigator.userAgent || '');
-  let fsRequested = false;
+  // Fullscreen nativo lo gestiona main.js a nivel de app (un solo aviso).
+  // Aquí solo CSS de inmersión del lector.
   function enterReaderFullscreen() {
     try {
       document.documentElement.classList.add('reader-fs');
@@ -33,18 +34,6 @@ export function createReader(state, d) {
       document.documentElement.style.height = '100%';
       document.body.style.height = '100%';
     } catch (_) {}
-    // Fullscreen real: oculta status bar + nav bar Android y chrome del navegador
-    if (isAndroid && !fsRequested) {
-      fsRequested = true;
-      const root = document.documentElement;
-      const req = root.requestFullscreen || root.webkitRequestFullscreen || root.webkitRequestFullScreen;
-      if (typeof req === 'function') {
-        try {
-          const p = req.call(root, { navigationUI: 'hide' });
-          if (p && typeof p.catch === 'function') p.catch(() => {});
-        } catch (_) {}
-      }
-    }
   }
   function exitReaderFullscreen() {
     try {
@@ -55,18 +44,7 @@ export function createReader(state, d) {
       document.documentElement.style.height = '';
       document.body.style.height = '';
     } catch (_) {}
-    if (fsRequested) {
-      fsRequested = false;
-      try {
-        if (document.fullscreenElement || document.webkitFullscreenElement) {
-          const ex = document.exitFullscreen || document.webkitExitFullscreen;
-          if (typeof ex === 'function') {
-            const p = ex.call(document);
-            if (p && typeof p.catch === 'function') p.catch(() => {});
-          }
-        }
-      } catch (_) {}
-    }
+    // No salir del Fullscreen nativo: la app Android sigue a pantalla completa
   }
   function sizeReaderEl(rd) {
     if (!rd) return;

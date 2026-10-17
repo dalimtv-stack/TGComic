@@ -62,6 +62,78 @@ function resetMobileViewport() {
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 
+/** Diálogos centrados (sustituyen alert/confirm nativos que en PC salen arriba). */
+function appDialog({ title = '', message = '', confirmText = 'Aceptar', cancelText = null } = {}) {
+  return new Promise((resolve) => {
+    document.querySelectorAll('.app-dialog').forEach((n) => n.remove());
+    const bg = el('div', 'app-dialog');
+    const box = el('div', 'app-dialog-box');
+    if (title) box.append(el('div', 'app-dialog-title', title));
+    const msg = el('div', 'app-dialog-msg');
+    msg.textContent = message || '';
+    box.append(msg);
+    const actions = el('div', 'app-dialog-actions');
+    const finish = (val) => { try { bg.remove(); } catch (_) {} resolve(val); };
+    if (cancelText != null) {
+      const c = el('button', 'btn', cancelText);
+      c.onclick = () => finish(false);
+      actions.append(c);
+    }
+    const ok = el('button', 'btn edit-save', confirmText);
+    ok.onclick = () => finish(true);
+    actions.append(ok);
+    box.append(actions);
+    bg.append(box);
+    bg.addEventListener('click', (ev) => { if (ev.target === bg && cancelText != null) finish(false); });
+    document.body.append(bg);
+    try { ok.focus(); } catch (_) {}
+  });
+}
+function appAlert(message, title = '') {
+  return appDialog({ title, message, confirmText: 'Aceptar', cancelText: null });
+}
+function appConfirm(message, title = '') {
+  return appDialog({ title, message, confirmText: 'Sí', cancelText: 'No' });
+}
+// Exponer para upload/repack
+try {
+  window.appAlert = appAlert;
+  window.appConfirm = appConfirm;
+} catch (_) {}
+
+/** Android: pantalla completa de toda la app (una sola vez → un solo aviso del navegador). */
+(() => {
+  const isAndroid = /Android/i.test(navigator.userAgent || '');
+  if (!isAndroid) return;
+  let done = false;
+  const request = () => {
+    if (done) return;
+    const root = document.documentElement;
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+      done = true;
+      return;
+    }
+    const req = root.requestFullscreen || root.webkitRequestFullscreen || root.webkitRequestFullScreen;
+    if (typeof req !== 'function') return;
+    try {
+      const p = req.call(root, { navigationUI: 'hide' });
+      done = true;
+      if (p && typeof p.catch === 'function') {
+        p.catch(() => { done = false; });
+      }
+    } catch (_) {
+      done = false;
+    }
+  };
+  const onGesture = () => request();
+  ['pointerdown', 'touchstart', 'click'].forEach((ev) => {
+    document.addEventListener(ev, onGesture, { passive: true, capture: true });
+  });
+  document.addEventListener('fullscreenchange', () => {
+    if (document.fullscreenElement) done = true;
+  });
+})();
+
 /** Bloquea el scroll de la webapp detrás de Información / formularios (Android). */
 function lockAppScroll() {
   if (document.body.classList.contains('body-scroll-lock')) return;
