@@ -1365,6 +1365,7 @@ function showCaptionEditor(ch, f, after) {
       if (detail.volume) inpSeries.value = detail.volume;
       if (detail.writers?.length) inpWriter.value = detail.writers.join(' | ');
       if (detail.artists?.length) inpArtist.value = detail.artists.join(' | ');
+      if (detail.publisher) inpPub.value = detail.publisher;
       if (detail.coverDate) inpDate.value = detail.coverDate;
       if (detail.description) inpDesc.value = detail.description;
     },
@@ -1439,10 +1440,9 @@ function showComicVinePicker(ch, f, { onPick } = {}) {
         if (r.coverDate) sub.push(r.coverDate);
         if (r.volume) sub.push(r.volume);
         if (sub.length) btn.append(el('span', 'cv-sub', sub.join(' · ')));
-        const pg = (r.pageCount != null && !Number.isNaN(r.pageCount))
-          ? ('Páginas (Comic Vine): ' + r.pageCount)
-          : 'Páginas (Comic Vine): —';
-        btn.append(el('span', 'cv-pages', pg));
+        btn.append(el('span', 'cv-pages',
+          r.publisher ? ('Editorial: ' + r.publisher) : 'Editorial: —'
+        ));
         btn.onclick = async () => {
           btn.disabled = true;
           status.textContent = 'Cargando ficha…';
@@ -1611,52 +1611,9 @@ function showEditComicTitle(ch, f, currentLabel, after) {
   const fichaBtn = el('button', 'btn cover-pick-device', 'Ficha Telegram completa…');
   fichaBtn.type = 'button';
   fichaBtn.onclick = () => {
-    // No cerramos el form de título; abrimos ficha encima
     showCaptionEditor(ch, f, after);
   };
   body.append(fichaBtn);
-
-  const metaChk = el('input');
-  metaChk.type = 'checkbox';
-  metaChk.checked = false; // siempre desmarcado por defecto
-  const metaLab = el('label', 'repack-check');
-  metaLab.append(metaChk, document.createTextNode(' Ficha en Telegram (caption)'));
-  body.append(metaLab);
-  const metaBox = el('div', 'meta-telegram-box');
-  metaBox.hidden = true;
-  let metaDirty = false;
-  const markDirty = () => { metaDirty = true; };
-  const mkField = (lab, val, ph) => {
-    metaBox.append(el('label', 'sync-label', lab));
-    const inp = el('input', 'edit-input');
-    inp.type = 'text';
-    inp.value = val || '';
-    inp.placeholder = ph || '';
-    inp.autocomplete = 'off';
-    inp.addEventListener('input', markDirty);
-    metaBox.append(inp);
-    return inp;
-  };
-  const inpFileName = mkField('Nombre de archivo', cap.fileName || (f?.name || ''));
-  const inpTitleEs = mkField('Título España', cap.titleEs);
-  const inpOrig = mkField('Título original', cap.originalTitle);
-  const inpCapSeries = mkField('Serie', cap.series);
-  const inpWriter = mkField('Guionista', cap.writer, 'Nombre1 | Nombre2');
-  const inpArtist = mkField('Dibujante', cap.artist, 'Nombre1 | Nombre2');
-  const inpPub = mkField('Editorial', cap.publisher);
-  const inpDate = mkField('Fecha de publicación', cap.date, 'MM/AAAA o AAAA');
-  metaBox.append(el('label', 'sync-label', 'Descripción'));
-  const inpDesc = el('textarea', 'edit-input meta-desc');
-  inpDesc.rows = 3;
-  inpDesc.value = cap.description || '';
-  inpDesc.placeholder = 'Texto libre (saltos de línea permitidos)';
-  inpDesc.addEventListener('input', markDirty);
-  metaBox.append(inpDesc);
-  body.append(metaBox);
-  metaChk.onchange = () => {
-    metaBox.hidden = !metaChk.checked;
-    if (metaChk.checked) markDirty();
-  };
 
   const actions = el('div', 'edit-actions');
   const cancel = el('button', 'btn', 'Cancelar');
@@ -1690,35 +1647,7 @@ function showEditComicTitle(ch, f, currentLabel, after) {
     }
 
     setComicDisplayName(ch, f, titleSave, () => {
-      setComicSeries(ch, f, seriesSave, async () => {
-        if (metaChk.checked && metaDirty) {
-          const caption = buildComicCaption({
-            fileName: inpFileName?.value || f?.name || '',
-            titleEs: inpTitleEs.value,
-            originalTitle: inpOrig.value,
-            series: inpCapSeries.value,
-            writer: inpWriter.value,
-            artist: inpArtist.value,
-            publisher: inpPub.value,
-            date: inpDate.value,
-            description: inpDesc.value,
-          });
-          try {
-            f.caption = caption;
-            try {
-              const files = (await kv.get('f:' + ch.id)) || [];
-              const i = files.findIndex((x) => String(x.id) === String(f.id));
-              if (i >= 0) {
-                files[i] = { ...files[i], caption };
-                await kv.set('f:' + ch.id, files);
-              }
-            } catch (_) {}
-            await updateTelegramCaption(ch, f, caption);
-          } catch (e) {
-            console.warn('[caption]', e);
-            alert('Ficha guardada en la app. Telegram: ' + (e?.message || e));
-          }
-        }
+      setComicSeries(ch, f, seriesSave, () => {
         frame.remove();
         after?.();
       });
@@ -2792,13 +2721,18 @@ function groupsView() {
             const meta = el('div', 'continue-meta');
             const channelLab = channelDisplayName(ch) || ch.name || '';
             let seriesLab = '';
+            let titleLab = '';
             try {
               const ov = getComicSeriesOverride(ch, f);
               const p = parseComicName(f.name, ch.name);
               const sk = (ov != null && String(ov).trim()) ? String(ov).trim() : (p?.series || seriesBase(f.name, ch.name) || '');
               seriesLab = sk ? (seriesDisplayName(ch, sk) || sk) : '';
-            } catch (_) {}
-            const titleLab = comicDisplayName(ch, f, comicDisplay(f.name, ch.name) || clean(f.name));
+              // Mismo formato que el listado dentro de una serie (#nn - info)
+              const baseLabel = p ? issueDisplay(p) : (issueLabel(sk || seriesLab, f, ch.name) || comicDisplay(f.name, ch.name) || clean(f.name));
+              titleLab = comicDisplayName(ch, f, baseLabel);
+            } catch (_) {
+              titleLab = comicDisplayName(ch, f, comicDisplay(f.name, ch.name) || clean(f.name));
+            }
             if (channelLab) meta.append(el('span', 'continue-channel', channelLab));
             if (seriesLab) meta.append(el('span', 'continue-series', seriesLab));
             meta.append(el('span', 'continue-title', titleLab));
