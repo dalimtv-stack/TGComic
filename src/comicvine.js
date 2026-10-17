@@ -15,7 +15,7 @@ export function comicVineConfigured() {
   return !!API_KEY;
 }
 
-function jsonp(url) {
+function rawJsonp(url) {
   return new Promise((resolve, reject) => {
     const cb = 'cv_cb_' + Date.now() + '_' + Math.floor(Math.random() * 1e6);
     const script = document.createElement('script');
@@ -46,6 +46,112 @@ function apiUrl(path, params = {}) {
   const q = new URLSearchParams({ api_key: API_KEY, ...params });
   return BASE + path + (path.includes('?') ? '&' : '?') + q.toString();
 }
+
+// ===== Capa de peticiones: caché, ritmo y contador por hora =====
+// Comic Vine admite ~200 peticiones por recurso y hora y bloquea si van demasiado rápido.
+const HOUR = 3600 * 1000;
+const CACHE_TTL = 7 * 24 * HOUR;   // respuestas con datos
+const EMPTY_TTL = HOUR;            // respuestas vacías: se reintentan antes
+const SOFT_LIMIT = 170;            // margen de seguridad por recurso y hora
+const MIN_GAP = 450;               // ms entre peticiones
+const BLOCK_MS = 30 * 60 * 1000;   // pausa si Comic Vine dice "límite"
+// Cuántas consultas/volúmenes se prueban por búsqueda (súbelos si te quedas corto)
+const MAX_ISSUE_QUERIES = 3, MAX_VOLUME_QUERIES = 3, MAX_VOLUMES = 4;
+
+export class ComicVineLimitError extends Error {
+  constructor(seg, until) {
+    const min = Math.max(1, Math.ceil((until - Date.now()) / 60000));
+    super(`Comic Vine: límite de peticiones alcanzado (/${seg}). Prueba de nuevo en ~${min} min.`);
+    this.name = 'ComicVineLimitError';
+    this.until = until;
+  }
+}
+let limitHit = null;
+const lsGet = (k, d) => { try { return JSON.parse(localStorage.getItem(k) || 'null') ?? d; } catch (_) { return d; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) {} };
+const segOf = (path) => (String(path).match(/^\/([a-z]+)/i) || [])[1] || 'x';
+
+const idb = (() => {
+  let p;
+  const open = () => p || (p = new Promise((res, rej) => {
+    try {
+      const r = indexedDB.open('cv-cache', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('r');
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    } catch (e) { rej(e); }
+  }));
+  const run = async (mode, fn) => {
+    const db = await open();
+    return new Promise((res, rej) => { const t = db.transaction('r', mode); const q = fn(t.objectStore('r')); t.oncomplete = () => res(q && q.result); t.onerror = () => rej(t.error); });
+  };
+  return { get: (k) => run('readonly', (st) => st.get(k)).catch(() => undefined), set: (k, v) => run('readwrite', (st) => st.put(v, k)).catch(() => {}) };
+})();
+
+let gate = Promise.resolve(), lastAt = 0;
+const paced = (fn) => {
+  const my = gate.then(async () => {
+    const w = lastAt + MIN_GAP - Date.now();
+    if (w > 0) await new Promise((r) => setTimeout(r, w));
+    lastAt = Date.now();
+  });
+  gate = my.catch(() => {});
+  return my.then(fn);
+};
+
+function limitCheck(seg) {
+  const now = Date.now();
+  const until = lsGet('cv:blocked', {})[seg];
+  if (until && until > now) throw new ComicVineLimitError(seg, until);
+  const list = (lsGet('cv:usage', {})[seg] || []).filter((t) => now - t < HOUR);
+  if (list.length >= SOFT_LIMIT) throw new ComicVineLimitError(seg, list[0] + HOUR);
+}
+function noteUse(seg) {
+  const now = Date.now(), u = lsGet('cv:usage', {});
+  u[seg] = (u[seg] || []).filter((t) => now - t < HOUR).concat(now);
+  lsSet('cv:usage', u);
+}
+function noteBlocked(seg) { const b = lsGet('cv:blocked', {}); b[seg] = Date.now() + BLOCK_MS; lsSet('cv:blocked', b); return b[seg]; }
+const isLimited = (d) => !!d && (d.status_code === 107 || /rate limit|slow down|too many/i.test(String(d.error || '')));
+
+const inflight = new Map();
+function cvGet(path, params = {}) {
+  const key = path + '?' + Object.keys(params).sort().map((k) => k + '=' + params[k]).join('&');
+  if (inflight.has(key)) return inflight.get(key);
+  const seg = segOf(path);
+  const p = (async () => {
+    const hit = await idb.get(key);
+    if (hit && Date.now() - hit.t < (hit.empty ? EMPTY_TTL : CACHE_TTL)) return hit.d;
+    try { limitCheck(seg); } catch (e) { limitHit = e; throw e; }
+    const data = await paced(() => { noteUse(seg); return rawJsonp(apiUrl(path, params)); });
+    if (isLimited(data)) { const e = new ComicVineLimitError(seg, noteBlocked(seg)); limitHit = e; throw e; }
+    if (data && data.error === 'OK') {
+      const r = data.results;
+      idb.set(key, { t: Date.now(), d: data, empty: Array.isArray(r) ? r.length === 0 : !r });
+    }
+    return data;
+  })().finally(() => inflight.delete(key));
+  inflight.set(key, p);
+  return p;
+}
+// Los puntos de llamada existentes siguen usando jsonp(url): ahora pasan por la caché y el limitador
+function jsonp(url) {
+  const u = new URL(url);
+  const params = Object.fromEntries(u.searchParams);
+  delete params.api_key; delete params.format; delete params.json_callback;
+  return cvGet(u.pathname.replace(/^\/api/, ''), params);
+}
+
+/** Uso de esta sesión por recurso y pausas activas (para mostrarlo en la interfaz si quieres) */
+export function comicVineStatus() {
+  const now = Date.now(), usage = lsGet('cv:usage', {}), blocked = lsGet('cv:blocked', {}), out = {};
+  for (const seg of new Set([...Object.keys(usage), ...Object.keys(blocked)])) {
+    out[seg] = { usadas: (usage[seg] || []).filter((t) => now - t < HOUR).length, pausadoHasta: blocked[seg] > now ? blocked[seg] : 0 };
+  }
+  return out;
+}
+/** Quita la pausa local (úsalo cuando ya se haya reiniciado el límite en Comic Vine) */
+export function comicVineClearBlock() { try { localStorage.removeItem('cv:blocked'); } catch (_) {} }
 
 function volumeDetailUrl(volume) {
   if (!volume) return '';
@@ -223,6 +329,7 @@ export async function searchIssuesSmart(opts = {}) {
   const number = String(opts.number || '').replace(/^#/, '').trim();
   const numNorm = normNum(number);
 
+  limitHit = null;
   const seen = new Set();
   const out = [];
   const add = (arr) => {
@@ -248,7 +355,7 @@ export async function searchIssuesSmart(opts = {}) {
   const uniqIssueQ = [...new Set(issueQueries.map((s) => s.trim()).filter(Boolean))];
   // Paralelo pero todas las queries (hasta 6)
   const issueBatches = await Promise.all(
-    uniqIssueQ.slice(0, 6).map((q) => searchIssues(q, 30).catch(() => []))
+    uniqIssueQ.slice(0, MAX_ISSUE_QUERIES).map((q) => searchIssues(q, 30).catch(() => []))
   );
   for (const b of issueBatches) add(b);
 
@@ -277,7 +384,7 @@ export async function searchIssuesSmart(opts = {}) {
   const uniqVolQ = [...new Set(volQueries.map((s) => s.trim()).filter(Boolean))];
 
   const volLists = await Promise.all(
-    uniqVolQ.slice(0, 6).map((vq) => searchVolumes(vq, 10).catch(() => []))
+    uniqVolQ.slice(0, MAX_VOLUME_QUERIES).map((vq) => searchVolumes(vq, 10).catch(() => []))
   );
   const vols = [];
   const seenV = new Set();
@@ -304,7 +411,7 @@ export async function searchIssuesSmart(opts = {}) {
 
   // Misma cobertura de antes: varios volúmenes, TODOS sus issues
   // (antes el cómic salía; no limitar a 2)
-  const topVols = vols.slice(0, 8);
+  const topVols = vols.slice(0, MAX_VOLUMES);
   const issueLists = await Promise.all(
     topVols.map(async (v) => {
       const list = await listIssuesForVolume(v.id, null, 100).catch(() => []);
@@ -343,6 +450,7 @@ export async function searchIssuesSmart(opts = {}) {
   // Editorial en cada resultado (por volume, en paralelo)
   const limited = out.slice(0, 80);
   await attachPublishers(limited);
+  if (!limited.length && limitHit) throw limitHit; // avisa del límite en vez de mostrar una lista vacía
   return limited;
 }
 
