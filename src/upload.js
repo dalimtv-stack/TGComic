@@ -7,6 +7,7 @@
 import * as zip from '@zip.js/zip.js';
 import { createExtractorFromData } from 'node-unrar-js';
 import rarWasm from 'node-unrar-js/esm/js/unrar.wasm?url';
+import { buildComicCaption } from './parse.js';
 
 const SEP = '::';
 const TSEP = ':';
@@ -758,6 +759,54 @@ export function createUploadTool(d) {
       webpOptsBox.append(qualityLab, qualityInp, resizeRow);
       asWebpChk.onchange = () => { webpOptsBox.hidden = !asWebpChk.checked; };
 
+      // Caption Telegram: siempre se envía al menos "Nombre de archivo"
+      const metaChk = el('input');
+      metaChk.type = 'checkbox';
+      metaChk.checked = false;
+      const metaLab = el('label', 'repack-check');
+      metaLab.append(metaChk, document.createTextNode(' Añadir ficha al caption (Telegram)'));
+      const metaBox = el('div', 'meta-telegram-box');
+      metaBox.hidden = true;
+      const mkMeta = (lab, ph) => {
+        metaBox.append(el('label', 'sync-label', lab));
+        const inp = el('input', 'edit-input');
+        inp.type = 'text';
+        inp.placeholder = ph || '';
+        inp.autocomplete = 'off';
+        inp._touched = false;
+        inp.addEventListener('input', () => { inp._touched = true; });
+        metaBox.append(inp);
+        return inp;
+      };
+      const metaTitleEs = mkMeta('Título España');
+      const metaOrig = mkMeta('Título original');
+      const metaCapSeries = mkMeta('Serie');
+      const metaWriter = mkMeta('Guionista', 'Nombre1 | Nombre2');
+      const metaArtist = mkMeta('Dibujante', 'Nombre1 | Nombre2');
+      const metaPub = mkMeta('Editorial');
+      const metaDate = mkMeta('Fecha de publicación', 'MM/AAAA o AAAA');
+      metaBox.append(el('label', 'sync-label', 'Descripción'));
+      const metaDesc = el('textarea', 'edit-input meta-desc');
+      metaDesc.rows = 3;
+      metaDesc.placeholder = 'Texto libre (saltos de línea permitidos)';
+      metaDesc._touched = false;
+      metaDesc.addEventListener('input', () => { metaDesc._touched = true; });
+      metaBox.append(metaDesc);
+
+      const fillMetaFromForm = () => {
+        if (!metaCapSeries._touched) metaCapSeries.value = String(seriesInp.value || '').trim();
+        if (!metaPub._touched) {
+          const ed = editorialSel.value === '__new__'
+            ? editorialInp.value.trim()
+            : editorialSel.value;
+          metaPub.value = ed || '';
+        }
+      };
+      metaChk.onchange = () => {
+        metaBox.hidden = !metaChk.checked;
+        if (metaChk.checked) fillMetaFromForm();
+      };
+
       const filesSec = el('div', 'info-sec', 'Cómics a subir');
       const filesHint = el('p', 'cover-pick-hint', 'Por cada archivo: numeración e info (como antes). La serie de arriba es común.');
       const filesList = el('div', 'upload-files-list');
@@ -937,6 +986,8 @@ export function createUploadTool(d) {
           maxEdge: 2400,
         };
 
+        const useMeta = !!metaChk.checked;
+        if (useMeta) fillMetaFromForm();
         const jobs = rows.map((row) => {
           let outName = String(row.nameInp.value || '').trim();
           if (!outName || !row.nameTouched) {
@@ -950,7 +1001,22 @@ export function createUploadTool(d) {
           } else {
             outName = ensureCbzName(outName, wantWebp);
           }
-          return { file: row.file, outName };
+          // Siempre: "Nombre de archivo" (+ ficha opcional)
+          const baseName = outName.replace(/\.cb[zr]$/i, '').trim();
+          const caption = useMeta
+            ? buildComicCaption({
+                fileName: outName,
+                titleEs: metaTitleEs.value || baseName,
+                originalTitle: metaOrig.value || metaTitleEs.value || baseName,
+                series: metaCapSeries.value || seriesInp.value,
+                writer: metaWriter.value,
+                artist: metaArtist.value,
+                publisher: metaPub.value || ed,
+                date: metaDate.value,
+                description: metaDesc.value,
+              })
+            : buildComicCaption({ fileName: outName });
+          return { file: row.file, outName, caption };
         });
 
         const summary = jobs.length === 1
@@ -983,6 +1049,7 @@ export function createUploadTool(d) {
         for (const job of jobs) {
           const fileRef = job.file;
           const outName = job.outName;
+          const captionText = job.caption || buildComicCaption({ fileName: outName });
           const runOne = async (ctx) => {
             let ch = null;
             const st = (msg) => {
@@ -1019,7 +1086,7 @@ export function createUploadTool(d) {
               st('[' + outName + '] Subiendo…');
               ctx.setProgress(70);
               // uploadCbz(ch, fileName, blob, caption, status)
-              await uploadCbz(ch, outName, blob, undefined, st);
+              await uploadCbz(ch, outName, blob, captionText, st);
               ctx.setProgress(100);
               st('[' + outName + '] Listo');
               // Actualizar caché del canal y refrescar la vista actual si es ese canal/serie
@@ -1081,6 +1148,7 @@ export function createUploadTool(d) {
       body.append(includeChRow);
       body.append(filesSec, filesHint, filesList);
       body.append(webpRow, webpOptsBox);
+      body.append(metaLab, metaBox);
       body.append(status);
       actions.append(cancel, goBtn);
       body.append(actions);

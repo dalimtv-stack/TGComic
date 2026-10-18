@@ -101,13 +101,14 @@ try {
   window.appConfirm = appConfirm;
 } catch (_) {}
 
-/** Android: pantalla completa de toda la app (una sola vez → un solo aviso del navegador). */
+/** Android: pantalla completa de toda la app (reintenta hasta lograrlo; un solo aviso al éxito). */
 (() => {
   const isAndroid = /Android/i.test(navigator.userAgent || '');
   if (!isAndroid) return;
   let done = false;
+  let pending = false;
   const request = () => {
-    if (done) return;
+    if (done || pending) return;
     const root = document.documentElement;
     if (document.fullscreenElement || document.webkitFullscreenElement) {
       done = true;
@@ -115,22 +116,32 @@ try {
     }
     const req = root.requestFullscreen || root.webkitRequestFullscreen || root.webkitRequestFullScreen;
     if (typeof req !== 'function') return;
+    pending = true;
     try {
       const p = req.call(root, { navigationUI: 'hide' });
-      done = true;
-      if (p && typeof p.catch === 'function') {
-        p.catch(() => { done = false; });
+      if (p && typeof p.then === 'function') {
+        p.then(() => { done = true; pending = false; })
+          .catch(() => { pending = false; });
+      } else {
+        // Safari viejo: esperamos fullscreenchange
+        pending = false;
       }
     } catch (_) {
-      done = false;
+      pending = false;
     }
   };
-  const onGesture = () => request();
+  const onGesture = () => { if (!done) request(); };
   ['pointerdown', 'touchstart', 'click'].forEach((ev) => {
     document.addEventListener(ev, onGesture, { passive: true, capture: true });
   });
   document.addEventListener('fullscreenchange', () => {
-    if (document.fullscreenElement) done = true;
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+      done = true;
+      pending = false;
+    } else {
+      // Si el usuario sale de FS, no forzar de nuevo automáticamente
+      done = true;
+    }
   });
 })();
 
@@ -149,6 +160,8 @@ function lockAppScroll() {
 }
 function unlockAppScroll() {
   if (document.querySelector('.info-frame, .sheet')) return;
+  // Si no estaba bloqueado, no tocar el scroll (evita parpadeo / saltos a top)
+  if (!document.body.classList.contains('body-scroll-lock')) return;
   const y = Math.max(0, +(document.body.dataset.lockY || 0) || 0);
   document.body.classList.remove('body-scroll-lock');
   document.documentElement.classList.remove('body-scroll-lock');
@@ -1267,6 +1280,9 @@ function bindLongPress(node, fn, ms = 480) {
   node.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     e.stopPropagation();
+    // Permitir reabrir en el mismo nodo tras cerrar el menú
+    opened = false;
+    armed = false;
     openOnce(e);
   }, true);
   node.addEventListener('click', (e) => {
