@@ -228,6 +228,29 @@ function mergeKeyMaps(localKeys, remoteKeys) {
       } catch (_) {
         out[k] = rv || lv;
       }
+    } else if (k === 'contentLocks') {
+      // Gana la versión con updatedAt más alto (no borrar locks de otro dispositivo)
+      try {
+        const L = JSON.parse(lv || '{}') || {};
+        const R = JSON.parse(rv || '{}') || {};
+        const la = Number(L.updatedAt) || 0;
+        const ra = Number(R.updatedAt) || 0;
+        if (ra > la) out[k] = rv;
+        else if (la > ra) out[k] = lv;
+        else {
+          // Empate o sin marca: unión de listas (más seguro que perder un bloqueo)
+          const union = (a, b) => [...new Set([...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])].map(String))];
+          out[k] = JSON.stringify({
+            groups: union(L.groups, R.groups),
+            channels: union(L.channels, R.channels),
+            series: union(L.series, R.series),
+            comics: union(L.comics, R.comics),
+            updatedAt: Math.max(la, ra, Date.now()),
+          });
+        }
+      } catch (_) {
+        out[k] = rv || lv;
+      }
     } else {
       // prefs, renombres, etc.: el remoto (nube) actualiza al abrir
       out[k] = rv;

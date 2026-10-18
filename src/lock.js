@@ -21,9 +21,10 @@ function readLocks() {
       channels: Array.isArray(o.channels) ? o.channels.map(String) : [],
       series: Array.isArray(o.series) ? o.series.map(String) : [],
       comics: Array.isArray(o.comics) ? o.comics.map(String) : [],
+      updatedAt: Number(o.updatedAt) || 0,
     };
   } catch (_) {
-    return { groups: [], channels: [], series: [], comics: [] };
+    return { groups: [], channels: [], series: [], comics: [], updatedAt: 0 };
   }
 }
 
@@ -33,6 +34,9 @@ function writeLocks(o) {
     channels: [...new Set(o.channels || [])],
     series: [...new Set(o.series || [])],
     comics: [...new Set(o.comics || [])],
+    // Marca temporal: al sincronizar gana la versión más reciente
+    // (evita que un dispositivo sin locks borre los del otro)
+    updatedAt: Date.now(),
   }));
   try { sync.schedulePush(); } catch (_) {}
 }

@@ -50,6 +50,7 @@ export async function buildSearchIndex(deps) {
         sub: 'Editorial',
         searchText: (gl + ' ' + g).toLowerCase(),
         go: () => openGroup(g),
+        group: g,
       });
     }
 
@@ -83,6 +84,7 @@ export async function buildSearchIndex(deps) {
           searchText: (seriesShown + ' ' + seriesLabel + ' ' + cl).toLowerCase(),
           go: () => openSeries(ch, seriesLabel, fs),
           ch,
+          seriesLabel,
         });
       }
       for (const f of fs) {

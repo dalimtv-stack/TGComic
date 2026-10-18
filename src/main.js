@@ -3303,14 +3303,14 @@ function groupsView() {
       const g = el('div', 'grid grid-pubs');
       const redrawPubs = () => groupsView();
       for (const name of gs) {
+        // Editorial bloqueada + candado cerrado → no se muestra en Home
+        if (locks.isContentRestricted('group', name)) continue;
         const n = LIB.filter((c) => c.group === name).length;
         const label = groupDisplayName(name);
-        const gRestricted = locks.isContentRestricted('group', name);
         g.append(cardNode({
-          label: gRestricted ? '' : label,
-          sub: gRestricted ? '' : (n === 1 ? '1 canal' : `${n} canales`),
-          hiddenMeta: gRestricted,
-          cover: () => gRestricted ? locks.lockedCoverNode(ART) : groupCoverNode(name),
+          label,
+          sub: n === 1 ? '1 canal' : `${n} canales`,
+          cover: () => groupCoverNode(name),
           go: () => {
             if (!locks.guardRestricted('group', name, label)) return;
             channelsView(name);
@@ -3399,6 +3399,16 @@ function groupsView() {
       timer = setTimeout(async () => {
         const idx = await ensureIndex();
         let hits = filterSearchIndex(idx, q);
+        // Ocultar resultados de contenido bloqueado (candado cerrado)
+        hits = hits.filter((item) => {
+          try {
+            if (item.type === 'group') return !locks.isContentRestricted('group', item.group || item.label);
+            if (item.type === 'channel') return !locks.isContentRestricted('channel', item.ch);
+            if (item.type === 'series') return !locks.isContentRestricted('series', { ch: item.ch, seriesLabel: item.seriesLabel });
+            if (item.type === 'comic') return !locks.isContentRestricted('comic', { ch: item.ch, f: item.f });
+          } catch (_) {}
+          return true;
+        });
         if (pref('showUnreadOnly', '0') === '1') {
           hits = hits.filter((h) => {
             if (h.type === 'comic' && h.ch && h.f) return !isComicRead(h.ch.id, h.f.id);
