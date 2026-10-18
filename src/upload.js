@@ -8,6 +8,12 @@ import * as zip from '@zip.js/zip.js';
 import { createExtractorFromData } from 'node-unrar-js';
 import rarWasm from 'node-unrar-js/esm/js/unrar.wasm?url';
 import { buildComicCaption } from './parse.js';
+import {
+  comicVineConfigured,
+  searchIssuesSmart,
+  fetchIssueDetail,
+  buildSearchQuery,
+} from './comicvine.js';
 
 const SEP = '::';
 const TSEP = ':';
@@ -759,60 +765,139 @@ export function createUploadTool(d) {
       webpOptsBox.append(qualityLab, qualityInp, resizeRow);
       asWebpChk.onchange = () => { webpOptsBox.hidden = !asWebpChk.checked; };
 
-      // Caption Telegram: siempre se envía al menos "Nombre de archivo"
-      const metaChk = el('input');
-      metaChk.type = 'checkbox';
-      metaChk.checked = false;
-      const metaLab = el('label', 'repack-check');
-      metaLab.append(metaChk, document.createTextNode(' Añadir ficha al caption (Telegram)'));
-      const metaBox = el('div', 'meta-telegram-box');
-      metaBox.hidden = true;
-      const mkMeta = (lab, ph) => {
-        metaBox.append(el('label', 'sync-label', lab));
-        const inp = el('input', 'edit-input');
-        inp.type = 'text';
-        inp.placeholder = ph || '';
-        inp.autocomplete = 'off';
-        inp._touched = false;
-        inp.addEventListener('input', () => { inp._touched = true; });
-        metaBox.append(inp);
-        return inp;
-      };
-      const metaTitleEs = mkMeta('Título España');
-      const metaOrig = mkMeta('Título original');
-      const metaCapSeries = mkMeta('Serie');
-      const metaWriter = mkMeta('Guionista', 'Nombre1 | Nombre2');
-      const metaArtist = mkMeta('Dibujante', 'Nombre1 | Nombre2');
-      const metaPub = mkMeta('Editorial');
-      const metaDate = mkMeta('Fecha de publicación', 'MM/AAAA o AAAA');
-      metaBox.append(el('label', 'sync-label', 'Descripción'));
-      const metaDesc = el('textarea', 'edit-input meta-desc');
-      metaDesc.rows = 3;
-      metaDesc.placeholder = 'Texto libre (saltos de línea permitidos)';
-      metaDesc._touched = false;
-      metaDesc.addEventListener('input', () => { metaDesc._touched = true; });
-      metaBox.append(metaDesc);
-
-      const fillMetaFromForm = () => {
-        if (!metaCapSeries._touched) metaCapSeries.value = String(seriesInp.value || '').trim();
-        if (!metaPub._touched) {
-          const ed = editorialSel.value === '__new__'
-            ? editorialInp.value.trim()
-            : editorialSel.value;
-          metaPub.value = ed || '';
-        }
-      };
-      metaChk.onchange = () => {
-        metaBox.hidden = !metaChk.checked;
-        if (metaChk.checked) fillMetaFromForm();
-      };
-
       const filesSec = el('div', 'info-sec', 'Cómics a subir');
-      const filesHint = el('p', 'cover-pick-hint', 'Por cada archivo: numeración e info (como antes). La serie de arriba es común.');
+      const filesHint = el('p', 'cover-pick-hint', 'Por cada archivo: número, info y ficha de caption (opcional). La serie de arriba es común.');
       const filesList = el('div', 'upload-files-list');
 
-      /** @type {{ file: File, numberInp: HTMLInputElement, infoInp: HTMLInputElement, nameInp: HTMLInputElement, nameTouched: boolean }[]} */
+      /** @type {any[]} */
       let rows = [];
+
+      /** Identificar un archivo con Comic Vine y rellenar su ficha. */
+      const identifyForRow = (row) => {
+        document.querySelector('.info-frame.cv-picker-upload')?.remove();
+        const frame = el('div', 'info-frame cv-picker-upload');
+        const box = el('div', 'info-box');
+        const head = el('div', 'info-head');
+        head.append(el('span', '', 'Identificar (Comic Vine)'));
+        const close = el('button', 'btn info-close', '×');
+        close.onclick = () => frame.remove();
+        head.append(close);
+        const body = el('div', 'info-body');
+        const seriesQ = String(seriesInp.value || '').trim();
+        const numberQ = String(row.numberInp.value || '').replace(/^#/, '').trim();
+        const qDefault = buildSearchQuery({
+          channel: currentChannelName(),
+          series: seriesQ,
+          number: numberQ,
+          fileName: row.file?.name || '',
+        });
+        body.append(el('label', 'sync-label', 'Búsqueda'));
+        const qInp = el('input', 'edit-input');
+        qInp.type = 'text';
+        qInp.value = qDefault;
+        body.append(qInp);
+        const searchBtn = el('button', 'btn edit-save', 'Buscar');
+        searchBtn.type = 'button';
+        body.append(searchBtn);
+        const status = el('p', 'sync-status', '');
+        body.append(status);
+        const list = el('div', 'cv-results');
+        body.append(list);
+        const runSearch = async () => {
+          list.replaceChildren();
+          if (!comicVineConfigured()) {
+            status.textContent = 'Configura VITE_COMICVINE_API_KEY.';
+            status.className = 'sync-status sync-err';
+            return;
+          }
+          const q = qInp.value.trim();
+          if (!q) { status.textContent = 'Escribe algo para buscar'; return; }
+          searchBtn.disabled = true;
+          status.className = 'sync-status';
+          status.textContent = 'Buscando…';
+          try {
+            const results = await searchIssuesSmart({
+              query: q,
+              series: seriesQ,
+              number: numberQ,
+            });
+            status.textContent = results.length ? (results.length + ' resultados') : 'Sin resultados';
+            for (const r of results) {
+              const btn = el('button', 'cv-result');
+              btn.type = 'button';
+              const title = [r.volume, r.issueNumber ? ('#' + r.issueNumber) : '', r.name].filter(Boolean).join(' ');
+              btn.append(el('b', '', title || ('Issue ' + r.id)));
+              if (r.publisher || r.coverDate) {
+                btn.append(el('span', 'cv-sub', [r.publisher, r.coverDate].filter(Boolean).join(' · ')));
+              }
+              btn.onclick = async () => {
+                btn.disabled = true;
+                status.textContent = 'Cargando ficha…';
+                try {
+                  let detail = null;
+                  try {
+                    detail = r.apiDetailUrl
+                      ? await fetchIssueDetail(r.apiDetailUrl)
+                      : await fetchIssueDetail(r.id);
+                  } catch (_) {}
+                  if (!detail) {
+                    detail = {
+                      name: r.name,
+                      issueNumber: r.issueNumber,
+                      volume: r.volume,
+                      coverDate: r.coverDate,
+                      publisher: r.publisher || '',
+                      writers: [],
+                      artists: [],
+                      description: '',
+                    };
+                  }
+                  row.fichaChk.checked = true;
+                  row.fichaBox.hidden = false;
+                  const num = String(detail.issueNumber || r.issueNumber || numberQ || '').replace(/^#/, '');
+                  const story = String(detail.name || r.name || '').trim();
+                  let titleLine = '';
+                  if (num && story) titleLine = '#' + num + ' - ' + story;
+                  else if (num) titleLine = '#' + num;
+                  else titleLine = story;
+                  row.titleEsInp.value = titleLine;
+                  row.origInp.value = titleLine;
+                  if (detail.volume) row.capSeriesInp.value = detail.volume;
+                  else if (seriesQ) row.capSeriesInp.value = seriesQ;
+                  row.writerInp.value = (detail.writers && detail.writers.length) ? detail.writers.join(' | ') : '';
+                  row.artistInp.value = (detail.artists && detail.artists.length) ? detail.artists.join(' | ') : '';
+                  row.pubInp.value = detail.publisher || r.publisher || '';
+                  row.dateInp.value = detail.coverDate || r.coverDate || '';
+                  row.descInp.value = detail.description || '';
+                  if (num && !row.numberInp.value) {
+                    row.numberInp.value = num;
+                    updateRowPreview(row);
+                  }
+                  frame.remove();
+                } catch (e) {
+                  status.textContent = e?.message || String(e);
+                  status.className = 'sync-status sync-err';
+                  btn.disabled = false;
+                }
+              };
+              list.append(btn);
+            }
+          } catch (e) {
+            status.textContent = e?.message || String(e);
+            status.className = 'sync-status sync-err';
+          } finally {
+            searchBtn.disabled = false;
+          }
+        };
+        searchBtn.onclick = () => runSearch();
+        qInp.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Enter') { ev.preventDefault(); runSearch(); }
+        });
+        box.append(head, body);
+        frame.append(box);
+        document.body.append(frame);
+        runSearch();
+      };
 
       const currentChannelName = () => {
         if (channelSel.value === '__new__') return channelInp.value.trim();
@@ -889,11 +974,62 @@ export function createUploadTool(d) {
         let nameTouched = false;
         nameInp.oninput = () => { nameTouched = true; row.nameTouched = true; };
 
-        const row = { file, numberInp, infoInp, nameInp, nameTouched: false, rowEl };
+        // Ficha caption por archivo
+        const fichaChk = el('input');
+        fichaChk.type = 'checkbox';
+        fichaChk.checked = false;
+        const fichaLab = el('label', 'repack-check');
+        fichaLab.append(fichaChk, document.createTextNode(' Añadir ficha al caption (Telegram)'));
+        const fichaBox = el('div', 'meta-telegram-box');
+        fichaBox.hidden = true;
+        const mk = (lab, ph, val) => {
+          fichaBox.append(el('label', 'sync-label', lab));
+          const inp = el('input', 'edit-input');
+          inp.type = 'text';
+          inp.placeholder = ph || '';
+          inp.value = val || '';
+          fichaBox.append(inp);
+          return inp;
+        };
+        const edDefault = editorialSel.value === '__new__'
+          ? editorialInp.value.trim()
+          : editorialSel.value;
+        const titleEsInp = mk('Título España', '', '');
+        const origInp = mk('Título original', '', '');
+        const capSeriesInp = mk('Serie', '', seriesInp.value || parsed.series || '');
+        const writerInp = mk('Guionista', 'Nombre1 | Nombre2', '');
+        const artistInp = mk('Dibujante', 'Nombre1 | Nombre2', '');
+        const pubInp = mk('Editorial', '', edDefault || '');
+        const dateInp = mk('Fecha de publicación', 'MM/AAAA o AAAA', '');
+        fichaBox.append(el('label', 'sync-label', 'Descripción'));
+        const descInp = el('textarea', 'edit-input meta-desc');
+        descInp.rows = 3;
+        descInp.placeholder = 'Texto libre';
+        fichaBox.append(descInp);
+        const idBtn = el('button', 'btn-identify', 'Identificar');
+        idBtn.type = 'button';
+        fichaChk.onchange = () => {
+          fichaBox.hidden = !fichaChk.checked;
+          if (fichaChk.checked) {
+            if (!capSeriesInp.value) capSeriesInp.value = seriesInp.value || parsed.series || '';
+            if (!pubInp.value) {
+              pubInp.value = editorialSel.value === '__new__'
+                ? editorialInp.value.trim()
+                : editorialSel.value;
+            }
+          }
+        };
+
+        const row = {
+          file, numberInp, infoInp, nameInp, nameTouched: false, rowEl,
+          fichaChk, fichaBox,
+          titleEsInp, origInp, capSeriesInp, writerInp, artistInp, pubInp, dateInp, descInp,
+        };
+        idBtn.onclick = () => identifyForRow(row);
         numberInp.oninput = () => { row.nameTouched = false; nameTouched = false; updateRowPreview(row); };
         infoInp.oninput = () => { row.nameTouched = false; nameTouched = false; updateRowPreview(row); };
 
-        rowEl.append(head, nLab, numberInp, iLab, infoInp, nameLab, nameInp);
+        rowEl.append(head, nLab, numberInp, iLab, infoInp, nameLab, nameInp, fichaLab, idBtn, fichaBox);
         filesList.append(rowEl);
         rows.push(row);
         updateRowPreview(row);
@@ -986,8 +1122,6 @@ export function createUploadTool(d) {
           maxEdge: 2400,
         };
 
-        const useMeta = !!metaChk.checked;
-        if (useMeta) fillMetaFromForm();
         const jobs = rows.map((row) => {
           let outName = String(row.nameInp.value || '').trim();
           if (!outName || !row.nameTouched) {
@@ -1001,19 +1135,18 @@ export function createUploadTool(d) {
           } else {
             outName = ensureCbzName(outName, wantWebp);
           }
-          // Siempre: "Nombre de archivo" (+ ficha opcional)
-          const baseName = outName.replace(/\.cb[zr]$/i, '').trim();
-          const caption = useMeta
+          // Siempre: "Nombre de archivo"; ficha completa si el check del archivo está activo
+          const caption = row.fichaChk?.checked
             ? buildComicCaption({
                 fileName: outName,
-                titleEs: metaTitleEs.value || baseName,
-                originalTitle: metaOrig.value || metaTitleEs.value || baseName,
-                series: metaCapSeries.value || seriesInp.value,
-                writer: metaWriter.value,
-                artist: metaArtist.value,
-                publisher: metaPub.value || ed,
-                date: metaDate.value,
-                description: metaDesc.value,
+                titleEs: row.titleEsInp?.value || '',
+                originalTitle: row.origInp?.value || row.titleEsInp?.value || '',
+                series: row.capSeriesInp?.value || seriesInp.value,
+                writer: row.writerInp?.value || '',
+                artist: row.artistInp?.value || '',
+                publisher: row.pubInp?.value || ed,
+                date: row.dateInp?.value || '',
+                description: row.descInp?.value || '',
               })
             : buildComicCaption({ fileName: outName });
           return { file: row.file, outName, caption };
@@ -1148,7 +1281,6 @@ export function createUploadTool(d) {
       body.append(includeChRow);
       body.append(filesSec, filesHint, filesList);
       body.append(webpRow, webpOptsBox);
-      body.append(metaLab, metaBox);
       body.append(status);
       actions.append(cancel, goBtn);
       body.append(actions);

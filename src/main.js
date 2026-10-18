@@ -1020,8 +1020,11 @@ addEventListener('popstate', () => { if (stack.length > 1) { stack.pop(); show()
 const msg = (t) => app.replaceChildren(el('div', 'msg', t));
 const alive = (e) => stack[stack.length - 1] === e;
 
-// Gesto atrás (borde izquierdo → derecha) al navegar series/canales/editoriales
+// Gesto atrás (borde izquierdo → derecha) SOLO Android.
+// En iPhone el gesto nativo del sistema ya hace history.back(); duplicarlo hace doble salto.
 (() => {
+  const isAndroid = /Android/i.test(navigator.userAgent || '');
+  if (!isAndroid) return;
   let sx = null, sy = 0;
   const edge = 28;
   const onStart = (e) => {
@@ -1650,13 +1653,31 @@ function showCaptionEditor(ch, f, after, opts = {}) {
     return ctrl;
   };
 
+  // Si no hay dato en el caption de Telegram, rellenar con datos locales (archivo / canal / serie)
+  const localSeries = (() => {
+    try {
+      const ov = getComicSeriesOverride?.(ch, f);
+      if (ov != null && String(ov).trim()) return String(ov).trim();
+    } catch (_) {}
+    return parsed?.series || '';
+  })();
+  const localPublisher = (() => {
+    try {
+      const g = ch?.group;
+      if (!g || g === 'Sin editorial') return '';
+      return (typeof groupDisplayName === 'function' ? groupDisplayName(g) : g) || g;
+    } catch (_) {
+      return ch?.group && ch.group !== 'Sin editorial' ? ch.group : '';
+    }
+  })();
+
   const fileNameCtrl = mkField('Nombre de archivo', cap.fileName || (f?.name || ''));
   const titleEsCtrl = mkField('Título España', cap.titleEs);
   const origCtrl = mkField('Título original', cap.originalTitle);
-  const seriesCtrl = mkField('Serie', cap.series || parsed?.series || '');
+  const seriesCtrl = mkField('Serie', cap.series || localSeries);
   const writerCtrl = mkField('Guionista', cap.writer, 'Nombre1 | Nombre2');
   const artistCtrl = mkField('Dibujante', cap.artist, 'Nombre1 | Nombre2');
-  const pubCtrl = mkField('Editorial', cap.publisher);
+  const pubCtrl = mkField('Editorial', cap.publisher || localPublisher);
   const dateCtrl = mkField('Fecha de publicación', cap.date, 'MM/AAAA o AAAA');
   const descCtrl = mkField('Descripción', cap.description || '', '', true);
 
@@ -3120,18 +3141,14 @@ function groupsView() {
 
         for (const item of rawContinue) {
           try {
-            let files = (await kv.get('f:' + item.ch.id)) || [];
+            // Solo caché local en Home (evitar fetch de red → parpadeo)
+            const files = (await kv.get('f:' + item.ch.id)) || [];
             if (!files.length) {
-              try { files = await fetchFiles(item.ch); } catch (_) {}
-            }
-            if (!files.length) {
-              // Sin listado aún: mantener el ítem (no borrar recentReads)
               addItem(item);
               continue;
             }
             const f = files.find((x) => String(x.id) === String(item.f.id));
             if (f) addItem({ ...item, f: { id: f.id, name: f.name, size: f.size } });
-            // Si el listado existe y el archivo no está, no lo añadimos (purgado lógico)
           } catch (_) {
             addItem(item);
           }
@@ -3146,10 +3163,7 @@ function groupsView() {
             if (seen.has(id)) continue;
             const ch = byCh.get(String(u.chId));
             if (!ch) continue;
-            let files = (await kv.get('f:' + ch.id)) || [];
-            if (!files.length) {
-              try { files = await fetchFiles(ch); } catch (_) {}
-            }
+            const files = (await kv.get('f:' + ch.id)) || [];
             const f = files.find((x) => String(x.id) === String(u.msgId));
             if (f) addItem({ ch, f: { id: f.id, name: f.name, size: f.size }, at: Date.now() });
           }
@@ -3232,33 +3246,44 @@ function groupsView() {
           continueHost.replaceChildren(foldCont);
         };
 
-        renderContinue(continueList);
+        // Evitar re-pintar si la lista no ha cambiado (parpadeo)
+        const fp = continueList.map((it) => String(it.ch?.id) + ':' + String(it.f?.id)).join('|');
+        if (continueHost.dataset.fp !== fp) {
+          continueHost.dataset.fp = fp;
+          renderContinue(continueList);
+        }
 
-        // Segundo plano: refrescar listados de canales con progreso pendiente
+        // Segundo plano: solo completar ítems que faltan en caché local (sin fetch de red si ya hay listado)
         (async () => {
           try {
             const lib = (Array.isArray(LIB) && LIB.length) ? LIB : ((await kv.get('lib')) || []);
             const byCh = new Map(lib.map((c) => [String(c.id), c]));
             const unfinished = listUnfinishedProgress();
-            const chIds = [...new Set(unfinished.map((u) => String(u.chId)))];
             let added = false;
-            for (const cid of chIds) {
-              const ch = byCh.get(cid);
+            for (const u of unfinished) {
+              const id = String(u.chId) + ':' + String(u.msgId);
+              if (seen.has(id)) continue;
+              const ch = byCh.get(String(u.chId));
               if (!ch) continue;
-              try {
-                const files = await fetchFiles(ch);
-                for (const u of unfinished.filter((x) => String(x.chId) === cid)) {
-                  const id = cid + ':' + String(u.msgId);
-                  if (seen.has(id)) continue;
-                  const f = files.find((x) => String(x.id) === String(u.msgId));
-                  if (f) {
-                    addItem({ ch, f: { id: f.id, name: f.name, size: f.size }, at: Date.now() });
-                    added = true;
-                  }
-                }
-              } catch (_) {}
+              let files = [];
+              try { files = (await kv.get('f:' + ch.id)) || []; } catch (_) {}
+              // Solo red si no hay listado en caché
+              if (!files.length) {
+                try { files = await fetchFiles(ch); } catch (_) {}
+              }
+              const f = files.find((x) => String(x.id) === String(u.msgId));
+              if (f) {
+                addItem({ ch, f: { id: f.id, name: f.name, size: f.size }, at: Date.now() });
+                added = true;
+              }
             }
-            if (added && continueHost.isConnected) renderContinue(continueList);
+            if (added && continueHost.isConnected) {
+              const fp2 = continueList.map((it) => String(it.ch?.id) + ':' + String(it.f?.id)).join('|');
+              if (continueHost.dataset.fp !== fp2) {
+                continueHost.dataset.fp = fp2;
+                renderContinue(continueList);
+              }
+            }
           } catch (_) {}
         })();
         return; // el render antiguo queda sustituido
