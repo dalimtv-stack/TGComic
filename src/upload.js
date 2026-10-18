@@ -193,43 +193,52 @@ export function createUploadTool(d) {
     return `${ch}${TSEP}${ed}${SEP}${LIBRARY_LABEL}${POST}`;
   }
 
-  /** Quita cualquier .cbr/.cbz/.cbz.cbz y deja una sola extensión .cbz (opcional [WebP]). */
+  /** Quita extensiones (.cbr/.cbz/.zip/.rar/…) y deja un solo .cbz (opcional [WebP]). */
   function ensureCbzName(name, wantWebp) {
     let s = String(name || '').replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
-    // Quitar tags de extensión repetidos: .cbr / .cbz / .cbz.cbz
-    s = s.replace(/(\.cb[zr])+$/ig, '');
     s = s.replace(/\s*\[WebP\]\s*$/ig, '').trim();
+    // Quitar cualquier cola de extensiones conocidas (también repetidas)
+    let prev;
+    do {
+      prev = s;
+      s = s.replace(/\.(cb[zr]|zip|rar|7z|tar|gz|cb7)+$/ig, '').trim();
+    } while (s !== prev);
     if (wantWebp) s = s + ' [WebP]';
     return s.trim() + '.cbz';
   }
 
-  function composeFileName({ channel, series, number, title, info, asWebp }) {
+  // Como antes: Serie #Número - Info
+  function composeFileName({ channel, series, number, info, asWebp }) {
     const ch = String(channel || '').trim();
     const ser = String(series || '').trim();
     const num = String(number || '').trim();
-    const tit = String(title || '').trim();
     const inf = String(info || '').trim();
     let body = '';
     if (ser && num) body = `${ser} #${num}`;
     else if (ser) body = ser;
     else if (num) body = `#${num}`;
     else body = 'comic';
-    const extra = [tit, inf].filter(Boolean).join(' - ');
-    if (extra) body += ` - ${extra}`;
+    if (inf) body += ` - ${inf}`;
     const base = (ch && ser) ? `${ch} - ${body}` : body;
     return ensureCbzName(base, !!asWebp);
   }
 
   /**
-   * Parsea nombre de archivo → { series, number, title, info }
-   * Prioriza "#n". Si hay seriesHint (contexto de la vista serie), se usa como serie.
+   * Como el formulario de un solo archivo:
+   * { series, number, info } — info = texto tras el #n + [tags]
+   * seriesHint = serie del contexto (vista serie); si no, se saca del nombre.
    */
   function parseUploadBase(fileName, channelName, seriesHint) {
     let base = String(fileName || '')
-      .replace(/(\.cb[zr])+$/ig, '')
       .replace(/_/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
+    // Quitar extensión real del archivo (.cbr, .zip, .rar, …)
+    let prev;
+    do {
+      prev = base;
+      base = base.replace(/\.(cb[zr]|zip|rar|7z|tar|gz|cb7)+$/ig, '').trim();
+    } while (base !== prev);
     base = base.replace(/\s*@\S+/g, '').trim();
     base = base.replace(/\s*\[WebP\]/ig, '').trim();
     const extras = [];
@@ -249,10 +258,11 @@ export function createUploadTool(d) {
     }
 
     const ISSUE_TAG = '(?:\\d+(?:\\.\\d+)?[a-zA-Z]?|Special|Especial|Extra|Anual|Annual|One[\\s-]?Shot|OneShot)';
-    const info = extras.length ? extras.map((x) => '[' + x + ']').join(' ') : '';
+    const tags = extras.length ? extras.map((x) => '[' + x + ']').join(' ') : '';
+    const joinInfo = (a, b) => [a, b].filter(Boolean).join(' ').trim();
     const hint = String(seriesHint || '').trim();
 
-    // Si estamos dentro de una serie, interpretar el resto respecto a esa serie
+    // Contexto de serie: el resto del nombre es #n / info
     if (hint) {
       let rest = base;
       if (rest.toLowerCase().startsWith(hint.toLowerCase())) {
@@ -264,17 +274,15 @@ export function createUploadTool(d) {
         return {
           series: hint,
           number: String(m[1] || '').trim(),
-          title: String(m[2] || '').trim(),
-          info,
+          info: joinInfo(String(m[2] || '').trim(), tags),
         };
       }
-      // Si no hay número claro pero el nombre era solo la serie
       if (!rest || rest.toLowerCase() === hint.toLowerCase()) {
-        return { series: hint, number: '', title: '', info };
+        return { series: hint, number: '', info: tags };
       }
     }
 
-    // Formato general: Serie #n [- título]
+    // Del nombre de archivo: Serie #n - info
     let m = null;
     if (/#/.test(base)) {
       m = base.match(new RegExp(`^(.*)\\s*#\\s*(${ISSUE_TAG})(?:\\s*[-–—:]\\s*(.*))?$`, 'i'));
@@ -285,11 +293,10 @@ export function createUploadTool(d) {
       return {
         series: String(m[1] || '').trim(),
         number: String(m[2] || '').trim(),
-        title: String(m[3] || '').trim(),
-        info,
+        info: joinInfo(String(m[3] || '').trim(), tags),
       };
     }
-    return { series: base, number: '', title: '', info };
+    return { series: base, number: '', info: tags };
   }
 
   function uiAlert(msg) {
@@ -718,13 +725,13 @@ export function createUploadTool(d) {
       channelInp.placeholder = 'Nombre del canal';
       channelInp.hidden = true;
 
-      // Serie GLOBAL (misma para todos los archivos)
-      const seriesLab = el('div', 'sync-label', 'Serie (global)');
-      const seriesHint = el('p', 'cover-pick-hint', 'Se aplica a todos los archivos de esta subida. Ej: Mrs. Keagan - The Proposition 2');
+      // Serie GLOBAL (misma para todos los archivos): contexto de la vista o del nombre de archivo
+      const seriesLab = el('div', 'sync-label', 'Serie');
+      const seriesHint = el('p', 'cover-pick-hint', 'Común a todos los archivos de esta subida. Se rellena desde la serie en la que estás o desde el nombre del archivo.');
       const seriesInp = el('input', 'edit-input');
       seriesInp.type = 'text';
-      seriesInp.placeholder = 'Nombre de la serie';
-      seriesInp.setAttribute('aria-label', 'Serie global');
+      seriesInp.placeholder = 'Serie';
+      seriesInp.setAttribute('aria-label', 'Serie');
 
       const includeChChk = el('input');
       includeChChk.type = 'checkbox';
@@ -751,10 +758,10 @@ export function createUploadTool(d) {
       asWebpChk.onchange = () => { webpOptsBox.hidden = !asWebpChk.checked; };
 
       const filesSec = el('div', 'info-sec', 'Cómics a subir');
-      const filesHint = el('p', 'cover-pick-hint', 'Por cada archivo puedes editar Título, Numeración e Info. La serie de arriba es común.');
+      const filesHint = el('p', 'cover-pick-hint', 'Por cada archivo: numeración e info (como antes). La serie de arriba es común.');
       const filesList = el('div', 'upload-files-list');
 
-      /** @type {{ file: File, titleInp: HTMLInputElement, numberInp: HTMLInputElement, infoInp: HTMLInputElement, nameInp: HTMLInputElement, nameTouched: boolean }[]} */
+      /** @type {{ file: File, numberInp: HTMLInputElement, infoInp: HTMLInputElement, nameInp: HTMLInputElement, nameTouched: boolean }[]} */
       let rows = [];
 
       const currentChannelName = () => {
@@ -770,7 +777,6 @@ export function createUploadTool(d) {
           channel: chName,
           series: seriesInp.value,
           number: row.numberInp.value,
-          title: row.titleInp.value,
           info: row.infoInp.value,
           asWebp: !!asWebpChk.checked,
         });
@@ -815,22 +821,16 @@ export function createUploadTool(d) {
         const meta = el('small', '', (formatBytes?.(file.size) || file.size + ' B'));
         head.append(document.createTextNode(' · '), meta);
 
-        const tLab = el('div', 'sync-label', 'Título opcional');
-        const titleInp = el('input', 'edit-input');
-        titleInp.type = 'text';
-        titleInp.placeholder = 'Título / subtítulo del número';
-        titleInp.value = parsed.title || '';
-
-        const nLab = el('div', 'sync-label', 'Numeración');
+        const nLab = el('div', 'sync-label', 'Número');
         const numberInp = el('input', 'edit-input');
         numberInp.type = 'text';
-        numberInp.placeholder = '01 · Special · Extra';
+        numberInp.placeholder = 'Número / Special / Extra / Anual';
         numberInp.value = parsed.number || '';
 
         const iLab = el('div', 'sync-label', 'Info opcional');
         const infoInp = el('input', 'edit-input');
         infoInp.type = 'text';
-        infoInp.placeholder = '[tags] u otra nota';
+        infoInp.placeholder = 'Info opcional';
         infoInp.value = parsed.info || '';
 
         const nameLab = el('div', 'sync-label', 'Nombre final');
@@ -839,12 +839,11 @@ export function createUploadTool(d) {
         let nameTouched = false;
         nameInp.oninput = () => { nameTouched = true; row.nameTouched = true; };
 
-        const row = { file, titleInp, numberInp, infoInp, nameInp, nameTouched: false, rowEl };
-        titleInp.oninput = () => { row.nameTouched = false; nameTouched = false; updateRowPreview(row); };
+        const row = { file, numberInp, infoInp, nameInp, nameTouched: false, rowEl };
         numberInp.oninput = () => { row.nameTouched = false; nameTouched = false; updateRowPreview(row); };
         infoInp.oninput = () => { row.nameTouched = false; nameTouched = false; updateRowPreview(row); };
 
-        rowEl.append(head, tLab, titleInp, nLab, numberInp, iLab, infoInp, nameLab, nameInp);
+        rowEl.append(head, nLab, numberInp, iLab, infoInp, nameLab, nameInp);
         filesList.append(rowEl);
         rows.push(row);
         updateRowPreview(row);
@@ -944,7 +943,6 @@ export function createUploadTool(d) {
               channel: includeChChk.checked ? chName : '',
               series: seriesInp.value,
               number: row.numberInp.value,
-              title: row.titleInp.value,
               info: row.infoInp.value,
               asWebp: wantWebp,
             });
