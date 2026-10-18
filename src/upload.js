@@ -1017,7 +1017,8 @@ export function createUploadTool(d) {
               if (ctx.isAborted?.()) throw Object.assign(new Error('cancelado'), { cancelled: true });
               st('[' + outName + '] Subiendo…');
               ctx.setProgress(70);
-              await uploadCbz(ch, blob, outName, st);
+              // uploadCbz(ch, fileName, blob, caption, status)
+              await uploadCbz(ch, outName, blob, undefined, st);
               ctx.setProgress(100);
               st('[' + outName + '] Listo');
               try {
