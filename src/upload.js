@@ -193,7 +193,17 @@ export function createUploadTool(d) {
     return `${ch}${TSEP}${ed}${SEP}${LIBRARY_LABEL}${POST}`;
   }
 
-  function composeFileName({ channel, series, number, title, info }) {
+  /** Quita cualquier .cbr/.cbz/.cbz.cbz y deja una sola extensión .cbz (opcional [WebP]). */
+  function ensureCbzName(name, wantWebp) {
+    let s = String(name || '').replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+    // Quitar tags de extensión repetidos: .cbr / .cbz / .cbz.cbz
+    s = s.replace(/(\.cb[zr])+$/ig, '');
+    s = s.replace(/\s*\[WebP\]\s*$/ig, '').trim();
+    if (wantWebp) s = s + ' [WebP]';
+    return s.trim() + '.cbz';
+  }
+
+  function composeFileName({ channel, series, number, title, info, asWebp }) {
     const ch = String(channel || '').trim();
     const ser = String(series || '').trim();
     const num = String(number || '').trim();
@@ -207,13 +217,16 @@ export function createUploadTool(d) {
     const extra = [tit, inf].filter(Boolean).join(' - ');
     if (extra) body += ` - ${extra}`;
     const base = (ch && ser) ? `${ch} - ${body}` : body;
-    return base.replace(/_/g, ' ').replace(/\s+/g, ' ').trim() + '.cbz';
+    return ensureCbzName(base, !!asWebp);
   }
 
-  /** Parsea nombre de archivo → { series, number, title/info } priorizando #n */
-  function parseUploadBase(fileName, channelName) {
+  /**
+   * Parsea nombre de archivo → { series, number, title, info }
+   * Prioriza "#n". Si hay seriesHint (contexto de la vista serie), se usa como serie.
+   */
+  function parseUploadBase(fileName, channelName, seriesHint) {
     let base = String(fileName || '')
-      .replace(/\.cb[zr]$/i, '')
+      .replace(/(\.cb[zr])+$/ig, '')
       .replace(/_/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
@@ -225,6 +238,7 @@ export function createUploadTool(d) {
       if (t && !/^webp$/i.test(t)) extras.push(t);
       return ' ';
     }).replace(/\s+/g, ' ').trim();
+
     const chName = String(channelName || '').trim();
     if (chName) {
       const low = base.toLowerCase();
@@ -233,23 +247,49 @@ export function createUploadTool(d) {
         base = base.slice(chName.length).replace(/^\s*-\s*/, '').trim();
       }
     }
+
     const ISSUE_TAG = '(?:\\d+(?:\\.\\d+)?[a-zA-Z]?|Special|Especial|Extra|Anual|Annual|One[\\s-]?Shot|OneShot)';
+    const info = extras.length ? extras.map((x) => '[' + x + ']').join(' ') : '';
+    const hint = String(seriesHint || '').trim();
+
+    // Si estamos dentro de una serie, interpretar el resto respecto a esa serie
+    if (hint) {
+      let rest = base;
+      if (rest.toLowerCase().startsWith(hint.toLowerCase())) {
+        rest = rest.slice(hint.length).replace(/^\s*-\s*/, '').trim();
+      }
+      let m = rest.match(new RegExp(`^#\\s*(${ISSUE_TAG})(?:\\s*[-–—:]\\s*(.*))?$`, 'i'));
+      if (!m) m = rest.match(new RegExp(`^(${ISSUE_TAG})(?:\\s*[-–—:]\\s*(.*))?$`, 'i'));
+      if (m) {
+        return {
+          series: hint,
+          number: String(m[1] || '').trim(),
+          title: String(m[2] || '').trim(),
+          info,
+        };
+      }
+      // Si no hay número claro pero el nombre era solo la serie
+      if (!rest || rest.toLowerCase() === hint.toLowerCase()) {
+        return { series: hint, number: '', title: '', info };
+      }
+    }
+
+    // Formato general: Serie #n [- título]
     let m = null;
     if (/#/.test(base)) {
       m = base.match(new RegExp(`^(.*)\\s*#\\s*(${ISSUE_TAG})(?:\\s*[-–—:]\\s*(.*))?$`, 'i'));
     }
     if (!m) m = base.match(/^(.*?)\s+(\d{1,4}[a-z]?)\s*[-–—]\s+(.*)$/i);
     if (!m) m = base.match(/^(.*?)\s+(\d{1,4}[a-z]?)$/i);
-    let series = '', number = '', title = '';
     if (m) {
-      series = String(m[1] || '').trim();
-      number = String(m[2] || '').trim();
-      title = String(m[3] || '').trim();
-    } else {
-      series = base;
+      return {
+        series: String(m[1] || '').trim(),
+        number: String(m[2] || '').trim(),
+        title: String(m[3] || '').trim(),
+        info,
+      };
     }
-    const info = extras.length ? extras.map((x) => '[' + x + ']').join(' ') : '';
-    return { series, number, title, info };
+    return { series: base, number: '', title: '', info };
   }
 
   function uiAlert(msg) {
@@ -615,7 +655,7 @@ export function createUploadTool(d) {
   }
 
 
-  function showUploadFrame() {
+  function showUploadFrame(ctx = {}) {
     try {
       document.querySelector('.info-frame.upload-frame')?.remove();
       const frame = el('div', 'info-frame upload-frame');
@@ -630,6 +670,10 @@ export function createUploadTool(d) {
       body.append(el('p', 'cover-pick-hint',
         'Puedes elegir varios CBZ/CBR de la misma serie. Si el canal no existe se crea (archivado) con el formato Canal:Editorial::Comics::tgstorage.'
       ));
+
+      const ctxEditorial = String(ctx?.editorial || '').trim();
+      const ctxChannel = ctx?.channel || null;
+      const ctxSeries = String(ctx?.series || '').trim();
 
       const lib = Array.isArray(getLIB()) ? getLIB() : [];
       const editorials = uniqueSorted(lib.map((c) => c.group || 'Sin editorial'));
@@ -684,7 +728,7 @@ export function createUploadTool(d) {
 
       const includeChChk = el('input');
       includeChChk.type = 'checkbox';
-      includeChChk.checked = true;
+      includeChChk.checked = false; // por defecto SIN prefijo de canal
       const includeChRow = el('label', 'repack-check');
       includeChRow.append(includeChChk, document.createTextNode(' Incluir nombre del canal en el archivo'));
 
@@ -722,17 +766,14 @@ export function createUploadTool(d) {
       const updateRowPreview = (row) => {
         if (row.nameTouched) return;
         const chName = includeChChk.checked ? currentChannelName() : '';
-        let fname = composeFileName({
+        row.nameInp.value = composeFileName({
           channel: chName,
           series: seriesInp.value,
           number: row.numberInp.value,
           title: row.titleInp.value,
           info: row.infoInp.value,
+          asWebp: !!asWebpChk.checked,
         });
-        if (asWebpChk.checked && !/\[WebP\]/i.test(fname)) {
-          fname = fname.replace(/\.cbz$/i, ' [WebP].cbz');
-        }
-        row.nameInp.value = fname;
       };
 
       const updateAllPreviews = () => {
@@ -774,10 +815,10 @@ export function createUploadTool(d) {
         const meta = el('small', '', (formatBytes?.(file.size) || file.size + ' B'));
         head.append(document.createTextNode(' · '), meta);
 
-        const tLab = el('div', 'sync-label', 'Título');
+        const tLab = el('div', 'sync-label', 'Título opcional');
         const titleInp = el('input', 'edit-input');
         titleInp.type = 'text';
-        titleInp.placeholder = 'Subtítulo opcional';
+        titleInp.placeholder = 'Título / subtítulo del número';
         titleInp.value = parsed.title || '';
 
         const nLab = el('div', 'sync-label', 'Numeración');
@@ -821,21 +862,31 @@ export function createUploadTool(d) {
           ? (list[0].name + ' (' + (formatBytes?.(list[0].size) || list[0].size + ' B') + ')')
           : (list.length + ' archivos seleccionados');
         const chName = currentChannelName();
-        const parsedList = list.map((f) => parseUploadBase(f.name, chName));
-        // Serie global: si la mayoría coincide, usarla
-        const seriesCounts = {};
-        for (const p of parsedList) {
-          const s = p.series || '';
-          if (s) seriesCounts[s] = (seriesCounts[s] || 0) + 1;
+        const seriesHint = seriesInp.value.trim() || ctxSeries;
+        const parsedList = list.map((f) => parseUploadBase(f.name, chName, seriesHint));
+        // Serie global: contexto de la vista, o la más frecuente en los nombres
+        if (!seriesInp.value.trim()) {
+          if (ctxSeries) {
+            seriesInp.value = ctxSeries;
+          } else {
+            const seriesCounts = {};
+            for (const p of parsedList) {
+              const s = p.series || '';
+              if (s) seriesCounts[s] = (seriesCounts[s] || 0) + 1;
+            }
+            let bestSeries = '';
+            let bestN = 0;
+            for (const [s, n] of Object.entries(seriesCounts)) {
+              if (n > bestN) { bestSeries = s; bestN = n; }
+            }
+            if (bestSeries) seriesInp.value = bestSeries;
+          }
         }
-        let bestSeries = '';
-        let bestN = 0;
-        for (const [s, n] of Object.entries(seriesCounts)) {
-          if (n > bestN) { bestSeries = s; bestN = n; }
-        }
-        if (bestSeries && !seriesInp.value.trim()) seriesInp.value = bestSeries;
+        // Re-parsear con la serie global definitiva (mejor número/título)
+        const seriesFinal = seriesInp.value.trim();
+        const finalParsed = list.map((f) => parseUploadBase(f.name, chName, seriesFinal));
         for (let i = 0; i < list.length; i++) {
-          addFileRow(list[i], parsedList[i]);
+          addFileRow(list[i], finalParsed[i]);
         }
       };
 
@@ -895,12 +946,10 @@ export function createUploadTool(d) {
               number: row.numberInp.value,
               title: row.titleInp.value,
               info: row.infoInp.value,
+              asWebp: wantWebp,
             });
-          }
-          outName = outName.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
-          if (!/\.cbz$/i.test(outName)) outName = outName.replace(/\.cb[zr]$/i, '') + '.cbz';
-          if (wantWebp && !/\[WebP\]/i.test(outName)) {
-            outName = outName.replace(/\.cbz$/i, ' [WebP].cbz');
+          } else {
+            outName = ensureCbzName(outName, wantWebp);
           }
           return { file: row.file, outName };
         });
@@ -1033,7 +1082,41 @@ export function createUploadTool(d) {
       box.append(head, body);
       frame.append(box);
 
+      // Prefijar editorial / canal / serie desde el contexto de navegación
+      if (ctxEditorial) {
+        const hasEd = [...editorialSel.options].some((o) => o.value === ctxEditorial);
+        if (hasEd) {
+          editorialSel.value = ctxEditorial;
+          editorialInp.hidden = true;
+        } else {
+          editorialSel.value = '__new__';
+          editorialInp.hidden = false;
+          editorialInp.value = ctxEditorial;
+        }
+      }
       rebuildChannels();
+      if (ctxChannel) {
+        const id = ctxChannel.id != null ? String(ctxChannel.id) : '';
+        const byId = id && [...channelSel.options].find((o) => o.value === id);
+        if (byId) {
+          channelSel.value = id;
+          channelInp.hidden = true;
+        } else if (ctxChannel.name) {
+          const byName = [...channelSel.options].find(
+            (o) => (o._ch?.name || o.textContent || '').toLowerCase() === String(ctxChannel.name).toLowerCase()
+          );
+          if (byName) {
+            channelSel.value = byName.value;
+            channelInp.hidden = true;
+          } else {
+            channelSel.value = '__new__';
+            channelInp.hidden = false;
+            channelInp.value = ctxChannel.name;
+          }
+        }
+      }
+      if (ctxSeries) seriesInp.value = ctxSeries;
+      updateAllPreviews();
       document.body.append(frame);
     } catch (e) {
       console.error('[upload] showUploadFrame', e);
