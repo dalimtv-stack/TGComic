@@ -20,6 +20,7 @@ export function createUploadTool(d) {
     fetchFiles, refreshLibrary,
     natural, formatBytes,
     jobQueue,
+    onUploadDone,
   } = d;
   const getClient = () => d.client;
   const getReady = () => d.ready;
@@ -1021,10 +1022,15 @@ export function createUploadTool(d) {
               await uploadCbz(ch, outName, blob, undefined, st);
               ctx.setProgress(100);
               st('[' + outName + '] Listo');
+              // Actualizar caché del canal y refrescar la vista actual si es ese canal/serie
               try {
-                const files = await fetchFiles(ch);
-                await kv.set('f:' + ch.id, files);
+                await fetchFiles(ch);
               } catch (_) {}
+              try {
+                if (typeof onUploadDone === 'function') await onUploadDone(ch);
+              } catch (e) {
+                console.warn('[upload] onUploadDone', e);
+              }
             } catch (e) {
               if (e?.cancelled) {
                 st('[' + outName + '] Cancelado');
