@@ -169,10 +169,14 @@ export function isContentRestricted(kind, ref) {
 
 export function guardRestricted(kind, ref, label) {
   if (!isContentRestricted(kind, ref)) return true;
-  alert(
-    (label ? ('«' + label + '» está bloqueado. ') : 'Contenido bloqueado. ')
-    + 'Desbloquea el candado en Configuración (contraseña de sincronización).'
-  );
+  const msg = (label ? ('«' + label + '» está bloqueado. ') : 'Contenido bloqueado. ')
+    + 'Desbloquea el candado en Configuración (contraseña de sincronización).';
+  try {
+    if (typeof window.appAlert === 'function') window.appAlert(msg, 'Bloqueado');
+    else alert(msg);
+  } catch (_) {
+    try { alert(msg); } catch (__) {}
+  }
   return false;
 }
 

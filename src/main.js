@@ -62,31 +62,50 @@ function resetMobileViewport() {
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 
-/** Diálogos centrados (sustituyen alert/confirm nativos que en PC salen arriba). */
-function appDialog({ title = '', message = '', confirmText = 'Aceptar', cancelText = null } = {}) {
+/** Diálogos centrados estilo TGComics (sustituyen alert/confirm/prompt del navegador). */
+function appDialog({ title = '', message = '', confirmText = 'Aceptar', cancelText = null, input = null } = {}) {
   return new Promise((resolve) => {
     document.querySelectorAll('.app-dialog').forEach((n) => n.remove());
     const bg = el('div', 'app-dialog');
     const box = el('div', 'app-dialog-box');
     if (title) box.append(el('div', 'app-dialog-title', title));
-    const msg = el('div', 'app-dialog-msg');
-    msg.textContent = message || '';
-    box.append(msg);
+    if (message) {
+      const msg = el('div', 'app-dialog-msg');
+      msg.textContent = message;
+      box.append(msg);
+    }
+    let inp = null;
+    if (input) {
+      inp = el('input', 'edit-input app-dialog-input');
+      inp.type = input.type || 'text';
+      inp.value = input.value != null ? String(input.value) : '';
+      inp.placeholder = input.placeholder || '';
+      inp.autocomplete = input.type === 'password' ? 'current-password' : 'off';
+      box.append(inp);
+    }
     const actions = el('div', 'app-dialog-actions');
     const finish = (val) => { try { bg.remove(); } catch (_) {} resolve(val); };
     if (cancelText != null) {
       const c = el('button', 'btn', cancelText);
-      c.onclick = () => finish(false);
+      c.onclick = () => finish(input ? null : false);
       actions.append(c);
     }
     const ok = el('button', 'btn edit-save', confirmText);
-    ok.onclick = () => finish(true);
+    ok.onclick = () => finish(input ? (inp ? inp.value : '') : true);
     actions.append(ok);
+    if (inp) {
+      inp.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); finish(inp.value); }
+        if (e.key === 'Escape') { e.preventDefault(); finish(null); }
+      });
+    }
     box.append(actions);
     bg.append(box);
-    bg.addEventListener('click', (ev) => { if (ev.target === bg && cancelText != null) finish(false); });
+    bg.addEventListener('click', (ev) => {
+      if (ev.target === bg && cancelText != null) finish(input ? null : false);
+    });
     document.body.append(bg);
-    try { ok.focus(); } catch (_) {}
+    try { (inp || ok).focus(); } catch (_) {}
   });
 }
 function appAlert(message, title = '') {
@@ -95,10 +114,21 @@ function appAlert(message, title = '') {
 function appConfirm(message, title = '') {
   return appDialog({ title, message, confirmText: 'Sí', cancelText: 'No' });
 }
-// Exponer para upload/repack
+/** @returns {Promise<string|null>} null = cancelar */
+function appPrompt(message, title = '', defaultValue = '', inputType = 'text') {
+  return appDialog({
+    title: title || '',
+    message,
+    confirmText: 'Aceptar',
+    cancelText: 'Cancelar',
+    input: { type: inputType || 'text', value: defaultValue || '', placeholder: '' },
+  });
+}
+// Exponer para upload/repack/lock
 try {
   window.appAlert = appAlert;
   window.appConfirm = appConfirm;
+  window.appPrompt = appPrompt;
 } catch (_) {}
 
 /** Android: pantalla completa de toda la app (reintenta hasta lograrlo; un solo aviso al éxito). */
@@ -362,10 +392,10 @@ async function connect() {
   const session = new StringSession(localStorage.getItem('tg_session') || '');
   client = new TelegramClient(session, apiId, apiHash, { connectionRetries: 5, useWSS: true });
   await client.start({
-    phoneNumber: async () => prompt('Teléfono con prefijo (+34...)'),
-    phoneCode: async () => prompt('Código recibido en Telegram'),
-    password: async () => prompt('Contraseña de verificación en dos pasos'),
-    onError: (e) => alert(e.message),
+    phoneNumber: async () => (await appPrompt('Teléfono con prefijo (+34...)', 'Inicio de sesión', '', 'tel')) || '',
+    phoneCode: async () => (await appPrompt('Código recibido en Telegram', 'Código', '', 'text')) || '',
+    password: async () => (await appPrompt('Contraseña de verificación en dos pasos', '2FA', '', 'password')) || '',
+    onError: (e) => { appAlert(e?.message || String(e), 'Error'); },
   });
   localStorage.setItem('tg_session', client.session.save());
 }
@@ -729,7 +759,7 @@ function showInfoFrame() {
             titleSpan.textContent = 'Copiado';
             setTimeout(() => { titleSpan.textContent = 'Información'; }, 1200);
           } catch (e2) {
-            alert('No se pudo copiar');
+            appAlert('No se pudo copiar');
           }
         }
       };
@@ -746,7 +776,7 @@ function showInfoFrame() {
         const data = await exportLibraryData({ kv, includeCovers: true });
         downloadJson(data, `tgcomic-meta-${new Date().toISOString().slice(0, 10)}.json`);
       } catch (e) {
-        alert('Exportación: ' + (e?.message || e));
+        appAlert('Exportación: ' + (e?.message || e));
       } finally {
         btnExp.disabled = false;
         btnExp.textContent = 'Exportar JSON';
@@ -766,18 +796,18 @@ function showInfoFrame() {
         const text = await f.text();
         const data = JSON.parse(text);
         const r = await importLibraryData(data, { kv });
-        alert(`Importado: ${r.localStorage} claves, ${r.covers} portadas. Recarga la página.`);
+        appAlert(`Importado: ${r.localStorage} claves, ${r.covers} portadas. Recarga la página.`);
       } catch (e) {
-        alert('Importación: ' + (e?.message || e));
+        appAlert('Importación: ' + (e?.message || e));
       }
       impInput.value = '';
     };
     const btnClrPc = el('button', 'btn', 'Vaciar caché páginas');
     btnClrPc.type = 'button';
     btnClrPc.onclick = async () => {
-      if (!confirm('¿Borrar todas las páginas en caché de lectura?')) return;
+      if (!(await appConfirm('¿Borrar todas las páginas en caché de lectura?', 'Caché'))) return;
       await pageCache.clearAll();
-      alert('Caché de páginas vaciada');
+      await appAlert('Caché de páginas vaciada', 'Caché');
     };
     const btnQueue = el('button', 'btn', 'Ver cola');
     btnQueue.type = 'button';
@@ -882,7 +912,7 @@ menuLockBtn.onclick = async (ev) => {
   ev.stopPropagation();
   closeAppMenu();
   if (!locks.canUseLocks()) {
-    alert('Inicia sesión de sincronización para usar el candado de contenido.');
+    await appAlert('Inicia sesión de sincronización para usar el candado de contenido.', 'Candado');
     return;
   }
   if (locks.isSessionUnlocked()) {
@@ -891,11 +921,16 @@ menuLockBtn.onclick = async (ev) => {
     try { groupsView(); } catch (_) {}
     return;
   }
-  const pw = prompt('Contraseña de sincronización para desbloquear contenido:');
+  const pw = await appPrompt(
+    'Introduce la contraseña de sincronización para desbloquear el contenido marcado.',
+    'Desbloquear contenido',
+    '',
+    'password'
+  );
   if (pw == null) return;
   const ok = await locks.unlockSession(pw);
   if (!ok) {
-    alert('Contraseña incorrecta');
+    await appAlert('Contraseña incorrecta', 'Desbloquear');
     return;
   }
   paintLockMenu();
@@ -916,13 +951,13 @@ menuUploadBtn.onclick = (ev) => {
   setTimeout(() => {
     try {
       if (!uploadTool || typeof uploadTool.showUploadFrame !== 'function') {
-        alert('La herramienta de subida no está disponible. Recarga la página.');
+        appAlert('La herramienta de subida no está disponible. Recarga la página.');
         return;
       }
       uploadTool.showUploadFrame(getUploadContext());
     } catch (e) {
       console.error('[upload] showUploadFrame', e);
-      alert('Error al abrir subida: ' + (e?.message || e));
+      appAlert('Error al abrir subida: ' + (e?.message || e));
     }
   }, 50);
 };
@@ -1324,7 +1359,7 @@ function copyInfoFrameText(bodyEl, label) {
     navigator.clipboard.writeText(text).then(() => {
       // feedback breve en el head
     }).catch(() => {
-      prompt('Copiar:', text);
+      appPrompt(text, 'Copiar', text, 'text');
     });
   } catch (e) {
     console.warn('copy info', e);
@@ -1467,7 +1502,7 @@ function showComicInfo(ch, f, displayTitle) {
     document.body.append(frame);
   } catch (err) {
     console.error('showComicInfo', err);
-    alert('No se pudo mostrar la información: ' + (err?.message || err));
+    appAlert('No se pudo mostrar la información: ' + (err?.message || err));
   }
 }
 
@@ -1736,7 +1771,7 @@ function showCaptionEditor(ch, f, after, opts = {}) {
       description: descCtrl.inp.value,
     });
     if (caption.length > 1024) {
-      alert('El caption tiene ' + caption.length + ' caracteres (máx. 1024). Acorta la descripción.');
+      appAlert('El caption tiene ' + caption.length + ' caracteres (máx. 1024). Acorta la descripción.');
       return;
     }
     try {
@@ -1758,7 +1793,7 @@ function showCaptionEditor(ch, f, after, opts = {}) {
         showEditComicTitle(ch, f, opts.currentLabel || '', after);
       }
     } catch (e) {
-      alert('No se pudo guardar el caption: ' + (e?.message || e));
+      appAlert('No se pudo guardar el caption: ' + (e?.message || e));
     } finally {
       save.disabled = false;
     }
@@ -2161,7 +2196,7 @@ function showSeriesInfo(ch, seriesLabel, files) {
     document.body.append(frame);
   } catch (err) {
     console.error(err);
-    alert('No se pudo mostrar la información');
+    appAlert('No se pudo mostrar la información');
   }
 }
 
@@ -2307,7 +2342,7 @@ function showEditSeriesName(ch, seriesLabel, seriesFiles, after) {
         }
       }
       if (!members.length) {
-        alert('No se encontraron cómics de esta serie');
+        appAlert('No se encontraron cómics de esta serie');
         return;
       }
 
@@ -2338,7 +2373,7 @@ function showEditSeriesName(ch, seriesLabel, seriesFiles, after) {
       }
     } catch (e) {
       console.error('[series rename]', e);
-      alert('Error al guardar la serie: ' + (e?.message || e));
+      appAlert('Error al guardar la serie: ' + (e?.message || e));
       return;
     }
     frame.remove();
@@ -2380,7 +2415,7 @@ function showSeriesCoverPicker(ch, seriesLabel, files, after) {
       frame.remove();
       after?.();
     } catch (e) {
-      alert('No se pudo usar la imagen: ' + (e?.message || e));
+      appAlert('No se pudo usar la imagen: ' + (e?.message || e));
     }
   };
   body.append(pickFile, fileInput);
@@ -2393,14 +2428,14 @@ function showSeriesCoverPicker(ch, seriesLabel, files, after) {
     try {
       const b = await getCover(ch, f);
       if (!b) {
-        alert('Este cómic aún no tiene portada en caché. Ábrelo una vez e inténtalo de nuevo.');
+        appAlert('Este cómic aún no tiene portada en caché. Ábrelo una vez e inténtalo de nuevo.');
         return;
       }
       await setSeriesCoverBlob(ch, seriesLabel, b);
       frame.remove();
       after?.();
     } catch (e) {
-      alert('No se pudo asignar la portada: ' + (e?.message || e));
+      appAlert('No se pudo asignar la portada: ' + (e?.message || e));
     }
   };
 
@@ -2678,7 +2713,7 @@ async function showGroupInfo(originalName) {
     document.body.append(frame);
   } catch (err) {
     console.error(err);
-    alert('No se pudo mostrar la información de la editorial');
+    appAlert('No se pudo mostrar la información de la editorial');
   }
 }
 function showEditGroup(originalName, after) {
@@ -2750,7 +2785,7 @@ async function showGroupCoverPicker(originalName, after) {
       frame.remove();
       after?.();
     } catch (e) {
-      alert('No se pudo usar la imagen: ' + (e?.message || e));
+      appAlert('No se pudo usar la imagen: ' + (e?.message || e));
     }
   };
   body.append(pickFile, fileInput);
@@ -2804,7 +2839,7 @@ async function showGroupCoverPicker(originalName, after) {
           if (files[0]) b = await getCover(ch, files[0]);
         }
         if (!b) {
-          alert('Este canal aún no tiene portada en caché.');
+          appAlert('Este canal aún no tiene portada en caché.');
           return;
         }
         await setGroupCoverBlob(originalName, b);
@@ -2824,7 +2859,7 @@ async function showGroupCoverPicker(originalName, after) {
         addCell(gridComics, comicDisplay(f.name, ch.name), () => getCover(ch, f), async () => {
           const b = await getCover(ch, f);
           if (!b) {
-            alert('Este cómic aún no tiene portada en caché. Ábrelo una vez e inténtalo de nuevo.');
+            appAlert('Este cómic aún no tiene portada en caché. Ábrelo una vez e inténtalo de nuevo.');
             return;
           }
           await setGroupCoverBlob(originalName, b);
@@ -2881,7 +2916,7 @@ async function showChannelInfo(ch) {
     document.body.append(frame);
   } catch (err) {
     console.error(err);
-    alert('No se pudo mostrar la información del canal');
+    appAlert('No se pudo mostrar la información del canal');
   }
 }
 function showEditChannel(ch, files, after) {
@@ -2953,7 +2988,7 @@ function showChannelCoverPicker(ch, files, after) {
       frame.remove();
       after?.();
     } catch (e) {
-      alert('No se pudo usar la imagen: ' + (e?.message || e));
+      appAlert('No se pudo usar la imagen: ' + (e?.message || e));
     }
   };
   body.append(pickFile, fileInput);
@@ -3004,7 +3039,7 @@ function showChannelCoverPicker(ch, files, after) {
       cell.onclick = async () => {
         const b = await getCover(ch, f);
         if (!b) {
-          alert('Este cómic aún no tiene portada en caché. Ábrelo una vez e inténtalo de nuevo.');
+          appAlert('Este cómic aún no tiene portada en caché. Ábrelo una vez e inténtalo de nuevo.');
           return;
         }
         await setChannelCoverBlob(ch, b);
@@ -3068,8 +3103,9 @@ function lockToggleOpts(kind, ref, label, redraw) {
   if (marked) {
     return [['Desbloquear', async () => {
       if (!locks.isSessionUnlocked()) {
-        const pw = prompt('Contraseña de sincronización:');
-        if (!(await locks.unlockSession(pw || ''))) return alert('Contraseña incorrecta');
+        const pw = await appPrompt('Contraseña de sincronización', 'Desbloquear', '', 'password');
+        if (pw == null) return;
+        if (!(await locks.unlockSession(pw))) return appAlert('Contraseña incorrecta', 'Desbloquear');
       }
       if (kind === 'group') locks.setGroupLocked(ref, false);
       else if (kind === 'channel') locks.setChannelLocked(ref, false);
@@ -3080,8 +3116,9 @@ function lockToggleOpts(kind, ref, label, redraw) {
   }
   return [['Bloquear', async () => {
     if (!locks.isSessionUnlocked()) {
-      const pw = prompt('Contraseña de sincronización:');
-      if (!(await locks.unlockSession(pw || ''))) return alert('Contraseña incorrecta');
+      const pw = await appPrompt('Contraseña de sincronización', 'Bloquear', '', 'password');
+      if (pw == null) return;
+      if (!(await locks.unlockSession(pw))) return appAlert('Contraseña incorrecta', 'Bloquear');
     }
     if (kind === 'group') locks.setGroupLocked(ref, true);
     else if (kind === 'channel') locks.setChannelLocked(ref, true);
@@ -3234,7 +3271,7 @@ function groupsView() {
               contUnread
                 ? ['Marcar comic como leído', () => markComicRead(ch, f, () => renderContinue(continueList))]
                 : ['Marcar comic como no leído', () => markComicUnread(ch, f, () => renderContinue(continueList))],
-              ['Añadir versión WebP', () => { try { repackTool?.offerWebpVersion?.(ch, f); } catch (e) { alert(e?.message || e); } }],
+              ['Añadir versión WebP', () => { try { repackTool?.offerWebpVersion?.(ch, f); } catch (e) { appAlert(e?.message || e); } }],
             ];
             bindLongPress(row, () => sheet(contLabel, contOpts));
             const thumb = el('div', 'continue-cover');
@@ -3401,16 +3438,17 @@ function groupsView() {
               if (locks.isGroupMarked(name)) {
                 opts.push(['Desbloquear', async () => {
                   if (!locks.isSessionUnlocked()) {
-                    const pw = prompt('Contraseña de sincronización:');
-                    if (!(await locks.unlockSession(pw || ''))) return alert('Contraseña incorrecta');
+                    const pw = await appPrompt('Contraseña de sincronización', 'Desbloquear', '', 'password');
+                    if (pw == null) return;
+                    if (!(await locks.unlockSession(pw))) return appAlert('Contraseña incorrecta', 'Desbloquear');
                   }
                   locks.setGroupLocked(name, false);
                   redrawPubs();
                 }]);
               } else {
-                opts.push(['Bloquear', () => {
+                opts.push(['Bloquear', async () => {
                   if (!locks.isSessionUnlocked()) {
-                    alert('Desbloquea el candado en Configuración para marcar contenido.');
+                    await appAlert('Desbloquea el candado en el menú (☰) para marcar contenido.', 'Candado');
                     return;
                   }
                   locks.setGroupLocked(name, true);
@@ -3718,7 +3756,7 @@ function filesView(ch) {
         }
         opts.push(['Añadir versión WebP', () => {
           try { repackTool?.offerWebpVersion?.(ch, f); }
-          catch (e) { alert(e?.message || e); }
+          catch (e) { appAlert(e?.message || e); }
         }]);
         const comicRestricted = locks.isContentRestricted('comic', { ch, f });
         return {
@@ -3776,7 +3814,7 @@ function filesView(ch) {
               !isComicRead(ch.id, f.id)
                 ? ['Marcar comic como leído', () => markComicRead(ch, f, redraw)]
                 : ['Marcar comic como no leído', () => markComicUnread(ch, f, redraw)],
-              ['Añadir versión WebP', () => { try { repackTool?.offerWebpVersion?.(ch, f); } catch (e) { alert(e?.message || e); } }],
+              ['Añadir versión WebP', () => { try { repackTool?.offerWebpVersion?.(ch, f); } catch (e) { appAlert(e?.message || e); } }],
             ]);
             it.menu = undefined;
           }
@@ -3898,7 +3936,7 @@ function seriesView(ch, s, files) {
             : ['Marcar serie como no leída', () => markSeriesUnread(ch, fs, redraw)],
           ['Desagrupar serie', () => setUngroupMode(ch, s, 'short', () => history.back())],
           ['Desagrupar serie (con nombre)', () => setUngroupMode(ch, s, 'full', () => history.back())],
-          ['Añadir versión WebP', () => { try { repackTool?.offerWebpVersion?.(ch, f); } catch (err) { alert(err?.message || err); } }],
+          ['Añadir versión WebP', () => { try { repackTool?.offerWebpVersion?.(ch, f); } catch (err) { appAlert(err?.message || err); } }],
         ];
         return {
           label: displayLabel,
@@ -3966,6 +4004,8 @@ const repackTool = createRepackTool({
   downloadRarBytes, sniff, TgReader, pagesOf,
   natural,
   parseComicName,
+  parseComicCaption,
+  buildComicCaption,
   comicDisplay,
   comicDisplayName,
   seriesDisplayName,
@@ -3985,7 +4025,7 @@ const repackTool = createRepackTool({
 
 let uploadTool = {
   showUploadFrame() {
-    alert('Subida no disponible. Revisa la consola o recarga la página.');
+    appAlert('Subida no disponible. Revisa la consola o recarga la página.');
   },
   syncFloatingUi() {},
   hideFloatingUi() {},

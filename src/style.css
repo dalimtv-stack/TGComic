@@ -476,6 +476,7 @@ body.body-scroll-lock #app{
 }
 .app-dialog-actions{display:flex;gap:.5rem;justify-content:flex-end;flex-wrap:wrap}
 .app-dialog-actions .btn{min-width:88px;height:44px}
+.app-dialog-input{width:100%;margin:0 0 .85rem;box-sizing:border-box}
 
 /* Lista de archivos en subida múltiple */
 .upload-files-list{display:flex;flex-direction:column;gap:.75rem;margin:.35rem 0 1rem}
