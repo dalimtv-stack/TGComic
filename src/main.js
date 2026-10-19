@@ -4041,17 +4041,56 @@ try {
       if (x < 1024 * 1024) return (x / 1024).toFixed(1) + ' KB';
       return (x / (1024 * 1024)).toFixed(2) + ' MB';
     },
-    // Tras subir: refrescar listado del canal/serie en pantalla
+    // Tras subir: refrescar lo que el usuario está viendo (canal, serie, editorial o home)
     onUploadDone: async (ch) => {
       if (!ch?.id) return;
       try { await fetchFiles(ch); } catch (_) {}
+      // Asegurar que el canal (nuevo o no) está en LIB
+      try {
+        const id = String(ch.id);
+        if (!LIB.some((c) => String(c.id) === id)) {
+          LIB = [...LIB, ch];
+          try { await kv.set('lib', LIB); } catch (_) {}
+        } else {
+          // Actualizar group/name por si cambió
+          LIB = LIB.map((c) => (String(c.id) === id ? { ...c, ...ch } : c));
+          try { await kv.set('lib', LIB); } catch (_) {}
+        }
+      } catch (_) {}
       try {
         const top = stack[stack.length - 1];
         if (!top) return;
-        const ctx = top._uploadCtx;
-        if (ctx?.channel && String(ctx.channel.id) === String(ch.id)) {
-          show(); // re-ejecuta seriesView/filesView con listado fresco
-        } else if (String(top._chId) === String(ch.id)) {
+        const ctx = top._uploadCtx || {};
+        const chId = String(ch.id);
+        const chGroup = String(ch.group || '');
+        const sameChannel =
+          (ctx.channel && String(ctx.channel.id) === chId)
+          || String(top._chId || '') === chId;
+        // Vista de canales de una editorial (sin canal/serie abiertos)
+        const sameEditorial =
+          ctx.editorial
+          && !ctx.channel
+          && (
+            chGroup === String(ctx.editorial)
+            || (typeof groupDisplayName === 'function'
+              && groupDisplayName(chGroup) === String(ctx.editorial))
+            || String(ctx.editorial).toLowerCase() === chGroup.toLowerCase()
+          );
+        // Home
+        const onHome = stack.length === 1;
+        // Serie/canal de la misma editorial: también refrescar si el listado podría cambiar
+        const editorialContext =
+          ctx.editorial
+          && (
+            chGroup === String(ctx.editorial)
+            || String(ctx.editorial).toLowerCase() === chGroup.toLowerCase()
+          );
+
+        if (sameChannel || sameEditorial || onHome || editorialContext) {
+          // Guardar scroll aproximado y repintar
+          try {
+            top.scrollY = window.scrollY || document.documentElement.scrollTop || 0;
+          } catch (_) {}
           show();
         }
       } catch (e) {
