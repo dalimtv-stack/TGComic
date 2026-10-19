@@ -153,8 +153,8 @@ body:has(.sheet) #app{
 }
 .info-box{
   width:min(480px,100%);
-  max-height:calc(100dvh - var(--sat) - var(--sab) - 1.5rem);
   max-height:calc(100vh - var(--sat) - var(--sab) - 1.5rem);
+  max-height:calc(100dvh - var(--sat) - var(--sab) - 1.5rem);
   overflow:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;
   background:var(--card);border-radius:16px;box-shadow:0 12px 40px #000c;
   flex:0 1 auto;margin:auto;
@@ -250,8 +250,8 @@ body:has(.sheet) #app{
 .repack-panel{
   position:fixed;right:12px;bottom:12px;z-index:80;
   width:min(360px,calc(100vw - 24px));
-  max-height:min(50vh, calc(100dvh - 24px));
   max-height:min(50vh, calc(100vh - 24px));
+  max-height:min(50vh, calc(100dvh - 24px));
   display:flex;flex-direction:column;gap:8px;padding:12px;border-radius:14px;
   background:#1c1d22f2;-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
   box-shadow:0 8px 32px #000a;color:var(--fg);
@@ -310,8 +310,8 @@ body:has(.sheet) #app{
   /* Tamaño inicial como al principio; tope bajo el menú ☰ */
   width:min(360px, calc(100vw - 24px));
   height:min(70vh, 520px);
-  max-height:calc(100dvh - 64px);
   max-height:calc(100vh - 64px);
+  max-height:calc(100dvh - 64px);
 }
 .job-queue-panel > .repack-panel-head,
 .job-queue-panel > .repack-panel-bar,
@@ -364,8 +364,8 @@ body:has(.sheet) #app{
   .repack-panel{
     min-width:280px;min-height:280px;
     max-width:calc(100vw - 16px);
-    max-height:calc(100dvh - 64px);
     max-height:calc(100vh - 64px);
+  max-height:calc(100dvh - 64px);
     padding-top:16px;
   }
   .repack-resize-handle{

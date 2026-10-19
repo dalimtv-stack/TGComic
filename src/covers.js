@@ -129,9 +129,28 @@ export function createCovers(state, d) {
       const b = await getCover(ch, f);
       if (!b) return;
       const img = new Image();
-      img.onload = () => { ltr.remove(); d.prepend(img); };
-      img.src = URL.createObjectURL(b);
+      const url = URL.createObjectURL(b);
+      img.onload = () => {
+        try { ltr.remove(); } catch (_) {}
+        // Revocar URL anterior si se regenera la portada
+        if (d._objUrl) { try { URL.revokeObjectURL(d._objUrl); } catch (_) {} }
+        d._objUrl = url;
+        d.prepend(img);
+      };
+      img.onerror = () => { try { URL.revokeObjectURL(url); } catch (_) {} };
+      img.src = url;
     };
+    // Al quitar el nodo del DOM, liberar la URL
+    try {
+      const mo = new MutationObserver(() => {
+        if (!document.contains(d) && d._objUrl) {
+          try { URL.revokeObjectURL(d._objUrl); } catch (_) {}
+          d._objUrl = null;
+          mo.disconnect();
+        }
+      });
+      mo.observe(document.body, { childList: true, subtree: true });
+    } catch (_) {}
     io.observe(d);
     return d;
   }

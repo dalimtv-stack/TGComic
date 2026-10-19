@@ -64,10 +64,17 @@ export function createUploadTool(d) {
       ctx.drawImage(bmp, 0, 0, w, h);
       try { bmp.close?.(); } catch (_) {}
       bmp = null;
-      const out = await new Promise((res) => {
+      let out = await new Promise((res) => {
         try { cv.toBlob((b) => res(b), 'image/webp', q); }
         catch { res(null); }
       });
+      // Safari: toBlob('image/webp') puede devolver PNG o fallar → no tratarlo como WebP
+      if (!(out && out.size && (out.type || '').includes('webp'))) {
+        out = await new Promise((res) => {
+          try { cv.toBlob((b) => res(b), 'image/jpeg', Math.min(0.92, q + 0.2)); }
+          catch { res(null); }
+        });
+      }
       cv.width = 0;
       cv.height = 0;
       await yieldTick();

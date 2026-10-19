@@ -33,7 +33,7 @@ export function createRepackTool(d) {
     if (!blob || !blob.size) return blob;
     if ((blob.type || '').includes('webp') && blob.size < 1.5 * 1024 * 1024) return blob;
     const quality = Number(opts.quality);
-    const q = Number.isFinite(quality) && quality > 0 && quality <= 1 ? quality : 0.62;
+    const q = Number.isFinite(quality) && quality > 0 && quality <= 1 ? quality : 0.40;
     const doResize = opts.resize !== false;
     const maxEdge = Number(opts.maxEdge) > 0 ? Number(opts.maxEdge) : 2400;
     let bmp = null;
@@ -51,10 +51,17 @@ export function createRepackTool(d) {
       ctx.drawImage(bmp, 0, 0, w, h);
       try { bmp.close?.(); } catch (_) {}
       bmp = null;
-      const out = await new Promise((res) => {
+      let out = await new Promise((res) => {
         try { cv.toBlob((b) => res(b), 'image/webp', q); }
         catch { res(null); }
       });
+      // Safari: toBlob('image/webp') puede devolver PNG o fallar → no tratarlo como WebP
+      if (!(out && out.size && (out.type || '').includes('webp'))) {
+        out = await new Promise((res) => {
+          try { cv.toBlob((b) => res(b), 'image/jpeg', Math.min(0.92, q + 0.2)); }
+          catch { res(null); }
+        });
+      }
       cv.width = 0;
       cv.height = 0;
       await yieldTick();
@@ -915,8 +922,8 @@ export function createRepackTool(d) {
     const qualityLab = el('label', 'sync-label', 'Calidad');
     const qualityInp = el('input', 'edit-input');
     qualityInp.type = 'text';
-    qualityInp.value = '0.62';
-    qualityInp.placeholder = '0.62';
+    qualityInp.value = '0.40';
+    qualityInp.placeholder = '0.40';
     const resizeRow = el('label', 'repack-check');
     const resizeCb = el('input');
     resizeCb.type = 'checkbox';
@@ -1060,7 +1067,7 @@ export function createRepackTool(d) {
       }
       if (selected.length > 1 && !confirm(`Vas a procesar ${selected.length} archivos. ¿Seguro? Mejor de uno en uno en móvil.`)) return;
       const webpOpts = {
-        quality: parseFloat(String(qualityInp.value).replace(',', '.')) || 0.62,
+        quality: parseFloat(String(qualityInp.value).replace(',', '.')) || 0.40,
         resize: !!resizeCb.checked,
         maxEdge: 2400,
       };

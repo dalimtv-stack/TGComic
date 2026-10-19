@@ -443,7 +443,16 @@ async function fetchFiles(ch) {
 const msgs = new Map();
 async function getMsg(ch, f) {
   const k = ch.id + ':' + f.id;
-  if (!msgs.has(k)) { await ready; msgs.set(k, client.getMessages(peerOf(ch), { ids: [f.id] }).then((r) => r[0])); }
+  if (!msgs.has(k)) {
+    await ready;
+    const p = client.getMessages(peerOf(ch), { ids: [f.id] })
+      .then((r) => r[0])
+      .catch((e) => {
+        msgs.delete(k);
+        throw e;
+      });
+    msgs.set(k, p);
+  }
   return msgs.get(k);
 }
 
