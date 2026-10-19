@@ -4174,6 +4174,7 @@ const proTools = createProTools({
       show();
     } catch (_) {}
   },
+  copyInfoFrameText,
 });
 
 // ---------- Inicio ----------

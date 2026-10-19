@@ -18,6 +18,7 @@ export function createProTools(d) {
     appAlert,
     closeAppMenu,
     onCoversChanged,
+    copyInfoFrameText,
   } = d;
 
   const getLIB = () => (typeof d.LIB === 'function' ? d.LIB() : d.LIB) || [];
@@ -418,11 +419,25 @@ export function createProTools(d) {
     const frame = el('div', 'info-frame protools-dev');
     const box = el('div', 'info-box');
     const head = el('div', 'info-head');
-    head.append(el('span', '', 'Info desarrollo · Portadas'));
+    const titleSpan = el('span', 'info-head-title', 'Info desarrollo · Portadas');
+    titleSpan.title = 'Pulsa para copiar';
+    head.append(titleSpan);
     const close = el('button', 'btn info-close', '×');
     close.onclick = () => frame.remove();
     head.append(close);
     const body = el('div', 'info-body');
+    titleSpan.onclick = (ev) => {
+      ev.stopPropagation();
+      try {
+        if (typeof copyInfoFrameText === 'function') copyInfoFrameText(body);
+        else {
+          const text = body.innerText || body.textContent || '';
+          navigator.clipboard?.writeText?.(text);
+        }
+      } catch (_) {}
+      titleSpan.textContent = 'Copiado';
+      setTimeout(() => { titleSpan.textContent = 'Info desarrollo · Portadas'; }, 1200);
+    };
     const loading = el('p', 'cover-pick-hint', 'Analizando caché de portadas…');
     body.append(loading);
     box.append(head, body);
