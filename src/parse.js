@@ -50,7 +50,8 @@ export function parseComicName(name, channelName) {
     return number;
   };
   const finish = (series, tag, info, rangeEnd) => {
-    series = (series || '').trim();
+    // Quitar guiones/espacios sobrantes: "Killadelphia -" → "Killadelphia"
+    series = (series || '').replace(/\s*[-–—]+\s*$/g, '').replace(/^\s*[-–—]+\s*/g, '').trim();
     if (!series) return null;
     return {
       series,
@@ -62,7 +63,10 @@ export function parseComicName(name, channelName) {
   };
   const stripCh = (series) => {
     if (!ch) return series;
-    return series.replace(new RegExp(`^${escRe(ch)}\\s*-\\s*`, 'i'), '').trim() || series;
+    let s = series.replace(new RegExp(`^${escRe(ch)}\\s*-\\s*`, 'i'), '').trim();
+    // "Killadelphia - #01" ya consumió el canal en re1; si queda vacío, serie = canal
+    if (!s) s = ch;
+    return s.replace(/\s*[-–—]+\s*$/g, '').trim() || series;
   };
   // Rango: "Crossed - Dead Or Alive #01 - #02"
   const reRange = new RegExp(`^(.+?)\\s*#\\s*(${ISSUE_TAG})\\s*-\\s*#\\s*(${ISSUE_TAG})\\s*$`, 'i');
@@ -71,8 +75,18 @@ export function parseComicName(name, channelName) {
     const out = finish(stripCh(mRange[1]), mRange[2], '', mRange[3]);
     if (out) return out;
   }
-  // Canal - serie #n [- info]
+  // Canal - serie #n [- info]  OR  Canal - #n [- info]  (serie = canal)
   if (ch) {
+    // Canal - #n (sin nombre de serie entre medias) → serie = canal
+    const re1b = new RegExp(
+      `^${escRe(ch)}\\s*-\\s*#\\s*(${ISSUE_TAG})(?:\\s*-?\\s+(.+))?\\s*$`,
+      'i'
+    );
+    const m1b = raw.match(re1b);
+    if (m1b) {
+      const out = finish(ch, m1b[1], m1b[2] || '');
+      if (out) return out;
+    }
     const re1 = new RegExp(
       `^${escRe(ch)}\\s*-\\s*(.+?)\\s*#\\s*(${ISSUE_TAG})(?:\\s*-?\\s+(.+))?\\s*$`,
       'i'
@@ -192,7 +206,16 @@ export function groupSeries(files, channelName, seriesOverride) {
   return [...groups, ...rest]
     .map((g) => ({
       label: g.label,
-      files: g.files.sort((x, y) => natural(comicDisplay(x.name, channelName), comicDisplay(y.name, channelName))),
+      files: g.files.sort((x, y) => {
+        const a = comicDisplay(x.name, channelName);
+        const b = comicDisplay(y.name, channelName);
+        const c = natural(a, b);
+        if (c !== 0) return c;
+        // Mismo número: original antes que versión [WebP]
+        const ax = /\[WebP\]/i.test(x.name || '') ? 1 : 0;
+        const by = /\[WebP\]/i.test(y.name || '') ? 1 : 0;
+        return ax - by;
+      }),
     }))
     .sort((x, y) => natural(x.label, y.label));
 }
