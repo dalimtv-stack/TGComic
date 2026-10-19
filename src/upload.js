@@ -742,6 +742,14 @@ export function createUploadTool(d) {
           const again = fresh.find((c) => String(c.id) === entry.id)
             || fresh.find((c) => c.name.toLowerCase() === name.toLowerCase() && (c.group || '').toLowerCase() === group.toLowerCase());
           if (again) {
+            // Mensaje inicial con el nombre del canal (como tgstorage), antes de subir cómics
+            try {
+              status?.('Mensaje inicial en el canal…');
+              const peer = peerOf(again);
+              await client.sendMessage(peer, { message: name });
+            } catch (e) {
+              console.warn('[upload] no se pudo enviar el mensaje inicial del canal', e);
+            }
             status?.('Canal listo (archivado)');
             return again;
           }
@@ -755,6 +763,17 @@ export function createUploadTool(d) {
     const next = [...lib.filter((c) => String(c.id) !== entry.id), entry];
     setLIB(next);
     try { await kv.set('lib', next); } catch (_) {}
+
+    // Mensaje inicial solo en canal recién creado (nombre del canal, p.ej. "Ex Machina")
+    try {
+      status?.('Mensaje inicial en el canal…');
+      const peer = peerOf(entry);
+      await client.sendMessage(peer, { message: name });
+    } catch (e) {
+      console.warn('[upload] no se pudo enviar el mensaje inicial del canal', e);
+      status?.('Canal listo (sin mensaje inicial: ' + (e?.message || e) + ')');
+    }
+
     status?.('Canal listo (archivado)');
     return entry;
   }
