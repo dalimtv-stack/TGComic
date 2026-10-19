@@ -1008,8 +1008,10 @@ export function createUploadTool(d) {
         fichaBox.append(descInp);
         const idBtn = el('button', 'btn-identify', 'Identificar');
         idBtn.type = 'button';
+        idBtn.hidden = true; // solo con ficha de caption activada
         fichaChk.onchange = () => {
           fichaBox.hidden = !fichaChk.checked;
+          idBtn.hidden = !fichaChk.checked;
           if (fichaChk.checked) {
             if (!capSeriesInp.value) capSeriesInp.value = seriesInp.value || parsed.series || '';
             if (!pubInp.value) {
@@ -1022,7 +1024,7 @@ export function createUploadTool(d) {
 
         const row = {
           file, numberInp, infoInp, nameInp, nameTouched: false, rowEl,
-          fichaChk, fichaBox,
+          fichaChk, fichaBox, idBtn,
           titleEsInp, origInp, capSeriesInp, writerInp, artistInp, pubInp, dateInp, descInp,
         };
         idBtn.onclick = () => identifyForRow(row);

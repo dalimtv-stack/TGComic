@@ -1671,9 +1671,25 @@ function showCaptionEditor(ch, f, after, opts = {}) {
     }
   })();
 
+  // Título local (bbdd / nombre bajo portada) para restaurar al desmarcar CV
+  const localTitleEs = (() => {
+    if (cap.titleEs && String(cap.titleEs).trim()) return String(cap.titleEs).trim();
+    if (opts.currentLabel && String(opts.currentLabel).trim()) return String(opts.currentLabel).trim();
+    try {
+      const base = comicDisplay(f?.name || '', ch?.name) || '';
+      const shown = comicDisplayName(ch, f, base);
+      return (shown || base || '').trim();
+    } catch (_) {
+      return '';
+    }
+  })();
+  const localTitleOrig = (cap.originalTitle && String(cap.originalTitle).trim())
+    ? String(cap.originalTitle).trim()
+    : localTitleEs;
+
   const fileNameCtrl = mkField('Nombre de archivo', cap.fileName || (f?.name || ''));
-  const titleEsCtrl = mkField('Título España', cap.titleEs);
-  const origCtrl = mkField('Título original', cap.originalTitle);
+  const titleEsCtrl = mkField('Título España', localTitleEs);
+  const origCtrl = mkField('Título original', localTitleOrig);
   const seriesCtrl = mkField('Serie', cap.series || localSeries);
   const writerCtrl = mkField('Guionista', cap.writer, 'Nombre1 | Nombre2');
   const artistCtrl = mkField('Dibujante', cap.artist, 'Nombre1 | Nombre2');

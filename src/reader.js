@@ -240,7 +240,8 @@ export function createReader(state, d) {
       const cnt = el('span', 'cnt');
       const setCount = () => (cnt.textContent = `${n + 1} / ${pages.length}`);
       const cluster = el('div', 'bot-cluster');
-      cluster.append(back, mb);
+      // Mosaico siempre visible en la barra (fit/cnt se añaden después según modo)
+      cluster.append(back, mb, gridBtn);
       bot.append(cluster);
       document.body.append(rd);
       document.body.style.overflow = 'hidden';
@@ -282,12 +283,18 @@ export function createReader(state, d) {
         uiTimer = setTimeout(() => rd.classList.add('ui-off'), 2500);
       };
 
-      const showMosaic = () => {
+      const showMosaic = (ev) => {
+        try { ev?.preventDefault?.(); ev?.stopPropagation?.(); } catch (_) {}
         pokeUI();
+        document.querySelector('.mosaic')?.remove();
         const overlay = el('div', 'mosaic');
+        overlay.style.zIndex = '100';
         const head = el('div', 'mosaic-head');
         head.append(el('span', '', 'Páginas'), el('button', 'btn', 'Cerrar'));
-        head.querySelector('button').onclick = () => overlay.remove();
+        head.querySelector('button').onclick = (e) => {
+          try { e.stopPropagation(); } catch (_) {}
+          overlay.remove();
+        };
         const g = el('div', 'mosaic-grid');
         const thumbs = [];
         for (let i = 0; i < pages.length; i++) {
@@ -296,22 +303,24 @@ export function createReader(state, d) {
           cell.append(el('span', 'mosaic-num', String(i + 1)));
           const ph = el('div', 'mosaic-ph');
           cell.append(ph);
-          cell.onclick = () => {
+          cell.onclick = (e) => {
+            try { e.stopPropagation(); } catch (_) {}
             overlay.remove();
-            goToPage(i);
+            try { goToPage(i); } catch (_) {}
           };
           g.append(cell);
           thumbs.push({ i, ph, cell });
         }
         overlay.append(head, g);
-        overlay.addEventListener('click', (ev) => { if (ev.target === overlay) overlay.remove(); });
-        document.body.append(overlay);
-        // Miniaturas acotadas (no reutilizar el layout del lector)
+        overlay.addEventListener('click', (ev2) => { if (ev2.target === overlay) overlay.remove(); });
+        // Dentro de #rd para que se vea también en fullscreen nativo (Android)
+        rd.append(overlay);
         (async () => {
           for (const { i, ph } of thumbs) {
             if (!overlay.isConnected) return;
             try {
               const u = await load(i);
+              if (!u || !overlay.isConnected) continue;
               const im = el('img');
               im.alt = String(i + 1);
               im.decoding = 'async';
@@ -340,7 +349,7 @@ export function createReader(state, d) {
           pokeUI();
         };
         fitLabel();
-        cluster.append(gridBtn, fit, cnt);
+        cluster.append(fit, cnt);
         img.draggable = false;
         const eL = el('div', 'edge l'), eR = el('div', 'edge r');
         rd.append(img, eL, eR, top, bot);
@@ -695,7 +704,7 @@ export function createReader(state, d) {
           onResize?.();
         };
         fitLabel();
-        cluster.append(gridBtn, fit, cnt);
+        cluster.append(fit, cnt);
 
         const vw = () => Math.round(window.visualViewport?.width || window.innerWidth);
         const vh = () => Math.round(window.visualViewport?.height || window.innerHeight);
