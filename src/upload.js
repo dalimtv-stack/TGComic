@@ -1425,7 +1425,9 @@ export function createUploadTool(d) {
                 await fetchFiles(ch);
               } catch (_) {}
               try {
-                if (typeof onUploadDone === 'function') await onUploadDone(ch);
+                if (typeof onUploadDone === 'function') {
+                  await onUploadDone(ch, { outName, outNames: [outName] });
+                }
               } catch (e) {
                 console.warn('[upload] onUploadDone', e);
               }

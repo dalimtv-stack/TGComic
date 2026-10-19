@@ -17,6 +17,7 @@ import {
   isComicRead, readProgress, markComicRead, markComicUnread,
   markSeriesRead, markSeriesUnread,
   getLastRead, setLastRead, getRecentReads, getContinueList, listUnfinishedProgress,
+  clearComicProgress, migrateLegacyProgress,
 } from './progress.js';
 import {
   ungroupMap, setUngroupMode,
@@ -4042,9 +4043,23 @@ try {
       return (x / (1024 * 1024)).toFixed(2) + ' MB';
     },
     // Tras subir: refrescar lo que el usuario está viendo (canal, serie, editorial o home)
-    onUploadDone: async (ch) => {
+    onUploadDone: async (ch, meta = {}) => {
       if (!ch?.id) return;
-      try { await fetchFiles(ch); } catch (_) {}
+      let files = [];
+      try { files = await fetchFiles(ch); } catch (_) {}
+      // Cómics recién subidos: nunca deben heredar progreso de otro mensaje con el mismo id
+      try {
+        const names = [].concat(meta.outNames || [], meta.outName ? [meta.outName] : [])
+          .map((n) => String(n || '').toLowerCase());
+        if (names.length && Array.isArray(files)) {
+          for (const f of files) {
+            const fn = String(f?.name || '').toLowerCase();
+            if (names.some((n) => n && fn === n)) {
+              clearComicProgress(ch.id, f.id);
+            }
+          }
+        }
+      } catch (_) {}
       // Asegurar que el canal (nuevo o no) está en LIB
       try {
         const id = String(ch.id);
@@ -4141,6 +4156,17 @@ async function migrateCacheImages() {
   // Sync antes de biblioteca / seguir leyendo
   try { await sync.syncOnStartup(); } catch (_) {}
   LIB = (await kv.get('lib')) || [];
+  // Migrar progreso legado page:msg → page:ch:msg solo para cómics conocidos; borra legados sueltos
+  try {
+    if (sessionStorage.getItem('progMigV2') !== '1') {
+      const filesByCh = {};
+      for (const ch of LIB) {
+        try { filesByCh[String(ch.id)] = (await kv.get('f:' + ch.id)) || []; } catch (_) { filesByCh[String(ch.id)] = []; }
+      }
+      migrateLegacyProgress(LIB, (id) => filesByCh[String(id)] || []);
+      sessionStorage.setItem('progMigV2', '1');
+    }
+  } catch (_) {}
   stack.push({ title: 'Cómics', render: groupsView });
   show();
   // Optimizar caché antigua en segundo plano (WebP + menos resolución)

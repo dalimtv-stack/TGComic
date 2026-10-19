@@ -13,41 +13,86 @@ const lastReadKey = 'lastRead';
 const recentKey = 'recentReads';
 
 export function getPageIndex(chId, msgId) {
-  const k = pageKey(chId, msgId);
-  let v = localStorage.getItem(k);
-  if (v == null) {
-    v = localStorage.getItem(legacyPageKey(msgId));
-    if (v != null) {
-      try { localStorage.setItem(k, v); } catch (_) {}
-    }
-  }
+  // Solo clave compuesta canal:mensaje. NO heredar page:msgId legado:
+  // los IDs de mensaje se repiten entre canales y contaminaban cómics nuevos (p.ej. 15%).
+  const v = localStorage.getItem(pageKey(chId, msgId));
   return Math.max(0, +(v || 0) || 0);
 }
 
 export function setPageIndex(chId, msgId, n) {
   try {
     localStorage.setItem(pageKey(chId, msgId), String(n));
-    localStorage.removeItem(legacyPageKey(msgId));
+    // Limpiar legado suelto para no recontaminar otros canales
+    try { localStorage.removeItem(legacyPageKey(msgId)); } catch (_) {}
   } catch (_) {}
   try { sync.schedulePush(400); } catch (_) {}
 }
 
 export function getPagesTotal(chId, msgId) {
-  const k = pagesKey(chId, msgId);
-  let v = localStorage.getItem(k);
-  if (v == null) {
-    v = localStorage.getItem(legacyPagesKey(msgId));
-    if (v != null) {
-      try { localStorage.setItem(k, v); } catch (_) {}
-    }
-  }
+  const v = localStorage.getItem(pagesKey(chId, msgId));
   return Math.max(0, +(v || 0) || 0);
 }
 
 export function setPagesTotal(chId, msgId, tot) {
   try {
     localStorage.setItem(pagesKey(chId, msgId), String(tot));
+    try { localStorage.removeItem(legacyPagesKey(msgId)); } catch (_) {}
+  } catch (_) {}
+}
+
+/** Borra progreso/leído de un cómic (p.ej. tras subida nueva). */
+export function clearComicProgress(chId, msgId) {
+  if (chId == null || msgId == null) return;
+  try {
+    localStorage.removeItem(pageKey(chId, msgId));
+    localStorage.removeItem(pagesKey(chId, msgId));
+    localStorage.removeItem(pageFmtKey(chId, msgId));
+    localStorage.removeItem(readFlagKey(chId, msgId));
+    localStorage.removeItem(legacyPageKey(msgId));
     localStorage.removeItem(legacyPagesKey(msgId));
+  } catch (_) {}
+}
+
+/**
+ * Migración única: solo para cómics que ya existen en la biblioteca.
+ * Copia page:msg → page:ch:msg si falta la compuesta, y elimina el legado.
+ */
+export function migrateLegacyProgress(lib, filesByChId) {
+  if (!Array.isArray(lib)) return;
+  const claimed = new Set(); // msgId ya migrado a un canal
+  for (const ch of lib) {
+    if (!ch?.id) continue;
+    const files = filesByChId?.(ch.id) || filesByChId?.(String(ch.id)) || [];
+    for (const f of files) {
+      if (!f?.id) continue;
+      const mid = String(f.id);
+      const ck = pageKey(ch.id, mid);
+      const ctot = pagesKey(ch.id, mid);
+      if (localStorage.getItem(ck) == null) {
+        const leg = localStorage.getItem(legacyPageKey(mid));
+        if (leg != null && !claimed.has('p:' + mid)) {
+          try { localStorage.setItem(ck, leg); } catch (_) {}
+          claimed.add('p:' + mid);
+        }
+      }
+      if (localStorage.getItem(ctot) == null) {
+        const leg = localStorage.getItem(legacyPagesKey(mid));
+        if (leg != null && !claimed.has('t:' + mid)) {
+          try { localStorage.setItem(ctot, leg); } catch (_) {}
+          claimed.add('t:' + mid);
+        }
+      }
+    }
+  }
+  // Eliminar todos los legados page:/pages: numéricos sueltos para no contaminar subidas nuevas
+  try {
+    const toDel = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k) continue;
+      if (/^page:\d+$/.test(k) || /^pages:\d+$/.test(k)) toDel.push(k);
+    }
+    for (const k of toDel) localStorage.removeItem(k);
   } catch (_) {}
 }
 
