@@ -481,6 +481,34 @@ export function createUploadTool(d) {
     throw new Error('Formato no soportado (usa CBZ o CBR)');
   }
 
+  /**
+   * Telegram limita el caption a 1024 caracteres.
+   * Preferimos recortar la descripción; si no cabe, el resto del texto.
+   */
+  function fitTelegramCaption(text, max = 1024) {
+    let s = String(text || '').replace(/\r\n/g, '\n').trimEnd();
+    if (s.length <= max) return s;
+    const marker = '\nDescripción: ';
+    const descIdx = s.indexOf(marker);
+    if (descIdx >= 0) {
+      const head = s.slice(0, descIdx);
+      if (head.length <= max) {
+        const room = max - head.length - marker.length;
+        if (room >= 8) {
+          const body = s.slice(descIdx + marker.length).trim();
+          return head + marker + body.slice(0, Math.max(0, room - 1)).trimEnd() + '…';
+        }
+        return head.slice(0, max);
+      }
+    }
+    return s.slice(0, Math.max(0, max - 1)).trimEnd() + '…';
+  }
+
+  function isCaptionTooLongError(e) {
+    const m = String(e?.message || e || '');
+    return /MEDIA_CAPTION_TOO_LONG|CAPTION_TOO_LONG/i.test(m);
+  }
+
   async function uploadCbz(ch, fileName, blob, caption, status) {
     await getReady();
     const peer = peerOf(ch);
@@ -488,11 +516,48 @@ export function createUploadTool(d) {
     if (!blob || !blob.size) throw new Error('Archivo vacío');
     status?.(`Preparando subida… (${formatBytes?.(blob.size) || blob.size + ' B'})`);
 
+    let captionSafe = fitTelegramCaption(caption || '', 1024);
+    if ((caption || '').length > captionSafe.length) {
+      status?.(`Caption recortado a ${captionSafe.length}/1024 caracteres (límite Telegram)`);
+    }
+
     const attrs = [new Api.DocumentAttributeFilename({ fileName })];
     const onProg = (p) => {
       const n = Number(p);
       if (Number.isFinite(n) && n >= 0 && n <= 1) {
         status?.(`Subiendo… ${Math.min(100, Math.round(n * 100))}%`);
+      }
+    };
+
+    const sendWithCaption = async (fileRef, cap) => {
+      try {
+        await client.sendFile(peer, {
+          file: fileRef,
+          caption: cap || '',
+          forceDocument: true,
+          attributes: attrs,
+        });
+        return true;
+      } catch (e) {
+        if (isCaptionTooLongError(e)) {
+          // Reintentos más agresivos: 900 → 512 → sin caption
+          for (const lim of [900, 512, 0]) {
+            const short = lim === 0 ? '' : fitTelegramCaption(cap, lim);
+            status?.(`Caption demasiado largo; reintento con ${short.length}/1024…`);
+            try {
+              await client.sendFile(peer, {
+                file: fileRef,
+                caption: short,
+                forceDocument: true,
+                attributes: attrs,
+              });
+              return true;
+            } catch (e2) {
+              if (!isCaptionTooLongError(e2)) throw e2;
+            }
+          }
+        }
+        throw e;
       }
     };
 
@@ -505,15 +570,14 @@ export function createUploadTool(d) {
         workers: 1,
         onProgress: onProg,
       });
-      await client.sendFile(peer, {
-        file: inputFile,
-        caption: caption || '',
-        forceDocument: true,
-        attributes: attrs,
-      });
+      await sendWithCaption(inputFile, captionSafe);
       return;
     } catch (e) {
       console.warn('[upload] uploadFile(File) falló', e);
+      // Si el fallo fue solo caption y ya se agotaron reintentos, no confundir con CustomFile
+      if (isCaptionTooLongError(e)) {
+        throw new Error('Caption demasiado largo para Telegram (máx. 1024). Acorta la descripción.');
+      }
       status?.(`Reintento… (${e?.message || e})`);
     }
 
@@ -530,7 +594,27 @@ export function createUploadTool(d) {
         if (m.CustomFile) { CustomFile = m.CustomFile; break; }
       } catch (_) {}
     }
-    if (!CustomFile) throw new Error('CustomFile no disponible');
+    if (!CustomFile) {
+      // Último recurso: sendFile directo con File del navegador
+      try {
+        const browserFile = new File([blob], fileName, { type: blob.type || 'application/zip' });
+        status?.('Subiendo (sendFile directo)…');
+        await client.sendFile(peer, {
+          file: browserFile,
+          caption: captionSafe,
+          forceDocument: true,
+          workers: 1,
+          attributes: attrs,
+          progressCallback: onProg,
+        });
+        return;
+      } catch (e) {
+        if (isCaptionTooLongError(e)) {
+          throw new Error('Caption demasiado largo para Telegram (máx. 1024). Acorta la descripción.');
+        }
+        throw new Error('CustomFile no disponible: ' + (e?.message || e));
+      }
+    }
 
     const custom = new CustomFile(fileName, u8.byteLength, '');
     try { custom.buffer = buffer; } catch (_) {}
@@ -545,21 +629,19 @@ export function createUploadTool(d) {
         workers: 1,
         onProgress: onProg,
       });
-      await client.sendFile(peer, {
-        file: inputFile,
-        caption: caption || '',
-        forceDocument: true,
-        attributes: attrs,
-      });
+      await sendWithCaption(inputFile, captionSafe);
       return;
     } catch (e) {
       console.warn('[upload] CustomFile falló', e);
+      if (isCaptionTooLongError(e)) {
+        throw new Error('Caption demasiado largo para Telegram (máx. 1024). Acorta la descripción.');
+      }
       status?.(`Reintento sendFile… (${e?.message || e})`);
     }
 
     await client.sendFile(peer, {
       file: custom,
-      caption: caption || '',
+      caption: captionSafe,
       forceDocument: true,
       workers: 1,
       attributes: attrs,
@@ -1234,7 +1316,7 @@ export function createUploadTool(d) {
             outName = ensureCbzName(outName, wantWebp);
           }
           // Siempre: "Nombre de archivo"; ficha completa si el check del archivo está activo
-          const caption = row.fichaChk?.checked
+          let caption = row.fichaChk?.checked
             ? buildComicCaption({
                 fileName: outName,
                 titleEs: row.titleEsInp?.value || '',
@@ -1247,6 +1329,8 @@ export function createUploadTool(d) {
                 description: row.descInp?.value || '',
               })
             : buildComicCaption({ fileName: outName });
+          // Ajustar al límite de Telegram (1024) antes de encolar
+          caption = fitTelegramCaption(caption, 1024);
           return { file: row.file, outName, caption };
         });
 
