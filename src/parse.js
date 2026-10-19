@@ -6,7 +6,7 @@ const natural = (a, b) => a.localeCompare(b, undefined, { numeric: true });
 export const stripExt = (n) => n.replace(/\.cb[zr]$/i, '');
 
 // Nombre limpio: sin extensión, guiones bajos, etiquetas [..] (..) ni marcas @sitio
-export const clean = (n) => stripExt(n).replace(/_/g, ' ').replace(/\s*[(\[][^)\]]*[)\]]/g, '').replace(/\s*@\S+/g, '').replace(/\s+/g, ' ').trim();
+export const clean = (n) => stripExt(n).replace(/_/g, ' ').replace(/\s*\[[^\]]*\]/g, '').replace(/\s*@\S+/g, '').replace(/\s+/g, ' ').trim();
 // Número al final (legado); admite sufijo de letra (07b, 1a)
 const NUM = /[\s._-]*(?:#|n[º°]\.?|no\.|vol\.?|cap\.?|issue|núm\.?|parte|part|tomo)?\s*\d+(?:\.\d+)?[a-zA-Z]?(?:\s*(?:de|of)\s*\d+)?\s*$/i;
 const FIRST_ISSUE = /^(.+?)[\s._-]+(?:#|n[º°]\.?|no\.?|vol\.?|cap\.?|issue|núm\.?)?\s*\d+(?:\.\d+)?[a-zA-Z]?(?:\b|$)/i;
@@ -14,7 +14,6 @@ const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /** Quita (paréntesis), [corchetes] y créditos "por Grupo" del tramo info */
 const cleanInfo = (s) => (s || '')
   .replace(/\s*\[[^\]]*\]/g, '')
-  .replace(/\s*\((?!\d+\s*de\s*\d+)[^)]*\)/gi, '')
   .replace(/\s+por\s+\S.*$/i, '')
   .replace(/\s+/g, ' ')
   .trim();
@@ -33,7 +32,6 @@ export function parseComicName(name, channelName) {
   // Quitar [corchetes], @sitios y basura; dejar el patrón serie #n
   const raw = stripExt(name).replace(/_/g, ' ')
     .replace(/\s*\[[^\]]*\]/g, '')
-    .replace(/\s*\((?!\d+\s*de\s*\d+)[^)]*\)/gi, '')
     .replace(/\s*@\S+/g, '')
     .replace(/\s+/g, ' ')
     .trim();
