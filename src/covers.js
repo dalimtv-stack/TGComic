@@ -31,49 +31,100 @@ export function createCovers(state, d) {
   }
 
   let _webpOk = null;
+  /** true solo si toBlob('image/webp') devuelve type real image/webp (Safari a menudo miente). */
   async function supportsWebP() {
     if (_webpOk != null) return _webpOk;
     _webpOk = await new Promise((res) => {
       try {
         const c = document.createElement('canvas');
-        c.width = 1; c.height = 1;
-        c.toBlob((b) => res(!!(b && b.type === 'image/webp')), 'image/webp', 0.8);
+        c.width = 2; c.height = 2;
+        c.getContext('2d').fillRect(0, 0, 2, 2);
+        c.toBlob((b) => res(!!(b && b.size && (b.type || '').includes('webp'))), 'image/webp', 0.8);
       } catch { res(false); }
     });
     return _webpOk;
   }
 
-  async function optimizeImageBlob(blob, maxEdge = 320, quality = 0.72) {
+  function canvasToBlob(cv, type, quality) {
+    return new Promise((res) => {
+      try { cv.toBlob((b) => res(b || null), type, quality); }
+      catch { res(null); }
+    });
+  }
+
+  /**
+   * Miniatura de portada: siempre reescala; nunca guarda la página completa.
+   * PC → WebP ~16 KB; iPhone sin encoder WebP → JPEG más agresivo (antes devolvía
+   * el blob original o un JPEG grande → más peso y peor aspecto).
+   */
+  async function optimizeImageBlob(blob, maxEdge = 280, quality = 0.72) {
     if (!blob || !blob.size) return null;
-    if (blob.type === 'image/webp' && blob.size < 40 * 1024 && maxEdge >= 320) {
+
+    // Ya es una miniatura WebP razonable: reutilizar
+    if ((blob.type || '').includes('webp') && blob.size < 48 * 1024) {
       try {
         const bmp = await createImageBitmap(blob);
-        const ok = Math.max(bmp.width, bmp.height) <= maxEdge + 8;
+        const ok = Math.max(bmp.width, bmp.height) <= maxEdge + 16;
         bmp.close?.();
         if (ok) return blob;
       } catch (_) {}
     }
-    const bmp = await createImageBitmap(blob);
-    const scale = Math.min(1, maxEdge / Math.max(bmp.width, bmp.height));
-    const w = Math.max(1, Math.round(bmp.width * scale));
-    const h = Math.max(1, Math.round(bmp.height * scale));
-    const cv = el('canvas');
-    cv.width = w; cv.height = h;
-    cv.getContext('2d').drawImage(bmp, 0, 0, w, h);
-    bmp.close?.();
-    const webp = await supportsWebP();
-    const type = webp ? 'image/webp' : 'image/jpeg';
-    const out = await new Promise((r) => cv.toBlob(r, type, quality));
-    if (!out || (out.size >= blob.size && blob.size < 80 * 1024)) {
-      if (type === 'image/webp') {
-        const jpg = await new Promise((r) => cv.toBlob(r, 'image/jpeg', quality));
-        return jpg && jpg.size < blob.size ? jpg : (jpg || out || blob);
+
+    let bmp = null;
+    try {
+      bmp = await createImageBitmap(blob);
+    } catch {
+      try {
+        const url = URL.createObjectURL(blob);
+        bmp = await new Promise((resolve, reject) => {
+          const im = new Image();
+          im.onload = () => resolve(im);
+          im.onerror = reject;
+          im.src = url;
+        });
+        try { URL.revokeObjectURL(url); } catch (_) {}
+      } catch {
+        return null;
       }
-      return out && out.size < blob.size ? out : blob;
     }
-    return out;
+
+    const srcW = bmp.width || bmp.naturalWidth || 0;
+    const srcH = bmp.height || bmp.naturalHeight || 0;
+    if (!srcW || !srcH) {
+      try { bmp.close?.(); } catch (_) {}
+      return null;
+    }
+
+    const scale = Math.min(1, maxEdge / Math.max(srcW, srcH));
+    const w = Math.max(1, Math.round(srcW * scale));
+    const h = Math.max(1, Math.round(srcH * scale));
+    const cv = el('canvas');
+    cv.width = w;
+    cv.height = h;
+    const ctx = cv.getContext('2d', { alpha: false });
+    ctx.drawImage(bmp, 0, 0, w, h);
+    try { bmp.close?.(); } catch (_) {}
+
+    let out = null;
+    if (await supportsWebP()) {
+      out = await canvasToBlob(cv, 'image/webp', quality);
+      if (!(out && out.size && (out.type || '').includes('webp'))) out = null;
+    }
+    if (!out) {
+      const jq = Math.min(0.62, quality);
+      out = await canvasToBlob(cv, 'image/jpeg', jq);
+    }
+    if (!out || !out.size) {
+      out = await canvasToBlob(cv, 'image/jpeg', 0.5);
+    }
+
+    cv.width = 0;
+    cv.height = 0;
+    // NUNCA devolver el original (página completa de varios MB)
+    return out && out.size ? out : null;
   }
 
+  // Lado mayor 280 px; en rejilla se ve bien y limita peso en iPhone (JPEG)
   const thumbFromBlob = (blob) => optimizeImageBlob(blob, 280, 0.72);
 
   async function saveCoverBlob(ch, f, blob) {
