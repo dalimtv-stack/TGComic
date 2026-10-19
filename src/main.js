@@ -2109,19 +2109,9 @@ function showEditComicTitle(ch, f, currentLabel, after) {
         titleSave = titleSave.replace(new RegExp('^' + esc + '\\s*-\\s*', 'i'), '').trim();
       } catch (_) {}
     }
-    if (!titleSave || titleSave === fallbackTitle) titleSave = '';
-    // No guardar como personalizado títulos auto (Serie #n / del caption)
-    if (titleSave) {
-      try {
-        const p = parseComicName(f?.name || '', ch?.name);
-        const auto = p ? ((p.series + ' ' + issueDisplay(p)).trim()) : '';
-        const auto2 = comicDisplay(f?.name || '', ch?.name) || '';
-        const cap = parseComicCaption(f?.caption || '');
-        const te = (cap.titleEs || '').trim();
-        if (titleSave === auto || titleSave === auto2 || (te && titleSave === te)) titleSave = '';
-        if (p?.series && titleSave.toLowerCase() === (p.series + ' ' + issueDisplay(p)).toLowerCase()) titleSave = '';
-      } catch (_) {}
-    }
+    // Vacío = restaurar automático. Cualquier otro texto se guarda tal cual
+    // (antes se descartaba si se parecía al título del archivo/caption y no persistía).
+    if (!titleSave) titleSave = '';
 
     // Serie desde el <select>
     let seriesSave = '';

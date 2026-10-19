@@ -99,47 +99,9 @@ export function comicDisplayName(ch, f, fallback) {
     return '';
   };
 
-  // ¿El "personalizado" es en realidad un auto-título erróneo (Serie #n, Canal - …)?
-  const isBogusCustom = (c) => {
-    if (!c) return true;
-    const low = c.toLowerCase();
-    try {
-      const pFile = parseComicName(f.name || '', ch.name);
-      const cap = parseComicCaption(f.caption || '');
-      const titleEs = cap.titleEs && String(cap.titleEs).trim();
-      const pCap = titleEs
-        ? parseComicName((/\.cb[zr]$/i.test(titleEs) ? titleEs : titleEs + '.cbz'), ch.name)
-        : null;
-      const candidates = [];
-      if (pFile) {
-        candidates.push(comicDisplay(f.name, ch.name));
-        candidates.push((pFile.series + ' ' + issueDisplay(pFile)).trim());
-        candidates.push(issueDisplay(pFile));
-      }
-      if (pCap) {
-        const asName = (/\.cb[zr]$/i.test(titleEs) ? titleEs : titleEs + '.cbz');
-        candidates.push(comicDisplay(asName, ch.name));
-        candidates.push((pCap.series + ' ' + issueDisplay(pCap)).trim());
-        candidates.push(issueDisplay(pCap));
-        candidates.push(titleEs);
-      }
-      if (chName) {
-        candidates.push(chName + ' - ' + c);
-        candidates.push(c.replace(new RegExp('^' + chName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*-\\s*', 'i'), '').trim());
-      }
-      for (const x of candidates) {
-        if (x && String(x).trim().toLowerCase() === low) return true;
-      }
-      // "Badlands #007" cuando la serie del parseo es Badlands
-      const p = pCap || pFile;
-      if (p?.series && low === (p.series + ' ' + issueDisplay(p)).toLowerCase()) return true;
-      if (p?.series && low.startsWith(p.series.toLowerCase() + ' #')) return true;
-    } catch (_) {}
-    return false;
-  };
-
+  // Personalización del usuario: SIEMPRE gana (antes isBogusCustom la descartaba)
   let t = '';
-  if (custom && !isBogusCustom(custom)) {
+  if (custom) {
     t = custom;
   } else {
     t = derived() || fb || '';
@@ -158,6 +120,7 @@ export function comicDisplayName(ch, f, fallback) {
   }
   return t;
 }
+
 export function setComicDisplayName(ch, f, newName, after) {
   if (!ch || !f?.id) return after?.();
   const m = comicRenameMap(ch);
