@@ -14,6 +14,7 @@ export function createRepackTool(d) {
     getIsHome,
     parseComicName, comicDisplay, comicDisplayName,
     seriesDisplayName, getComicSeriesOverride,
+    parseComicCaption, buildComicCaption,
   } = d;
   const getClient = () => d.client;
   const getReady = () => d.ready;
@@ -655,7 +656,47 @@ export function createRepackTool(d) {
       }
       status(`Nombre de subida: ${outName}`);
       prog(65);
-      await uploadCbz(ch, outName, cbz, f.caption || '', statusWithProg);
+      // Caption del original + Nombre de archivo = nombre final (WebP u otro)
+      let caption = String(item.caption || f.caption || '').trim();
+      if (!caption && typeof getMsg === 'function') {
+        try {
+          const msg = await getMsg(ch, f);
+          caption = String(msg?.message || '').trim();
+        } catch (e) {
+          console.warn('[repack] no se pudo leer caption del original', e);
+        }
+      }
+      if (caption && typeof parseComicCaption === 'function' && typeof buildComicCaption === 'function') {
+        try {
+          const fields = parseComicCaption(caption);
+          fields.fileName = outName;
+          caption = buildComicCaption(fields);
+          if (fields.description && !/Descripción:/i.test(caption)) {
+            caption = caption + '\nDescripción: ' + fields.description;
+          }
+        } catch (e) {
+          console.warn('[repack] caption rebuild', e);
+        }
+      }
+      // Límite Telegram 1024
+      if (caption && caption.length > 1024) {
+        const cut = caption.slice(0, 1023);
+        const lastNl = cut.lastIndexOf('\n');
+        caption = (lastNl > 200 ? cut.slice(0, lastNl) : cut).trimEnd();
+        status(`Caption recortado a ${caption.length}/1024`);
+      }
+      status(caption ? ('Caption: ' + caption.length + ' caracteres') : 'Sin caption');
+      try {
+        await uploadCbz(ch, outName, cbz, caption, statusWithProg);
+      } catch (e) {
+        const msg = String(e?.message || e || '');
+        if (/Missing MTProto Entity/i.test(msg) || /TL definition for ID 0/i.test(msg)) {
+          console.warn('[repack] aviso GramJS tras subida (se ignora):', msg);
+          status('✓ Subido (aviso interno GramJS ignorado)');
+        } else {
+          throw e;
+        }
+      }
       cbz = null;
       status('Subido a Telegram');
       prog(95);
@@ -1087,28 +1128,125 @@ export function createRepackTool(d) {
   } catch (_) {}
 
   /**
-   * Añadir versión WebP de un cómic ya en el canal.
-   * Conserva el nombre de archivo original + " [WebP]" y el caption de Telegram.
+   * Formulario previo: Añadir versión WebP de un cómic ya en el canal.
+   * Por defecto conserva el nombre original + [WebP] (no "Canal - #n").
    */
   function offerWebpVersion(ch, f) {
     if (!ch || !f) return;
-    const base = String(f.name || 'comic.cbz')
-      .replace(/_/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .replace(/\.cb[zr]$/i, '.cbz');
-    let outName = /\.cbz$/i.test(base) ? base : (base + '.cbz');
-    if (!/\[WebP\]/i.test(outName)) {
-      outName = outName.replace(/\.cbz$/i, ' [WebP].cbz');
-    }
-    const webpOpts = { quality: 0.40, resize: true, maxEdge: 2400 };
-    // Encolar sin reescribir el nombre (processOne respeta item.outName)
-    runQueue(
-      [{ ch, f, outName, asWebp: true, webpOpts }],
-      false, // no borrar original
-      true,
-      webpOpts
-    );
+    document.querySelector('.info-frame.webp-version')?.remove();
+    const frame = el('div', 'info-frame webp-version');
+    const box = el('div', 'info-box');
+    const head = el('div', 'info-head');
+    head.append(el('span', '', 'Añadir versión WebP'));
+    const close = el('button', 'btn info-close', '×');
+    close.onclick = () => frame.remove();
+    head.append(close);
+    const body = el('div', 'info-body');
+
+    body.append(el('p', 'cover-pick-hint',
+      'Se descargará el archivo, se convertirán las páginas a WebP y se subirá una copia al mismo canal. Se conserva la ficha Telegram del original.'
+    ));
+    const srcRow = el('div', 'info-row');
+    srcRow.append(el('span', 'info-label', 'Original'), el('span', 'info-value', f.name || ''));
+    body.append(srcRow);
+    const chRow = el('div', 'info-row');
+    chRow.append(el('span', 'info-label', 'Canal'), el('span', 'info-value', ch.name || ''));
+    body.append(chRow);
+
+    const webpLock = el('label', 'repack-check');
+    const webpCb = el('input');
+    webpCb.type = 'checkbox';
+    webpCb.checked = true;
+    webpCb.disabled = true;
+    webpLock.append(webpCb, document.createTextNode(' Convertir páginas a WebP (añade [WebP] al nombre)'));
+    body.append(webpLock);
+
+    const qualityLab = el('label', 'sync-label', 'Calidad WebP (0–1)');
+    const qualityInp = el('input', 'edit-input');
+    qualityInp.type = 'text';
+    qualityInp.value = '0.40';
+    qualityInp.placeholder = '0.40';
+    body.append(qualityLab, qualityInp);
+
+    const resizeRow = el('label', 'repack-check');
+    const resizeCb = el('input');
+    resizeCb.type = 'checkbox';
+    resizeCb.checked = true;
+    resizeRow.append(resizeCb, document.createTextNode(' Redimensionar (lado mayor máx. 2400 px)'));
+    body.append(resizeRow);
+
+    // Nombre por defecto = original + [WebP] (misma serie al agrupar)
+    const originalName = () => {
+      let n = String(f.name || 'comic.cbz')
+        .replace(/_/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/\.cb[zr]$/i, '.cbz');
+      if (!/\.cbz$/i.test(n)) n += '.cbz';
+      if (!/\[WebP\]/i.test(n)) n = n.replace(/\.cbz$/i, ' [WebP].cbz');
+      return n;
+    };
+
+    const includeChChk = el('input');
+    includeChChk.type = 'checkbox';
+    includeChChk.checked = false; // por defecto NO reescribir con "Canal - …"
+    const includeChRow = el('label', 'repack-check');
+    includeChRow.append(includeChChk, document.createTextNode(' Reconstruir nombre (serie #n) desde datos del cómic'));
+    body.append(includeChRow);
+
+    body.append(el('label', 'sync-label', 'Nombre al subir'));
+    const nameInp = el('input', 'edit-input');
+    nameInp.type = 'text';
+    nameInp.autocomplete = 'off';
+    nameInp.value = originalName();
+    body.append(nameInp);
+
+    includeChChk.onchange = () => {
+      if (includeChChk.checked) {
+        let n = suggestUploadName(ch, f, false); // sin forzar "Canal -"
+        if (!/\.cbz$/i.test(n)) n = n.replace(/\.cb[zr]$/i, '') + '.cbz';
+        if (!/\[WebP\]/i.test(n)) n = n.replace(/\.cbz$/i, ' [WebP].cbz');
+        nameInp.value = n;
+      } else {
+        nameInp.value = originalName();
+      }
+    };
+
+    const delRow = el('label', 'repack-check');
+    const delCb = el('input');
+    delCb.type = 'checkbox';
+    delCb.checked = false;
+    delRow.append(delCb, document.createTextNode(' Borrar el original tras subir OK'));
+    body.append(delRow);
+
+    const actions = el('div', 'edit-actions');
+    const cancel = el('button', 'btn', 'Cancelar');
+    cancel.onclick = () => frame.remove();
+    const goBtn = el('button', 'btn edit-save', 'Subir versión WebP');
+    goBtn.onclick = () => {
+      let name = String(nameInp.value || '').trim().replace(/_/g, ' ').replace(/\s+/g, ' ');
+      if (!name) name = originalName();
+      if (!/\.cbz$/i.test(name)) name = name.replace(/\.cb[zr]$/i, '') + '.cbz';
+      if (!/\.cbz$/i.test(name)) name += '.cbz';
+      if (!/\[WebP\]/i.test(name)) name = name.replace(/\.cbz$/i, ' [WebP].cbz');
+      const webpOpts = {
+        quality: parseFloat(String(qualityInp.value).replace(',', '.')) || 0.40,
+        resize: !!resizeCb.checked,
+        maxEdge: 2400,
+      };
+      frame.remove();
+      runQueue(
+        [{ ch, f, outName: name, asWebp: true, webpOpts, caption: f.caption || '' }],
+        !!delCb.checked,
+        true,
+        webpOpts
+      );
+    };
+    actions.append(cancel, goBtn);
+    body.append(actions);
+    box.append(head, body);
+    frame.append(box);
+    document.body.append(frame);
   }
 
   return {
