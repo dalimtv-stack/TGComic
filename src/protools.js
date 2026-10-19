@@ -331,6 +331,172 @@ export function createProTools(d) {
     document.body.append(frame);
   }
 
+
+  function formatBytes(n) {
+    const x = Number(n) || 0;
+    if (x < 1024) return x + ' B';
+    if (x < 1024 * 1024) return (x / 1024).toFixed(1) + ' KB';
+    return (x / (1024 * 1024)).toFixed(2) + ' MB';
+  }
+
+  function blobDims(blob) {
+    return new Promise((resolve) => {
+      if (!(blob instanceof Blob) || !blob.size) return resolve(null);
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      const done = (w, h) => {
+        try { URL.revokeObjectURL(url); } catch (_) {}
+        resolve(w && h ? { w, h } : null);
+      };
+      img.onload = () => done(img.naturalWidth, img.naturalHeight);
+      img.onerror = () => done(0, 0);
+      img.src = url;
+    });
+  }
+
+  function classifyType(blob) {
+    const t = String(blob?.type || '').toLowerCase();
+    if (t.includes('webp')) return 'webp';
+    if (t.includes('jpeg') || t.includes('jpg')) return 'jpeg';
+    if (t.includes('png')) return 'png';
+    if (t.includes('gif')) return 'gif';
+    if (t.includes('avif')) return 'avif';
+    if (!t) return 'sin-tipo';
+    return 'otros';
+  }
+
+  /** Analiza claves c: en IndexedDB (portadas de cómics). */
+  async function analyzeCoverCache(onProgress) {
+    const entries = await kv.entries();
+    const covers = entries.filter(([k, v]) => String(k).startsWith('c:') && v && v !== 'none');
+    const byFmt = {};
+    const dimCount = new Map();
+    const items = [];
+    let i = 0;
+    const total = covers.length;
+    for (const [key, val] of covers) {
+      i++;
+      if (onProgress && (i % 10 === 0 || i === total)) onProgress(i, total);
+      const blob = val instanceof Blob ? val : (val?.blob instanceof Blob ? val.blob : null);
+      if (!blob || !blob.size) continue;
+      const fmt = classifyType(blob);
+      if (!byFmt[fmt]) byFmt[fmt] = { count: 0, bytes: 0 };
+      byFmt[fmt].count++;
+      byFmt[fmt].bytes += blob.size;
+      let dims = null;
+      try { dims = await blobDims(blob); } catch (_) {}
+      if (dims) {
+        const dk = dims.w + '×' + dims.h;
+        dimCount.set(dk, (dimCount.get(dk) || 0) + 1);
+      }
+      items.push({
+        key,
+        size: blob.size,
+        fmt,
+        w: dims?.w || 0,
+        h: dims?.h || 0,
+      });
+      if (i % 25 === 0) await new Promise((r) => setTimeout(r, 0));
+    }
+    items.sort((a, b) => b.size - a.size);
+    const dimsList = [...dimCount.entries()].sort((a, b) => b[1] - a[1]);
+    const allW = items.filter((x) => x.w).map((x) => x.w);
+    const allH = items.filter((x) => x.h).map((x) => x.h);
+    return {
+      total: items.length,
+      byFmt,
+      dimMin: allW.length ? { w: Math.min(...allW), h: Math.min(...allH) } : null,
+      dimMax: allW.length ? { w: Math.max(...allW), h: Math.max(...allH) } : null,
+      dimMode: dimsList[0] ? { label: dimsList[0][0], count: dimsList[0][1] } : null,
+      dimTop: dimsList.slice(0, 8),
+      largest: items.slice(0, 20),
+    };
+  }
+
+  function showDevCoverInfo() {
+    document.querySelector('.info-frame.protools-dev')?.remove();
+    const frame = el('div', 'info-frame protools-dev');
+    const box = el('div', 'info-box');
+    const head = el('div', 'info-head');
+    head.append(el('span', '', 'Info desarrollo · Portadas'));
+    const close = el('button', 'btn info-close', '×');
+    close.onclick = () => frame.remove();
+    head.append(close);
+    const body = el('div', 'info-body');
+    const loading = el('p', 'cover-pick-hint', 'Analizando caché de portadas…');
+    body.append(loading);
+    box.append(head, body);
+    frame.append(box);
+    document.body.append(frame);
+
+    (async () => {
+      try {
+        const data = await analyzeCoverCache((done, tot) => {
+          loading.textContent = `Analizando… ${done}/${tot}`;
+        });
+        body.replaceChildren();
+        body.append(el('div', 'info-sec', 'Resumen'));
+        const row = (lab, val) => {
+          const r = el('div', 'info-row');
+          r.append(el('span', 'info-label', lab), el('span', 'info-value', String(val ?? '—')));
+          return r;
+        };
+        body.append(row('Portadas en caché', data.total));
+
+        body.append(el('div', 'info-sec', 'Por formato'));
+        const order = ['webp', 'jpeg', 'png', 'gif', 'avif', 'sin-tipo', 'otros'];
+        const fmts = Object.keys(data.byFmt).sort((a, b) => {
+          const ia = order.indexOf(a); const ib = order.indexOf(b);
+          return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+        });
+        if (!fmts.length) body.append(el('p', 'cover-pick-hint', 'Sin datos de formato'));
+        for (const f of fmts) {
+          const s = data.byFmt[f];
+          body.append(row(
+            f.toUpperCase(),
+            `${s.count} · ${formatBytes(s.bytes)}`
+          ));
+        }
+
+        body.append(el('div', 'info-sec', 'Dimensiones'));
+        if (data.dimMin) {
+          body.append(row('Mínimas', `${data.dimMin.w}×${data.dimMin.h}`));
+          body.append(row('Máximas', `${data.dimMax.w}×${data.dimMax.h}`));
+        } else {
+          body.append(el('p', 'cover-pick-hint', 'No se pudieron leer dimensiones'));
+        }
+        if (data.dimMode) {
+          body.append(row('Más frecuentes', `${data.dimMode.label} (${data.dimMode.count}×)`));
+        }
+        if (data.dimTop?.length > 1) {
+          const extra = data.dimTop.slice(1, 5).map(([lab, n]) => `${lab} (${n})`).join(', ');
+          if (extra) body.append(row('Otras frecuentes', extra));
+        }
+
+        body.append(el('div', 'info-sec', 'Top 20 más pesadas'));
+        if (!data.largest.length) {
+          body.append(el('p', 'cover-pick-hint', 'Ninguna'));
+        } else {
+          for (const it of data.largest) {
+            const dim = it.w ? `${it.w}×${it.h}` : '?';
+            body.append(row(
+              it.key,
+              `${formatBytes(it.size)} · ${it.fmt} · ${dim}`
+            ));
+          }
+        }
+
+        const actions = el('div', 'edit-actions');
+        const btnClose = el('button', 'btn', 'Cerrar');
+        btnClose.onclick = () => frame.remove();
+        actions.append(btnClose);
+        body.append(actions);
+      } catch (e) {
+        loading.textContent = 'Error: ' + (e?.message || e);
+      }
+    })();
+  }
+
   /** Menú Configuración Avanzada */
   function showAdvancedConfig() {
     try { closeAppMenu?.(); } catch (_) {}
@@ -354,6 +520,14 @@ export function createProTools(d) {
       showReloadCoversFrame();
     };
     body.append(reloadCoversBtn);
+
+    const devBtn = el('button', 'btn cover-pick-device', 'Info desarrollo');
+    devBtn.type = 'button';
+    devBtn.onclick = () => {
+      frame.remove();
+      showDevCoverInfo();
+    };
+    body.append(devBtn);
 
     const actions = el('div', 'edit-actions');
     const cancel = el('button', 'btn', 'Cerrar');
