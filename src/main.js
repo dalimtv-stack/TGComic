@@ -176,26 +176,23 @@ try {
   });
 })();
 
-/** Bloquea el scroll de la webapp detrás de Información / formularios (Android). */
+/** Bloquea el scroll de fondo detrás de Información / formularios.
+ *  No usar position:fixed en body: en listados largos provoca franja negra / overlay a medias. */
 function lockAppScroll() {
   if (document.body.classList.contains('body-scroll-lock')) return;
   const y = window.scrollY || document.documentElement.scrollTop || 0;
   document.body.dataset.lockY = String(y);
   document.body.classList.add('body-scroll-lock');
   document.documentElement.classList.add('body-scroll-lock');
-  document.body.style.position = 'fixed';
-  document.body.style.top = `-${y}px`;
-  document.body.style.left = '0';
-  document.body.style.right = '0';
-  document.body.style.width = '100%';
+  // Solo overflow: el overlay .info-frame cubre el viewport con position:fixed
 }
 function unlockAppScroll() {
   if (document.querySelector('.info-frame, .sheet')) return;
-  // Si no estaba bloqueado, no tocar el scroll (evita parpadeo / saltos a top)
   if (!document.body.classList.contains('body-scroll-lock')) return;
   const y = Math.max(0, +(document.body.dataset.lockY || 0) || 0);
   document.body.classList.remove('body-scroll-lock');
   document.documentElement.classList.remove('body-scroll-lock');
+  // Por si quedó residual de versiones anteriores
   document.body.style.position = '';
   document.body.style.top = '';
   document.body.style.left = '';
@@ -628,6 +625,7 @@ const menuPanel = el('div', 'app-menu');
 menuPanel.hidden = true;
 const menuInfoBtn = el('button', 'app-menu-item', 'Información');
 const menuCfgBtn = el('button', 'app-menu-item', 'Configuración Visor');
+const menuAdvBtn = el('button', 'app-menu-item', 'Configuración Avanzada');
 const menuSyncBtn = el('button', 'app-menu-item', 'Sincronización');
 const menuLockBtn = el('button', 'app-menu-item', '');
 const menuUnreadBtn = el('button', 'app-menu-item menu-check', '');
@@ -652,7 +650,7 @@ const paintLockMenu = () => {
 paintLockMenu();
 const menuRepackBtn = el('button', 'app-menu-item', 'Recargar CBR / externos');
 const menuUploadBtn = el('button', 'app-menu-item', 'Subir cómic');
-menuPanel.append(menuInfoBtn, menuCfgBtn, menuSyncBtn, menuUploadBtn, menuRepackBtn, menuUnreadBtn, menuLockBtn);
+menuPanel.append(menuInfoBtn, menuCfgBtn, menuAdvBtn, menuSyncBtn, menuUploadBtn, menuRepackBtn, menuUnreadBtn, menuLockBtn);
 actions.append(menuBtn);
 document.body.append(menuPanel);
 
@@ -909,6 +907,77 @@ function showViewerConfig() {
   document.body.append(frame);
 }
 menuCfgBtn.onclick = (ev) => { ev.stopPropagation(); showViewerConfig(); };
+
+async function clearAllComicCovers() {
+  const entries = await kv.entries();
+  let n = 0;
+  for (const [k] of entries) {
+    if (String(k).startsWith('c:')) {
+      try { await kv.del(k); n++; } catch (_) {}
+    }
+  }
+  return n;
+}
+
+function showAdvancedConfig() {
+  closeAppMenu();
+  document.querySelector('.info-frame.adv-config')?.remove();
+  const frame = el('div', 'info-frame adv-config');
+  const box = el('div', 'info-box');
+  const head = el('div', 'info-head');
+  head.append(el('span', '', 'Configuración Avanzada'));
+  const close = el('button', 'btn info-close', '×');
+  close.onclick = () => frame.remove();
+  head.append(close);
+  const body = el('div', 'info-body');
+  body.append(el('p', 'cover-pick-hint',
+    'Opciones que afectan a la caché local. Pueden tardar en listados grandes.'
+  ));
+
+  const reloadCoversBtn = el('button', 'btn cover-pick-device', 'Recargar portadas de todos los cómics');
+  reloadCoversBtn.type = 'button';
+  reloadCoversBtn.onclick = async () => {
+    const ok = await appConfirm(
+      'Se borrarán todas las portadas de cómics en caché y se volverán a generar al mostrarlas. ¿Continuar?',
+      'Recargar portadas'
+    );
+    if (!ok) return;
+    reloadCoversBtn.disabled = true;
+    reloadCoversBtn.textContent = 'Borrando portadas…';
+    try {
+      const n = await clearAllComicCovers();
+      // Forzar repintado de la vista actual para que se regeneren
+      try {
+        const top = stack[stack.length - 1];
+        if (top) top.scrollY = window.scrollY || 0;
+        show();
+      } catch (_) {}
+      await appAlert(
+        n
+          ? `Se eliminaron ${n} portadas de la caché. Se regenerarán al ver cada listado.`
+          : 'No había portadas de cómics en caché.',
+        'Portadas'
+      );
+    } catch (e) {
+      await appAlert('Error: ' + (e?.message || e), 'Portadas');
+    } finally {
+      reloadCoversBtn.disabled = false;
+      reloadCoversBtn.textContent = 'Recargar portadas de todos los cómics';
+      try { frame.remove(); } catch (_) {}
+    }
+  };
+  body.append(reloadCoversBtn);
+
+  const actions = el('div', 'edit-actions');
+  const cancel = el('button', 'btn', 'Cerrar');
+  cancel.onclick = () => frame.remove();
+  actions.append(cancel);
+  body.append(actions);
+  box.append(head, body);
+  frame.append(box);
+  document.body.append(frame);
+}
+menuAdvBtn.onclick = (ev) => { ev.stopPropagation(); showAdvancedConfig(); };
 menuLockBtn.onclick = async (ev) => {
   ev.stopPropagation();
   closeAppMenu();

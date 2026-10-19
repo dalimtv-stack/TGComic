@@ -132,7 +132,10 @@ body:has(.sheet) #app{
   touch-action:none;
 }
 .info-frame{
-  position:fixed;inset:0;z-index:60;background:#000a;
+  position:fixed;left:0;top:0;right:0;bottom:0;
+  width:100%;min-height:100%;min-height:100dvh;
+  z-index:60;
+  background:rgba(0,0,0,.72);
   display:flex;align-items:center;justify-content:center;
   padding:max(0.75rem, var(--sat)) 0.75rem max(0.75rem, var(--sab));
   overflow:auto;-webkit-overflow-scrolling:touch;
