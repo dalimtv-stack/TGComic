@@ -8,7 +8,7 @@ import rarWasm from 'node-unrar-js/esm/js/unrar.wasm?url';
 import * as sync from './sync.js';
 import { buildSearchIndex, filterSearchIndex } from './search.js';
 import {
-  stripExt, clean, parseComicName, issueDisplay, comicDisplay,
+  stripExt, clean, parseComicName, comicSourceName, issueDisplay, comicDisplay,
   seriesBase, groupSeries, issueLabel, parseComicCaption, buildComicCaption,
 } from './parse.js';
 import {
@@ -1487,7 +1487,7 @@ function showComicInfo(ch, f, displayTitle) {
   try {
     document.querySelector('.info-frame.comic-info')?.remove();
     const cap = parseComicCaption(f?.caption || '');
-    const parsed = parseComicName(f?.name || '', ch?.name);
+    const parsed = parseComicName(comicSourceName(f), ch?.name);
     // Serie = override de agrupación o la del nombre de archivo
     let seriesKey = (ch && f ? getComicSeriesOverride(ch, f) : null)
       || parsed?.series || seriesBase(f?.name || '', ch?.name) || '';
@@ -1508,8 +1508,8 @@ function showComicInfo(ch, f, displayTitle) {
           title = mh ? ('#' + mh[1].replace(/^#\s*/, '').trim()) : (issueFromFile || title);
         }
       } else {
-        title = comicDisplayName(ch, f, comicDisplay(f.name, ch.name) || clean(f.name))
-          || comicDisplay(f.name, ch.name)
+        title = comicDisplayName(ch, f, comicDisplay(comicSourceName(f), ch.name) || clean(f.name))
+          || comicDisplay(comicSourceName(f), ch.name)
           || '—';
       }
     } else if (displayTitle) {
@@ -1717,7 +1717,7 @@ async function updateTelegramCaption(ch, f, caption) {
 function showCaptionEditor(ch, f, after, opts = {}) {
   document.querySelector('.info-frame.caption-editor')?.remove();
   const cap = parseComicCaption(f?.caption || '');
-  const parsed = parseComicName(f?.name || '', ch?.name);
+  const parsed = parseComicName(comicSourceName(f), ch?.name);
   const frame = el('div', 'info-frame caption-editor');
   const box = el('div', 'info-box');
   const head = el('div', 'info-head');
@@ -1809,7 +1809,7 @@ function showCaptionEditor(ch, f, after, opts = {}) {
     if (cap.titleEs && String(cap.titleEs).trim()) return String(cap.titleEs).trim();
     if (opts.currentLabel && String(opts.currentLabel).trim()) return String(opts.currentLabel).trim();
     try {
-      const base = comicDisplay(f?.name || '', ch?.name) || '';
+      const base = comicDisplay(comicSourceName(f), ch?.name) || '';
       const shown = comicDisplayName(ch, f, base);
       return (shown || base || '').trim();
     } catch (_) {
@@ -1954,7 +1954,7 @@ function showComicVinePicker(ch, f, { onPick } = {}) {
   );
   body.append(pagesInfo);
 
-  const parsed = parseComicName(f?.name || '', ch?.name);
+  const parsed = parseComicName(comicSourceName(f), ch?.name);
   const cap = parseComicCaption(f?.caption || '');
   const qDefault = buildSearchQuery({
     channel: ch?.name || '',
@@ -2073,9 +2073,9 @@ function showComicVinePicker(ch, f, { onPick } = {}) {
 
 function showEditComicTitle(ch, f, currentLabel, after) {
   document.querySelector('.info-frame.edit-comic')?.remove();
-  const fallbackTitle = comicDisplay(f?.name || '', ch?.name) || clean(f?.name || '') || '';
+  const fallbackTitle = comicDisplay(comicSourceName(f), ch?.name) || clean(f?.name || '') || '';
   const currentTitle = comicDisplayName(ch, f, currentLabel || fallbackTitle);
-  const parsed = parseComicName(f?.name || '', ch?.name);
+  const parsed = parseComicName(comicSourceName(f), ch?.name);
   const parsedSeries = (parsed?.series || seriesBase(f?.name || '', ch?.name) || '').trim();
   const overrideRaw = getComicSeriesOverride(ch, f);
   // Clave real de agrupación
@@ -2423,7 +2423,7 @@ function showEditSeriesName(ch, seriesLabel, seriesFiles, after) {
       if (!members.length) {
         for (const f of allFiles) {
           const ov = getComicSeriesOverride(ch, f);
-          const p = parseComicName(f.name, ch.name);
+          const p = parseComicName(comicSourceName(f), ch.name);
           const base = (ov != null && String(ov).trim())
             ? String(ov).trim()
             : (p?.series || seriesBase(f.name, ch.name) || '');
@@ -2447,7 +2447,7 @@ function showEditSeriesName(ch, seriesLabel, seriesFiles, after) {
 
       // UN solo mecanismo: override por cómic (no renombre visual)
       for (const f of members) {
-        const p = parseComicName(f.name, ch.name);
+        const p = parseComicName(comicSourceName(f), ch.name);
         const parsedSer = (p?.series || seriesBase(f.name, ch.name) || '').trim();
         if (!target || (parsedSer && target.toLowerCase() === parsedSer.toLowerCase())) {
           setComicSeries(ch, f, ''); // vuelve al nombre del archivo
@@ -2536,7 +2536,7 @@ function showSeriesCoverPicker(ch, seriesLabel, files, after) {
       const cell = el('button', 'cover-pick-cell');
       cell.type = 'button';
       const thumb = el('div', 'cover-pick-thumb');
-      const lab = el('span', 'cover-pick-lab', issueLabel(seriesLabel, f, ch.name) || comicDisplay(f.name, ch.name));
+      const lab = el('span', 'cover-pick-lab', issueLabel(seriesLabel, f, ch.name) || comicDisplay(comicSourceName(f), ch.name));
       cell.append(thumb, lab);
       cell.onclick = () => useCover(f);
       grid.append(cell);
@@ -2945,7 +2945,7 @@ async function showGroupCoverPicker(originalName, after) {
       const files = (await kv.get('f:' + ch.id)) || [];
       for (const f of files) {
         any = true;
-        addCell(gridComics, comicDisplay(f.name, ch.name), () => getCover(ch, f), async () => {
+        addCell(gridComics, comicDisplay(comicSourceName(f), ch.name), () => getCover(ch, f), async () => {
           const b = await getCover(ch, f);
           if (!b) {
             appAlert('Este cómic aún no tiene portada en caché. Ábrelo una vez e inténtalo de nuevo.');
@@ -3123,7 +3123,7 @@ function showChannelCoverPicker(ch, files, after) {
       const cell = el('button', 'cover-pick-cell');
       cell.type = 'button';
       const thumb = el('div', 'cover-pick-thumb');
-      const lab = el('span', 'cover-pick-lab', comicDisplay(f.name, ch.name));
+      const lab = el('span', 'cover-pick-lab', comicDisplay(comicSourceName(f), ch.name));
       cell.append(thumb, lab);
       cell.onclick = async () => {
         const b = await getCover(ch, f);
@@ -3350,7 +3350,7 @@ function groupsView() {
             const row = el('button', 'continue-row continue-slide');
             row.type = 'button';
             row.onclick = () => openComic(ch, f);
-            const contLabel = comicDisplayName(ch, f, comicDisplay(f.name, ch.name) || clean(f.name));
+            const contLabel = comicDisplayName(ch, f, comicDisplay(comicSourceName(f), ch.name) || clean(f.name));
             const contUnread = !isComicRead(ch.id, f.id);
             const contOpts = [
               ['Información', () => showComicInfo(ch, f, contLabel)],
@@ -3378,14 +3378,14 @@ function groupsView() {
             let titleLab = '';
             try {
               const ov = getComicSeriesOverride(ch, f);
-              const p = parseComicName(f.name, ch.name);
+              const p = parseComicName(comicSourceName(f), ch.name);
               const sk = (ov != null && String(ov).trim()) ? String(ov).trim() : (p?.series || seriesBase(f.name, ch.name) || '');
               seriesLab = sk ? (seriesDisplayName(ch, sk) || sk) : '';
               // Mismo formato que el listado dentro de una serie (#nn - info)
-              const baseLabel = p ? issueDisplay(p) : (issueLabel(sk || seriesLab, f, ch.name) || comicDisplay(f.name, ch.name) || clean(f.name));
+              const baseLabel = p ? issueDisplay(p) : (issueLabel(sk || seriesLab, f, ch.name) || comicDisplay(comicSourceName(f), ch.name) || clean(f.name));
               titleLab = comicDisplayName(ch, f, baseLabel);
             } catch (_) {
-              titleLab = comicDisplayName(ch, f, comicDisplay(f.name, ch.name) || clean(f.name));
+              titleLab = comicDisplayName(ch, f, comicDisplay(comicSourceName(f), ch.name) || clean(f.name));
             }
             if (channelLab) meta.append(el('span', 'continue-channel', channelLab));
             if (seriesLab) meta.append(el('span', 'continue-series', seriesLab));
@@ -3479,7 +3479,7 @@ function groupsView() {
             }).catch(() => {});
           }
           const meta = el('div', 'continue-meta');
-          meta.append(el('b', '', comicDisplayName(ch, f, comicDisplay(f.name, ch.name) || clean(f.name))));
+          meta.append(el('b', '', comicDisplayName(ch, f, comicDisplay(comicSourceName(f), ch.name) || clean(f.name))));
           meta.append(el('small', '', sizeLabel(f, ch)));
           if (prog) {
             const bar = el('div', 'continue-prog');
@@ -3883,13 +3883,13 @@ function filesView(ch) {
         if (fs.length === 1) {
           const f = fs[0];
           // Si el parseo detectó serie aunque sea 1 archivo, permitir editar nombre de serie
-          const p = parseComicName(f.name, ch.name);
+          const p = parseComicName(comicSourceName(f), ch.name);
           const ov = getComicSeriesOverride(ch, f);
           const soloSeries = ov || p?.series || seriesLabel;
           const hasSeriesName = !!(ov || p?.series);
           items.push(makeComicItem(
             f,
-            comicDisplay(f.name, ch.name),
+            comicDisplay(comicSourceName(f), ch.name),
             hasSeriesName ? soloSeries : null,
             hasSeriesName ? 'grouped' : null
           ));
@@ -3912,7 +3912,7 @@ function filesView(ch) {
           fs.forEach((f) => {
             const displayLabel = mode === 'short'
               ? issueLabel(seriesLabel, f, ch.name)
-              : comicDisplay(f.name, ch.name);
+              : comicDisplay(comicSourceName(f), ch.name);
             items.push(makeComicItem(f, displayLabel, seriesLabel, mode, fs));
           });
         } else {
@@ -4004,7 +4004,7 @@ function seriesView(ch, s, files) {
       } catch (_) {}
       const seriesUnread = fs.some((x) => !isComicRead(ch.id, x.id));
       const items = fs.map((f) => {
-        const p = parseComicName(f.name, ch.name);
+        const p = parseComicName(comicSourceName(f), ch.name);
         const baseLabel = (p && String(p.series || '').toLowerCase() === String(s).toLowerCase())
           ? issueDisplay(p)
           : issueLabel(s, f, ch.name);
@@ -4074,7 +4074,7 @@ const readerApi = createReader(
 );
 const { openComic: openComicRaw } = readerApi;
 function openComic(ch, f, queue, opts) {
-  const lab = comicDisplayName(ch, f, comicDisplay(f?.name || '', ch?.name) || '');
+  const lab = comicDisplayName(ch, f, comicDisplay(comicSourceName(f), ch?.name) || '');
   if (!locks.guardRestricted('comic', { ch, f }, lab)) return;
   return openComicRaw(ch, f, queue, opts);
 }

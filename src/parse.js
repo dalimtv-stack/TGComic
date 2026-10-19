@@ -28,6 +28,22 @@ const cleanInfo = (s) => (s || '')
 const ISSUE_NUM = '(?:\\d+(?:\\.\\d+)?[a-zA-Z]?(?:\\s*(?:de|of)\\s*\\d+)?)';
 // Marcador completo: número o Special / Especial / Extra
 const ISSUE_TAG = `(?:${ISSUE_NUM}|Special|Especial|Extra|Annual|Anual|One[-\s]?Shot|OneShot)`;
+/**
+ * Nombre a usar para parsear/agrupar.
+ * Si el archivo de Telegram tiene "_" y no tiene espacios, preferir
+ * "Nombre de archivo" del caption (suele traer espacios y paréntesis bien).
+ */
+export function comicSourceName(f) {
+  const name = String(f?.name || '');
+  if (!name) return '';
+  try {
+    // parseComicCaption está más abajo; se resuelve al llamar
+    const fn = (parseComicCaption(f?.caption || '').fileName || '').trim();
+    if (fn && /_/.test(name) && !/\s/.test(name)) return fn;
+  } catch (_) {}
+  return name;
+}
+
 export function parseComicName(name, channelName) {
   // Quitar [corchetes], @sitios y basura; dejar el patrón serie #n
   const raw = stripExt(name).replace(/_/g, ' ')
@@ -182,9 +198,10 @@ export function groupSeries(files, channelName, seriesOverride) {
   for (const f of files) {
     const forced = seriesOverride?.(f);
     const forcedSeries = forced != null && String(forced).trim() ? String(forced).trim() : '';
-    const p = parseComicName(f.name, channelName);
-    const b = forcedSeries || p?.series || seriesBase(f.name, channelName);
-    const c = p ? comicDisplay(f.name, channelName) : clean(f.name);
+    const src = comicSourceName(f);
+    const p = parseComicName(src, channelName);
+    const b = forcedSeries || p?.series || seriesBase(src, channelName);
+    const c = p ? comicDisplay(src, channelName) : clean(src);
     if (b) {
       const k = b.toLowerCase();
       (by.get(k) || by.set(k, { label: b, files: [] }).get(k)).files.push(f);
@@ -205,8 +222,8 @@ export function groupSeries(files, channelName, seriesOverride) {
     .map((g) => ({
       label: g.label,
       files: g.files.sort((x, y) => {
-        const a = comicDisplay(x.name, channelName);
-        const b = comicDisplay(y.name, channelName);
+        const a = comicDisplay(comicSourceName(x), channelName);
+        const b = comicDisplay(comicSourceName(y), channelName);
         const c = natural(a, b);
         if (c !== 0) return c;
         // Mismo número: original antes que versión [WebP]
@@ -221,9 +238,10 @@ export function groupSeries(files, channelName, seriesOverride) {
 
 /** Etiqueta de número sin el nombre de la serie */
 export function issueLabel(series, f, channelName) {
-  const p = parseComicName(f.name, channelName);
+  const src = comicSourceName(f);
+  const p = parseComicName(src, channelName);
   if (p && p.series.toLowerCase() === series.toLowerCase()) return issueDisplay(p);
-  const c = clean(f.name);
+  const c = clean(src);
   let r = c.toLowerCase().startsWith(series.toLowerCase()) ? c.slice(series.length) : c;
   r = r.replace(/^[\s._-]+/, '');
   if (/^\d/.test(r)) r = '#' + r;
