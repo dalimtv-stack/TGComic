@@ -733,13 +733,15 @@ export function createUploadTool(d) {
       channelInp.placeholder = 'Nombre del canal';
       channelInp.hidden = true;
 
-      // Serie GLOBAL (misma para todos los archivos): contexto de la vista o del nombre de archivo
+      // Serie GLOBAL (misma para todos los archivos): contexto de la vista o del nombre del archivo
       const seriesLab = el('div', 'sync-label', 'Serie');
       const seriesHint = el('p', 'cover-pick-hint', 'Común a todos los archivos de esta subida. Se rellena desde la serie en la que estás o desde el nombre del archivo.');
       const seriesInp = el('input', 'edit-input');
       seriesInp.type = 'text';
       seriesInp.placeholder = 'Serie';
       seriesInp.setAttribute('aria-label', 'Serie');
+      // Preferir siempre el contexto de navegación (vista serie)
+      if (ctxSeries) seriesInp.value = ctxSeries;
 
       const includeChChk = el('input');
       includeChChk.type = 'checkbox';
@@ -854,21 +856,39 @@ export function createUploadTool(d) {
                   }
                   row.fichaChk.checked = true;
                   row.fichaBox.hidden = false;
+                  row.idBtn.hidden = false;
                   const num = String(detail.issueNumber || r.issueNumber || numberQ || '').replace(/^#/, '');
                   const story = String(detail.name || r.name || '').trim();
                   let titleLine = '';
                   if (num && story) titleLine = '#' + num + ' - ' + story;
                   else if (num) titleLine = '#' + num;
                   else titleLine = story;
-                  row.titleEsInp.value = titleLine;
-                  row.origInp.value = titleLine;
-                  if (detail.volume) row.capSeriesInp.value = detail.volume;
-                  else if (seriesQ) row.capSeriesInp.value = seriesQ;
-                  row.writerInp.value = (detail.writers && detail.writers.length) ? detail.writers.join(' | ') : '';
-                  row.artistInp.value = (detail.artists && detail.artists.length) ? detail.artists.join(' | ') : '';
-                  row.pubInp.value = detail.publisher || r.publisher || '';
-                  row.dateInp.value = detail.coverDate || r.coverDate || '';
-                  row.descInp.value = detail.description || '';
+                  // Como en Editar cómic: CV en .cv, checks activados, apply()
+                  if (row.titleEsCtrl) {
+                    row.titleEsCtrl.cv = titleLine;
+                    row.origCtrl.cv = titleLine;
+                    row.seriesCtrl.cv = detail.volume || seriesQ || '';
+                    row.writerCtrl.cv = (detail.writers && detail.writers.length) ? detail.writers.join(' | ') : '';
+                    row.artistCtrl.cv = (detail.artists && detail.artists.length) ? detail.artists.join(' | ') : '';
+                    row.pubCtrl.cv = detail.publisher || r.publisher || '';
+                    row.dateCtrl.cv = detail.coverDate || r.coverDate || '';
+                    row.descCtrl.cv = detail.description || '';
+                    row.setSelectMode?.(true);
+                    for (const c of (row.fieldCtrls || [])) {
+                      const hasCv = !!(c.cv && String(c.cv).trim());
+                      c.chk.checked = hasCv;
+                      c.apply();
+                    }
+                  } else {
+                    row.titleEsInp.value = titleLine;
+                    row.origInp.value = titleLine;
+                    row.capSeriesInp.value = detail.volume || seriesQ || '';
+                    row.writerInp.value = (detail.writers && detail.writers.length) ? detail.writers.join(' | ') : '';
+                    row.artistInp.value = (detail.artists && detail.artists.length) ? detail.artists.join(' | ') : '';
+                    row.pubInp.value = detail.publisher || r.publisher || '';
+                    row.dateInp.value = detail.coverDate || r.coverDate || '';
+                    row.descInp.value = detail.description || '';
+                  }
                   if (num && !row.numberInp.value) {
                     row.numberInp.value = num;
                     updateRowPreview(row);
@@ -974,7 +994,7 @@ export function createUploadTool(d) {
         let nameTouched = false;
         nameInp.oninput = () => { nameTouched = true; row.nameTouched = true; };
 
-        // Ficha caption por archivo
+        // Ficha caption por archivo (como Editar cómic: check = dato CV, sin check = parseo/local)
         const fichaChk = el('input');
         fichaChk.type = 'checkbox';
         fichaChk.checked = false;
@@ -982,50 +1002,128 @@ export function createUploadTool(d) {
         fichaLab.append(fichaChk, document.createTextNode(' Añadir ficha al caption (Telegram)'));
         const fichaBox = el('div', 'meta-telegram-box');
         fichaBox.hidden = true;
-        const mk = (lab, ph, val) => {
-          fichaBox.append(el('label', 'sync-label', lab));
-          const inp = el('input', 'edit-input');
-          inp.type = 'text';
-          inp.placeholder = ph || '';
-          inp.value = val || '';
-          fichaBox.append(inp);
-          return inp;
+        const fieldCtrls = [];
+        const mkField = (lab, prevVal, ph, multiline) => {
+          const wrap = el('div', 'meta-field');
+          const top = el('label', 'meta-field-top');
+          const chk = el('input');
+          chk.type = 'checkbox';
+          chk.className = 'meta-field-chk';
+          chk.hidden = true;
+          chk.checked = false;
+          top.append(chk, document.createTextNode(' ' + lab));
+          wrap.append(top);
+          let inp;
+          if (multiline) {
+            inp = el('textarea', 'edit-input meta-desc');
+            inp.rows = 3;
+          } else {
+            inp = el('input', 'edit-input');
+            inp.type = 'text';
+            inp.autocomplete = 'off';
+          }
+          const prev = prevVal != null ? String(prevVal) : '';
+          inp.value = prev;
+          if (ph) inp.placeholder = ph;
+          wrap.append(inp);
+          fichaBox.append(wrap);
+          const ctrl = {
+            chk, inp, prev, cv: '',
+            apply() {
+              if (chk.hidden) return;
+              inp.value = chk.checked ? (ctrl.cv || '') : ctrl.prev;
+            },
+          };
+          chk.onchange = () => ctrl.apply();
+          fieldCtrls.push(ctrl);
+          return ctrl;
         };
+
         const edDefault = editorialSel.value === '__new__'
           ? editorialInp.value.trim()
           : editorialSel.value;
-        const titleEsInp = mk('Título España', '', '');
-        const origInp = mk('Título original', '', '');
-        const capSeriesInp = mk('Serie', '', seriesInp.value || parsed.series || '');
-        const writerInp = mk('Guionista', 'Nombre1 | Nombre2', '');
-        const artistInp = mk('Dibujante', 'Nombre1 | Nombre2', '');
-        const pubInp = mk('Editorial', '', edDefault || '');
-        const dateInp = mk('Fecha de publicación', 'MM/AAAA o AAAA', '');
-        fichaBox.append(el('label', 'sync-label', 'Descripción'));
-        const descInp = el('textarea', 'edit-input meta-desc');
-        descInp.rows = 3;
-        descInp.placeholder = 'Texto libre';
-        fichaBox.append(descInp);
+        // Valores previos del parseo / contexto (como en Editar cómic)
+        const prevTitle = (() => {
+          const num = parsed.number || '';
+          const info = parsed.info || '';
+          if (num && info) return '#' + num + ' - ' + info;
+          if (num) return '#' + num;
+          return info || '';
+        })();
+        const prevSeries = seriesInp.value.trim() || ctxSeries || parsed.series || '';
+        const prevPub = edDefault || '';
+
+        const titleEsCtrl = mkField('Título España', prevTitle);
+        const origCtrl = mkField('Título original', prevTitle);
+        const seriesCtrl = mkField('Serie', prevSeries);
+        const writerCtrl = mkField('Guionista', '', 'Nombre1 | Nombre2');
+        const artistCtrl = mkField('Dibujante', '', 'Nombre1 | Nombre2');
+        const pubCtrl = mkField('Editorial', prevPub);
+        const dateCtrl = mkField('Fecha de publicación', '', 'MM/AAAA o AAAA');
+        const descCtrl = mkField('Descripción', '', '', true);
+
+        const selBar = el('div', 'meta-sel-bar');
+        selBar.hidden = true;
+        const btnAll = el('button', 'btn', 'Seleccionar todos');
+        btnAll.type = 'button';
+        const btnNone = el('button', 'btn', 'Ninguno');
+        btnNone.type = 'button';
+        selBar.append(btnAll, btnNone);
+        fichaBox.prepend(selBar);
+        const selHint = el('p', 'cover-pick-hint meta-sel-hint', 'Marcado = dato de Comic Vine. Sin marcar = parseo / datos locales.');
+        selHint.hidden = true;
+        fichaBox.insertBefore(selHint, selBar.nextSibling);
+
+        const setSelectMode = (on) => {
+          selBar.hidden = !on;
+          selHint.hidden = !on;
+          for (const c of fieldCtrls) {
+            c.chk.hidden = !on;
+            if (!on) c.chk.checked = false;
+          }
+        };
+        btnAll.onclick = () => {
+          for (const c of fieldCtrls) { c.chk.checked = true; c.apply(); }
+        };
+        btnNone.onclick = () => {
+          for (const c of fieldCtrls) { c.chk.checked = false; c.apply(); }
+        };
+
         const idBtn = el('button', 'btn-identify', 'Identificar');
         idBtn.type = 'button';
-        idBtn.hidden = true; // solo con ficha de caption activada
+        idBtn.hidden = true;
         fichaChk.onchange = () => {
           fichaBox.hidden = !fichaChk.checked;
           idBtn.hidden = !fichaChk.checked;
           if (fichaChk.checked) {
-            if (!capSeriesInp.value) capSeriesInp.value = seriesInp.value || parsed.series || '';
-            if (!pubInp.value) {
-              pubInp.value = editorialSel.value === '__new__'
-                ? editorialInp.value.trim()
-                : editorialSel.value;
+            // Refrescar prev locales si el usuario cambió serie/editorial globales
+            const ser = seriesInp.value.trim() || ctxSeries || parsed.series || '';
+            const pub = editorialSel.value === '__new__'
+              ? editorialInp.value.trim()
+              : editorialSel.value;
+            if (!seriesCtrl.inp.value) {
+              seriesCtrl.prev = ser;
+              seriesCtrl.inp.value = ser;
+            }
+            if (!pubCtrl.inp.value) {
+              pubCtrl.prev = pub;
+              pubCtrl.inp.value = pub;
             }
           }
         };
 
         const row = {
           file, numberInp, infoInp, nameInp, nameTouched: false, rowEl,
-          fichaChk, fichaBox, idBtn,
-          titleEsInp, origInp, capSeriesInp, writerInp, artistInp, pubInp, dateInp, descInp,
+          fichaChk, fichaBox, idBtn, fieldCtrls, setSelectMode,
+          titleEsInp: titleEsCtrl.inp,
+          origInp: origCtrl.inp,
+          capSeriesInp: seriesCtrl.inp,
+          writerInp: writerCtrl.inp,
+          artistInp: artistCtrl.inp,
+          pubInp: pubCtrl.inp,
+          dateInp: dateCtrl.inp,
+          descInp: descCtrl.inp,
+          titleEsCtrl, origCtrl, seriesCtrl, writerCtrl, artistCtrl, pubCtrl, dateCtrl, descCtrl,
         };
         idBtn.onclick = () => identifyForRow(row);
         numberInp.oninput = () => { row.nameTouched = false; nameTouched = false; updateRowPreview(row); };
@@ -1051,23 +1149,21 @@ export function createUploadTool(d) {
         const chName = currentChannelName();
         const seriesHint = seriesInp.value.trim() || ctxSeries;
         const parsedList = list.map((f) => parseUploadBase(f.name, chName, seriesHint));
-        // Serie global: contexto de la vista, o la más frecuente en los nombres
-        if (!seriesInp.value.trim()) {
-          if (ctxSeries) {
-            seriesInp.value = ctxSeries;
-          } else {
-            const seriesCounts = {};
-            for (const p of parsedList) {
-              const s = p.series || '';
-              if (s) seriesCounts[s] = (seriesCounts[s] || 0) + 1;
-            }
-            let bestSeries = '';
-            let bestN = 0;
-            for (const [s, n] of Object.entries(seriesCounts)) {
-              if (n > bestN) { bestSeries = s; bestN = n; }
-            }
-            if (bestSeries) seriesInp.value = bestSeries;
+        // Serie global: contexto de navegación gana; si no, la más frecuente en nombres
+        if (ctxSeries) {
+          seriesInp.value = ctxSeries;
+        } else if (!seriesInp.value.trim()) {
+          const seriesCounts = {};
+          for (const p of parsedList) {
+            const s = p.series || '';
+            if (s) seriesCounts[s] = (seriesCounts[s] || 0) + 1;
           }
+          let bestSeries = '';
+          let bestN = 0;
+          for (const [s, n] of Object.entries(seriesCounts)) {
+            if (n > bestN) { bestSeries = s; bestN = n; }
+          }
+          if (bestSeries) seriesInp.value = bestSeries;
         }
         // Re-parsear con la serie global definitiva (mejor número/título)
         const seriesFinal = seriesInp.value.trim();

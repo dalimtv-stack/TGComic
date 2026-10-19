@@ -3819,7 +3819,13 @@ function seriesView(ch, s, files) {
 
   const title = seriesDisplayName(ch, s);
   go(title, (e) => {
-    e._uploadCtx = { editorial: ch.group || 'Sin editorial', channel: ch, series: s };
+    e._uploadCtx = {
+      editorial: ch.group || 'Sin editorial',
+      channel: ch,
+      // Nombre visible de la serie (renombres locales) para el formulario de subida
+      series: (seriesDisplayName(ch, s) || s || '').trim(),
+      seriesKey: s,
+    };
     e._chId = ch.id;
     e._seriesKey = s;
 
