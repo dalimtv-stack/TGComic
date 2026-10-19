@@ -1279,21 +1279,22 @@ function bindLongPress(node, fn, ms = 480) {
     armed = false;
     node.classList.remove('long-press');
   }, { passive: true });
-  // Escritorio: clic derecho (y algunos Android que disparan contextmenu)
+  // Escritorio: clic derecho → menú (sin dejar opened=true, si no el 1.er click izquierdo se come)
   node.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    // Permitir reabrir en el mismo nodo tras cerrar el menú
     opened = false;
     armed = false;
-    openOnce(e);
+    clear();
+    try { fn(e); } catch (_) {}
   }, true);
+  // Tras long-press táctil, el click sintético no debe abrir el cómic
   node.addEventListener('click', (e) => {
-    if (opened || armed) {
+    if (armed || opened) {
       e.preventDefault();
       e.stopPropagation();
-      opened = false;
       armed = false;
+      opened = false;
     }
   }, true);
 }
@@ -1423,9 +1424,11 @@ function showComicInfo(ch, f, displayTitle) {
     body.append(row('Tamaño', formatBytes(f?.size)));
     body.append(row('Páginas', pagesLabel));
     body.append(row('Formato pág.', pageFmt));
-    const hasFicha = !!(cap.fileName || cap.titleEs || cap.originalTitle || cap.series || cap.writer || cap.artist || cap.publisher || cap.date || cap.description);
+    // Ficha "completa" = hay algo más que solo Nombre de archivo
+    const hasExtraFicha = !!(cap.titleEs || cap.originalTitle || cap.series || cap.writer || cap.artist || cap.publisher || cap.date || cap.description);
+    const hasAnyFicha = !!(cap.fileName || hasExtraFicha);
     body.append(el('div', 'info-sec', 'Ficha en Telegram'));
-    if (hasFicha) {
+    if (hasAnyFicha) {
       if (cap.fileName) body.append(row('Nombre de archivo', cap.fileName));
       if (cap.titleEs) body.append(row('Título España', cap.titleEs));
       if (cap.originalTitle) body.append(row('Título original', cap.originalTitle));
@@ -1445,15 +1448,11 @@ function showComicInfo(ch, f, displayTitle) {
       }
     } else if (f?.caption && String(f.caption).trim()) {
       body.append(el('p', 'cover-pick-hint', String(f.caption).slice(0, 800)));
-      const fillBtn = el('button', 'btn cover-pick-device', 'Rellenar Ficha Telegram');
-      fillBtn.type = 'button';
-      fillBtn.onclick = () => {
-        frame.remove();
-        showCaptionEditor(ch, f, () => showComicInfo(ch, f, displayTitle));
-      };
-      body.append(fillBtn);
     } else {
       body.append(el('p', 'cover-pick-hint', 'Sin datos en Telegram'));
+    }
+    // Rellenar disponible si no hay ficha completa (p. ej. solo "Nombre de archivo")
+    if (!hasExtraFicha) {
       const fillBtn = el('button', 'btn cover-pick-device', 'Rellenar Ficha Telegram');
       fillBtn.type = 'button';
       fillBtn.onclick = () => {
@@ -2193,7 +2192,17 @@ async function getSeriesCoverBlob(ch, seriesLabel, files) {
     const b = await kv.get(seriesCoverKey(ch, seriesLabel));
     if (b instanceof Blob && b.size) return b;
   } catch (_) {}
-  return firstAvailableCover(ch, files);
+  // Generar desde el primer cómic y GUARDAR en caché (evita re-descargas)
+  const generated = await firstAvailableCover(ch, files);
+  if (generated instanceof Blob && generated.size) {
+    try { await setSeriesCoverBlob(ch, seriesLabel, generated); } catch (_) {}
+    try {
+      const cached = await kv.get(seriesCoverKey(ch, seriesLabel));
+      if (cached instanceof Blob && cached.size) return cached;
+    } catch (_) {}
+    return generated;
+  }
+  return null;
 }
 async function setSeriesCoverBlob(ch, seriesLabel, blob) {
   if (!blob) return;
