@@ -593,3 +593,11 @@ textarea.meta-desc-lg.edit-input{
 
 .card-locked .hit{margin-bottom:0}
 .card-locked{cursor:default}
+
+/* ProTools: botón de acción avanzada (texto amarillo) */
+.btn.protools-accent{
+  width:100%;height:48px;margin:.35rem 0 1rem;
+  background:#2a2b30;color:var(--acc)!important;
+  font-weight:700;font-size:.95rem;letter-spacing:.02em;
+}
+.btn.protools-accent:active{opacity:.85}

@@ -33,6 +33,7 @@ import { createRepackTool } from './repack.js';
 import { createUploadTool } from './upload.js';
 import { createPageCache } from './pageCache.js';
 import { createJobQueue } from './jobQueue.js';
+import { createProTools } from './protools.js';
 import { exportLibraryData, importLibraryData, downloadJson } from './dataPort.js';
 import {
   comicVineConfigured, searchIssuesSmart, fetchIssueDetail, buildSearchQuery,
@@ -936,77 +937,13 @@ function showViewerConfig() {
   document.body.append(frame);
 }
 menuCfgBtn.onclick = (ev) => { ev.stopPropagation(); showViewerConfig(); };
+menuAdvBtn.onclick = (ev) => {
+  ev.stopPropagation();
+  try { proTools.showAdvancedConfig(); }
+  catch (e) { appAlert('ProTools: ' + (e?.message || e)); }
+};
 
-async function clearAllComicCovers() {
-  const entries = await kv.entries();
-  let n = 0;
-  for (const [k] of entries) {
-    if (String(k).startsWith('c:')) {
-      try { await kv.del(k); n++; } catch (_) {}
-    }
-  }
-  return n;
-}
 
-function showAdvancedConfig() {
-  closeAppMenu();
-  document.querySelector('.info-frame.adv-config')?.remove();
-  const frame = el('div', 'info-frame adv-config');
-  const box = el('div', 'info-box');
-  const head = el('div', 'info-head');
-  head.append(el('span', '', 'Configuración Avanzada'));
-  const close = el('button', 'btn info-close', '×');
-  close.onclick = () => frame.remove();
-  head.append(close);
-  const body = el('div', 'info-body');
-  body.append(el('p', 'cover-pick-hint',
-    'Opciones que afectan a la caché local. Pueden tardar en listados grandes.'
-  ));
-
-  const reloadCoversBtn = el('button', 'btn cover-pick-device', 'Recargar portadas de todos los cómics');
-  reloadCoversBtn.type = 'button';
-  reloadCoversBtn.onclick = async () => {
-    const ok = await appConfirm(
-      'Se borrarán todas las portadas de cómics en caché y se volverán a generar al mostrarlas. ¿Continuar?',
-      'Recargar portadas'
-    );
-    if (!ok) return;
-    reloadCoversBtn.disabled = true;
-    reloadCoversBtn.textContent = 'Borrando portadas…';
-    try {
-      const n = await clearAllComicCovers();
-      // Forzar repintado de la vista actual para que se regeneren
-      try {
-        const top = stack[stack.length - 1];
-        if (top) top.scrollY = window.scrollY || 0;
-        show();
-      } catch (_) {}
-      await appAlert(
-        n
-          ? `Se eliminaron ${n} portadas de la caché. Se regenerarán al ver cada listado.`
-          : 'No había portadas de cómics en caché.',
-        'Portadas'
-      );
-    } catch (e) {
-      await appAlert('Error: ' + (e?.message || e), 'Portadas');
-    } finally {
-      reloadCoversBtn.disabled = false;
-      reloadCoversBtn.textContent = 'Recargar portadas de todos los cómics';
-      try { frame.remove(); } catch (_) {}
-    }
-  };
-  body.append(reloadCoversBtn);
-
-  const actions = el('div', 'edit-actions');
-  const cancel = el('button', 'btn', 'Cerrar');
-  cancel.onclick = () => frame.remove();
-  actions.append(cancel);
-  body.append(actions);
-  box.append(head, body);
-  frame.append(box);
-  document.body.append(frame);
-}
-menuAdvBtn.onclick = (ev) => { ev.stopPropagation(); showAdvancedConfig(); };
 menuLockBtn.onclick = async (ev) => {
   ev.stopPropagation();
   closeAppMenu();
@@ -4214,6 +4151,30 @@ try {
 } catch (e) {
   console.error('[upload] createUploadTool falló', e);
 }
+
+
+const proTools = createProTools({
+  el,
+  kv,
+  get LIB() { return LIB; },
+  getCover,
+  groupSeries,
+  seriesOverrideFor,
+  groupDisplayName,
+  channelDisplayName,
+  seriesDisplayName,
+  comicSourceName,
+  appConfirm,
+  appAlert,
+  closeAppMenu,
+  onCoversChanged: () => {
+    try {
+      const top = stack[stack.length - 1];
+      if (top) top.scrollY = window.scrollY || 0;
+      show();
+    } catch (_) {}
+  },
+});
 
 // ---------- Inicio ----------
 async function migrateCacheImages() {
