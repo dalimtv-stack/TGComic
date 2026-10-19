@@ -11,7 +11,6 @@ export function createJobQueue({ el, pref }) {
   let running = false;
   let paused = false;
   let listeners = new Set();
-  let currentAbort = null;
 
   function load() {
     try {

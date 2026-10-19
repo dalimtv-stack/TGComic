@@ -3,10 +3,17 @@
  * Clave: pc:{chId}:{msgId}:{pageIndex} → Blob
  * Índice: pc:index → [{ key, size, at, chId, msgId, page }]
  * Límite configurable (pref pageCacheMaxMB, default 500).
+ * touch() actualiza en memoria y vuelca con debounce (evita carreras).
  */
 export function createPageCache({ kv, pref }) {
   const INDEX = 'pc:index';
   const PREFIX = 'pc:';
+  const TOUCH_MS = 450;
+
+  /** @type {Array|null} */
+  let memIndex = null;
+  let flushTimer = null;
+  let flushChain = Promise.resolve();
 
   function maxBytes() {
     const mb = Math.max(50, Math.min(4000, +(pref('pageCacheMaxMB', '500') || 500)));
@@ -24,6 +31,36 @@ export function createPageCache({ kv, pref }) {
 
   async function writeIndex(list) {
     try { await kv.set(INDEX, list); } catch (_) {}
+  }
+
+  async function ensureIndex() {
+    if (!memIndex) memIndex = await readIndex();
+    return memIndex;
+  }
+
+  function invalidateMem() {
+    memIndex = null;
+  }
+
+  function scheduleFlush() {
+    if (flushTimer) return;
+    flushTimer = setTimeout(() => {
+      flushTimer = null;
+      flushChain = flushChain.then(async () => {
+        if (!memIndex) return;
+        const snapshot = memIndex.slice();
+        await writeIndex(snapshot);
+      }).catch(() => {});
+    }, TOUCH_MS);
+  }
+
+  async function flushNow() {
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+    await flushChain;
+    if (memIndex) await writeIndex(memIndex.slice());
   }
 
   function pageKey(chId, msgId, page) {
@@ -44,14 +81,13 @@ export function createPageCache({ kv, pref }) {
   }
 
   async function touch(key) {
-    const idx = await readIndex();
+    const idx = await ensureIndex();
     const i = idx.findIndex((x) => x.key === key);
-    if (i >= 0) {
-      idx[i].at = Date.now();
-      const [row] = idx.splice(i, 1);
-      idx.push(row);
-      await writeIndex(idx);
-    }
+    if (i < 0) return;
+    idx[i].at = Date.now();
+    const [row] = idx.splice(i, 1);
+    idx.push(row);
+    scheduleFlush();
   }
 
   async function set(chId, msgId, page, blob) {
@@ -68,28 +104,28 @@ export function createPageCache({ kv, pref }) {
         return;
       }
     }
-    let idx = await readIndex();
-    idx = idx.filter((x) => x.key !== key);
-    idx.push({ key, size, at: Date.now(), chId: String(chId), msgId: String(msgId), page });
-    await writeIndex(idx);
+    const idx = await ensureIndex();
+    const filtered = idx.filter((x) => x.key !== key);
+    filtered.push({ key, size, at: Date.now(), chId: String(chId), msgId: String(msgId), page });
+    memIndex = filtered;
+    await flushNow();
     await evictUntil(0);
   }
 
   async function totalBytes() {
-    const idx = await readIndex();
+    const idx = await ensureIndex();
     return idx.reduce((s, x) => s + (x.size || 0), 0);
   }
 
   async function count() {
-    return (await readIndex()).length;
+    return (await ensureIndex()).length;
   }
 
   async function evictUntil(extra = 0) {
     const limit = maxBytes();
-    let idx = await readIndex();
+    let idx = await ensureIndex();
     let total = idx.reduce((s, x) => s + (x.size || 0), 0) + extra;
-    // LRU: primero los más antiguos (al inicio)
-    idx.sort((a, b) => (a.at || 0) - (b.at || 0));
+    idx = idx.slice().sort((a, b) => (a.at || 0) - (b.at || 0));
     while (total > limit && idx.length) {
       const row = idx.shift();
       total -= row.size || 0;
@@ -97,19 +133,22 @@ export function createPageCache({ kv, pref }) {
         try { await kv.set(row.key, undefined); } catch (_) {}
       }
     }
-    await writeIndex(idx);
+    memIndex = idx;
+    await flushNow();
   }
 
   async function clearAll() {
-    const idx = await readIndex();
+    await flushNow();
+    const idx = await ensureIndex();
     for (const row of idx) {
       try { await kv.del(row.key); } catch (_) {}
     }
+    memIndex = [];
     await writeIndex([]);
   }
 
   async function stats() {
-    const idx = await readIndex();
+    const idx = await ensureIndex();
     const bytes = idx.reduce((s, x) => s + (x.size || 0), 0);
     return {
       bytes,

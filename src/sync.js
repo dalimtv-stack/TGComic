@@ -508,7 +508,7 @@ export async function syncOnStartup() {
 }
 
 /** @deprecated usar syncOnStartup */
-export function startBackgroundSync() {
+function startBackgroundSync() {
   /* no-op */
 }
 

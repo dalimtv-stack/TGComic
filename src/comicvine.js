@@ -143,7 +143,7 @@ function jsonp(url) {
 }
 
 /** Uso de esta sesión por recurso y pausas activas (para mostrarlo en la interfaz si quieres) */
-export function comicVineStatus() {
+function comicVineStatus() {
   const now = Date.now(), usage = lsGet('cv:usage', {}), blocked = lsGet('cv:blocked', {}), out = {};
   for (const seg of new Set([...Object.keys(usage), ...Object.keys(blocked)])) {
     out[seg] = { usadas: (usage[seg] || []).filter((t) => now - t < HOUR).length, pausadoHasta: blocked[seg] > now ? blocked[seg] : 0 };
@@ -151,7 +151,7 @@ export function comicVineStatus() {
   return out;
 }
 /** Quita la pausa local (úsalo cuando ya se haya reiniciado el límite en Comic Vine) */
-export function comicVineClearBlock() { try { localStorage.removeItem('cv:blocked'); } catch (_) {} }
+function comicVineClearBlock() { try { localStorage.removeItem('cv:blocked'); } catch (_) {} }
 
 function volumeDetailUrl(volume) {
   if (!volume) return '';

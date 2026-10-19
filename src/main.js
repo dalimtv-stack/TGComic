@@ -16,7 +16,7 @@ import {
   getPageFormat, setPageFormat, detectPageFormats,
   isComicRead, readProgress, markComicRead, markComicUnread,
   markSeriesRead, markSeriesUnread,
-  getLastRead, setLastRead, getRecentReads, getContinueList, listUnfinishedProgress,
+  setLastRead, getContinueList, listUnfinishedProgress,
   clearComicProgress, migrateLegacyProgress,
 } from './progress.js';
 import {
@@ -35,7 +35,7 @@ import { createPageCache } from './pageCache.js';
 import { createJobQueue } from './jobQueue.js';
 import { exportLibraryData, importLibraryData, downloadJson } from './dataPort.js';
 import {
-  comicVineConfigured, searchIssues, searchIssuesSmart, fetchIssueDetail, buildSearchQuery,
+  comicVineConfigured, searchIssuesSmart, fetchIssueDetail, buildSearchQuery,
 } from './comicvine.js';
 import * as locks from './lock.js';
 
@@ -62,6 +62,26 @@ function resetMobileViewport() {
 }
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+
+/** Asigna blob a img con Object URL y revoca el anterior del owner. */
+function setBlobImg(img, blob, owner) {
+  if (!img || !blob) return null;
+  try {
+    if (owner && owner._objUrl) URL.revokeObjectURL(owner._objUrl);
+  } catch (_) {}
+  let url;
+  try { url = URL.createObjectURL(blob); } catch (_) { return null; }
+  if (owner) owner._objUrl = url;
+  const prevErr = img.onerror;
+  img.onerror = (ev) => {
+    try { URL.revokeObjectURL(url); } catch (_) {}
+    if (owner && owner._objUrl === url) owner._objUrl = null;
+    if (typeof prevErr === 'function') prevErr.call(img, ev);
+  };
+  img.src = url;
+  return url;
+}
+
 
 /** Diálogos centrados estilo TGComics (sustituyen alert/confirm/prompt del navegador). */
 function appDialog({ title = '', message = '', confirmText = 'Aceptar', cancelText = null, input = null } = {}) {
@@ -1256,14 +1276,14 @@ function art(kind, name, ch) {
   }
 
   const showBlob = (blob) => {
-    const url = URL.createObjectURL(blob);
     const img = new Image();
     img.onload = () => {
-      ltr.remove();
-      d.querySelector('img')?.remove();
+      try { ltr.remove(); } catch (_) {}
+      const prev = d.querySelector('img');
+      if (prev) prev.remove();
       d.append(img);
     };
-    img.src = url;
+    setBlobImg(img, blob, d);
   };
 
   const tryCandidates = async (skipUrl) => {
@@ -2351,8 +2371,8 @@ function seriesCoverNode(ch, seriesLabel, files, badge) {
     const b = await getSeriesCoverBlob(ch, seriesLabel, files);
     if (!b) return;
     const img = new Image();
-    img.onload = () => { ltr.remove(); d.prepend(img); };
-    img.src = URL.createObjectURL(b);
+    img.onload = () => { try { ltr.remove(); } catch (_) {} d.prepend(img); };
+    setBlobImg(img, b, d);
   };
   io.observe(d);
   return d;
@@ -2525,7 +2545,7 @@ function showSeriesCoverPicker(ch, seriesLabel, files, after) {
         if (!b || !thumb.isConnected) return;
         const img = new Image();
         img.onload = () => { thumb.replaceChildren(img); };
-        img.src = URL.createObjectURL(b);
+        setBlobImg(img, b, thumb);
       })();
     }
   }
@@ -2602,7 +2622,7 @@ function channelCoverNode(ch, files) {
       host.replaceChildren(img);
       if (prog) applyCoverProgress(host, prog);
     };
-    img.src = URL.createObjectURL(blob);
+    setBlobImg(img, blob, host);
   };
 
   host._load = async () => {
@@ -2729,7 +2749,7 @@ function groupCoverNode(originalName) {
       if (custom instanceof Blob) {
         const img = new Image();
         img.onload = () => { host.replaceChildren(img); };
-        img.src = URL.createObjectURL(custom);
+        setBlobImg(img, custom, host);
         return;
       }
     } catch (_) {}
@@ -2871,7 +2891,7 @@ async function showGroupCoverPicker(originalName, after) {
       if (!b || !thumb.isConnected) return;
       const img = new Image();
       img.onload = () => { thumb.replaceChildren(img); };
-      img.src = URL.createObjectURL(b);
+      setBlobImg(img, b, thumb);
     }).catch(() => {});
   };
 
@@ -3078,7 +3098,7 @@ function showChannelCoverPicker(ch, files, after) {
       if (!b || !thumb.isConnected) return;
       const img = new Image();
       img.onload = () => { thumb.replaceChildren(img); };
-      img.src = URL.createObjectURL(b);
+      setBlobImg(img, b, thumb);
     }).catch(() => {});
     return cell;
   };
@@ -3121,7 +3141,7 @@ function showChannelCoverPicker(ch, files, after) {
         if (!b || !thumb.isConnected) return;
         const img = new Image();
         img.onload = () => { thumb.replaceChildren(img); };
-        img.src = URL.createObjectURL(b);
+        setBlobImg(img, b, thumb);
       })();
     }
   }
@@ -3349,8 +3369,8 @@ function groupsView() {
             getCover(ch, f).then((b) => {
               if (!b || !thumb.isConnected) return;
               const img = new Image();
-              img.onload = () => { letter.remove(); thumb.prepend(img); };
-              img.src = URL.createObjectURL(b);
+              img.onload = () => { try { letter.remove(); } catch (_) {} thumb.prepend(img); };
+              setBlobImg(img, b, thumb);
             }).catch(() => {});
             const meta = el('div', 'continue-meta');
             const channelLab = channelDisplayName(ch) || ch.name || '';
@@ -3454,8 +3474,8 @@ function groupsView() {
             getCover(ch, f).then((b) => {
               if (!b || !thumb.isConnected) return;
               const img = new Image();
-              img.onload = () => { letter.remove(); thumb.prepend(img); };
-              img.src = URL.createObjectURL(b);
+              img.onload = () => { try { letter.remove(); } catch (_) {} thumb.prepend(img); };
+              setBlobImg(img, b, thumb);
             }).catch(() => {});
           }
           const meta = el('div', 'continue-meta');
