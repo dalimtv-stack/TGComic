@@ -31,7 +31,8 @@ export function createJobQueue({ el, pref }) {
   function save() {
     try {
       const slim = jobs.map(({ _run, ...rest }) => rest);
-      localStorage.setItem(STORE, JSON.stringify(slim.slice(-40)));
+      // Más historial: pendientes + últimos ~120 finalizados/errores
+      localStorage.setItem(STORE, JSON.stringify(slim.slice(-120)));
     } catch (_) {}
   }
 
@@ -41,10 +42,6 @@ export function createJobQueue({ el, pref }) {
     }
     save();
     paintPanel();
-    try {
-      const p = document.getElementById('job-queue-panel');
-      if (p && !p.hidden) requestAnimationFrame(() => layoutJobLogs(p));
-    } catch (_) {}
   }
 
   function onChange(fn) {
@@ -121,18 +118,6 @@ export function createJobQueue({ el, pref }) {
     paused = false;
     emit();
     pump();
-  }
-
-  /** Cancela el trabajo en curso (si el runner respeta isAborted) y no arranca el siguiente hasta Reanudar si sigue en pausa. */
-  function cancelCurrent() {
-    const cur = jobs.find((j) => j.status === 'running');
-    if (cur) {
-      cur.status = 'cancelled';
-      cur.finishedAt = Date.now();
-      cur.error = 'Cancelado';
-      try { currentAbort?.(); } catch (_) {}
-    }
-    emit();
   }
 
   function retry(id) {
@@ -238,69 +223,10 @@ export function createJobQueue({ el, pref }) {
     pump();
   }
 
-
-  /** Evita que el scroll del panel arrastre la página de detrás (móvil). */
-
-  function attachResizeHandle(panel) {
-    if (!panel || panel.querySelector('.repack-resize-handle')) return;
-    const handle = el('div', 'repack-resize-handle');
-    handle.title = 'Arrastra para redimensionar';
-    panel.style.position = panel.style.position || '';
-    if (getComputedStyle(panel).position === 'static') panel.style.position = 'fixed';
-    handle.addEventListener('pointerdown', (e) => {
-      if (e.button != null && e.button !== 0) return;
-      e.preventDefault();
-      e.stopPropagation();
-      handle.setPointerCapture?.(e.pointerId);
-      const startX = e.clientX, startY = e.clientY;
-      const startW = panel.offsetWidth, startH = panel.offsetHeight;
-      // Más ancho; altura limitada para no tapar el menú ☰ superior
-      const maxW = Math.max(320, window.innerWidth - 16);
-      const topReserve = 56;
-      const maxH = Math.max(280, window.innerHeight - topReserve - 12);
-      const minW = 280, minH = 280; // límite inferior como antes
-      const onMove = (ev) => {
-        const dw = startX - ev.clientX;
-        const dh = startY - ev.clientY;
-        const w = Math.min(maxW, Math.max(minW, startW + dw));
-        const h = Math.min(maxH, Math.max(minH, startH + dh));
-        panel.style.width = w + 'px';
-        panel.style.height = h + 'px';
-        panel.style.maxHeight = h + 'px';
-      };
-      const onUp = (ev) => {
-        handle.releasePointerCapture?.(ev.pointerId);
-        window.removeEventListener('pointermove', onMove);
-        window.removeEventListener('pointerup', onUp);
-      };
-      window.addEventListener('pointermove', onMove);
-      window.addEventListener('pointerup', onUp);
-    });
-    panel.append(handle);
-  }
-
-  function isolatePanelScroll(root) {
-    if (!root || root.dataset.scrollIso === '1') return;
-    root.dataset.scrollIso = '1';
-    const stop = (e) => { e.stopPropagation(); };
-    root.addEventListener('touchmove', stop, { passive: true });
-    root.addEventListener('wheel', stop, { passive: true });
-    // Áreas internas con scroll propio
-    root.querySelectorAll('.repack-panel-log, .job-fold-scroll, .repack-list').forEach((node) => {
-      if (node.dataset.scrollIso === '1') return;
-      node.dataset.scrollIso = '1';
-      node.addEventListener('touchmove', stop, { passive: true });
-      node.addEventListener('wheel', stop, { passive: true });
-    });
-  }
-
   // ---- UI panel ----
   function ensurePanel() {
     let panel = document.getElementById('job-queue-panel');
-    if (panel) {
-      isolatePanelScroll(panel);
-      return panel;
-    }
+    if (panel) return panel;
     panel = el('div', 'repack-panel job-queue-panel');
     panel.id = 'job-queue-panel';
 
@@ -358,13 +284,6 @@ export function createJobQueue({ el, pref }) {
       else pause();
       btnPause.textContent = paused ? 'Reanudar' : 'Pausar';
     };
-    const btnCancel = el('button', 'btn', 'Cancelar actual');
-    btnCancel.id = 'job-queue-cancel';
-    btnCancel.type = 'button';
-    btnCancel.onclick = () => {
-      if (!confirm('¿Cancelar el trabajo en curso?')) return;
-      cancelCurrent();
-    };
     const btnClear = el('button', 'btn', 'Limpiar completados');
     btnClear.id = 'job-queue-clear';
     btnClear.type = 'button';
@@ -372,64 +291,11 @@ export function createJobQueue({ el, pref }) {
     const btnClose = el('button', 'btn', 'Cerrar');
     btnClose.type = 'button';
     btnClose.onclick = () => { panel.hidden = true; };
-    actions.append(btnPause, btnCancel, btnClear, btnClose);
-
-    const onFoldToggle = () => requestAnimationFrame(() => layoutJobLogs(panel));
-    curFold.addEventListener('toggle', onFoldToggle);
-    pendFold.addEventListener('toggle', onFoldToggle);
+    actions.append(btnPause, btnClear, btnClose);
 
     panel.append(head, bar, eta, curFold, pendFold, actions);
     document.body.append(panel);
-    isolatePanelScroll(panel);
-    attachResizeHandle(panel);
-    requestAnimationFrame(() => layoutJobLogs(panel));
-    if (typeof ResizeObserver !== 'undefined') {
-      const ro = new ResizeObserver(() => layoutJobLogs(panel));
-      ro.observe(panel);
-      panel._logRo = ro;
-    }
     return panel;
-  }
-
-  /** Reparte el alto libre 50/50 entre los dos logs internos. */
-  function layoutJobLogs(panel) {
-    if (!panel || panel.hidden) return;
-    const cur = panel.querySelector('#job-fold-current');
-    const pend = panel.querySelector('#job-fold-pending');
-    const log = panel.querySelector('#job-queue-log');
-    const list = panel.querySelector('#job-queue-list');
-    if (!log || !list) return;
-    const panelH = panel.clientHeight || 0;
-    if (panelH < 80) return;
-    let used = 0;
-    for (const child of panel.children) {
-      if (child === cur || child === pend) continue;
-      if (child.classList?.contains('repack-resize-handle')) continue;
-      used += child.offsetHeight || 0;
-    }
-    // gap approx
-    used += 8 * 4;
-    const free = Math.max(120, panelH - used);
-    const half = Math.floor(free / 2);
-    const applyFold = (fold, scrollEl, h) => {
-      if (!fold || !scrollEl) return;
-      if (!fold.open) {
-        scrollEl.style.height = '';
-        scrollEl.style.maxHeight = '';
-        return;
-      }
-      const sumH = fold.querySelector('summary')?.offsetHeight || 40;
-      const statusH = fold.querySelector('.job-current-status')?.offsetHeight || 0;
-      const inner = Math.max(60, h - sumH - statusH - 12);
-      scrollEl.style.height = inner + 'px';
-      scrollEl.style.maxHeight = inner + 'px';
-      scrollEl.style.minHeight = '60px';
-      scrollEl.style.flex = 'none';
-      scrollEl.style.paddingBottom = '12px';
-      scrollEl.style.boxSizing = 'border-box';
-    };
-    applyFold(cur, log, half);
-    applyFold(pend, list, half);
   }
 
   function ensureChip() {
@@ -541,7 +407,8 @@ export function createJobQueue({ el, pref }) {
 
     if (!list) return;
     list.replaceChildren();
-    const ordered = jobs.slice(-20).reverse();
+    // Mostrar todos los jobs en memoria (hasta el tope de persistencia)
+    const ordered = jobs.slice().reverse();
     for (const job of ordered) {
       const row = el('div', 'job-row');
       const st = job.status;

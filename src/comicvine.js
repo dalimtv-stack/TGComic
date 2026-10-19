@@ -476,22 +476,32 @@ export async function fetchIssueDetail(apiDetailUrlOrId) {
   const writers = [];
   const pencilers = [];
   const artists = [];
+  const artistsCover = [];
   for (const c of credits) {
     const role = String(c.role || '').toLowerCase().trim();
     const n = c.name || '';
     if (!n) continue;
-    // Portada / cover → no dibujante interior
-    if (/(^|\b)cover(\b|$)/.test(role)) {
-      if (/writer|script/.test(role)) writers.push(n);
+    if (/writer|script/.test(role)) writers.push(n);
+    // Dibujante prioritario:
+    // 1) quien tenga "penciler/penciller" (aunque también diga artist, cover, inker…)
+    // 2) quien tenga "artist" sin ser solo portada
+    // 3) quien tenga "artist" + "cover"
+    if (/penciler|penciller/.test(role)) {
+      pencilers.push(n);
       continue;
     }
-    if (/writer|script/.test(role)) writers.push(n);
-    // Dibujante: solo penciler/penciller o artist puro (sin inker ni "artist, inker")
-    if (/inker/.test(role)) continue;
-    if (/penciler|penciller/.test(role)) pencilers.push(n);
-    else if (/(^|\b)artist(\b|$)/.test(role) && !/colorist|letterer/.test(role)) artists.push(n);
+    if (/(^|\b)artist(\b|$)/.test(role) && !/colorist|letterer/.test(role)) {
+      if (/\bcover\b/.test(role)) artistsCover.push(n);
+      else artists.push(n);
+    }
   }
-  const artistsFinal = [...new Set([...pencilers, ...artists])];
+  const artistsFinal = [
+    ...new Set(
+      pencilers.length ? pencilers
+        : artists.length ? artists
+          : artistsCover
+    ),
+  ];
   let desc = String(r.description || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
   if (desc.length > 1200) desc = desc.slice(0, 1200) + '…';
   let date = r.cover_date || '';
