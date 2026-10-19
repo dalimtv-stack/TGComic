@@ -521,11 +521,28 @@ export async function fetchIssueDetail(apiDetailUrlOrId) {
 
 export function buildSearchQuery({ channel, series, number, fileName }) {
   const parts = [];
-  if (channel) parts.push(String(channel).trim());
-  if (series) parts.push(String(series).trim());
+  const ser = String(series || '').trim();
+  const ch = String(channel || '').trim();
+  // Serie tiene prioridad. Si canal === serie (p. ej. BRSRKR), no duplicar → "BRSRKR 01"
+  if (ser) {
+    parts.push(ser);
+  } else if (ch) {
+    parts.push(ch);
+  }
   if (number) parts.push(String(number).replace(/^#/, '').trim());
   if (!parts.filter(Boolean).length && fileName) {
     parts.push(String(fileName).replace(/\.cb[zr]$/i, '').replace(/_/g, ' '));
   }
-  return parts.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+  // Evitar "BRSRKR BRSRKR 01" si algo metió ambos
+  const joined = parts.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+  const tokens = joined.split(/\s+/);
+  const out = [];
+  const seen = new Set();
+  for (const t of tokens) {
+    const k = t.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(t);
+  }
+  return out.join(' ');
 }

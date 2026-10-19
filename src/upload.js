@@ -298,13 +298,25 @@ export function createUploadTool(d) {
     if (!m) m = base.match(/^(.*?)\s+(\d{1,4}[a-z]?)\s*[-–—]\s+(.*)$/i);
     if (!m) m = base.match(/^(.*?)\s+(\d{1,4}[a-z]?)$/i);
     if (m) {
+      // Tras quitar el canal del nombre queda "#01" → series vacía: usar nombre del canal
+      let series = String(m[1] || '').trim();
+      if (!series && chName) series = chName;
       return {
-        series: String(m[1] || '').trim(),
+        series,
         number: String(m[2] || '').trim(),
         info: joinInfo(String(m[3] || '').trim(), tags),
       };
     }
-    return { series: base, number: '', info: tags };
+    // Solo "#01" o "01" tras quitar canal
+    const onlyNum = base.match(new RegExp(`^#?\\s*(${ISSUE_TAG})$`, 'i'));
+    if (onlyNum) {
+      return {
+        series: chName || '',
+        number: String(onlyNum[1] || '').trim(),
+        info: tags,
+      };
+    }
+    return { series: base || chName || '', number: '', info: tags };
   }
 
   function uiAlert(msg) {
@@ -869,9 +881,11 @@ export function createUploadTool(d) {
         const body = el('div', 'info-body');
         const seriesQ = String(seriesInp.value || '').trim();
         const numberQ = String(row.numberInp.value || '').replace(/^#/, '').trim();
+        const chQ = currentChannelName();
+        // No pasar canal si coincide con la serie (evita "BRSRKR BRSRKR 01")
         const qDefault = buildSearchQuery({
-          channel: currentChannelName(),
-          series: seriesQ,
+          channel: (seriesQ && chQ && seriesQ.toLowerCase() === chQ.toLowerCase()) ? '' : chQ,
+          series: seriesQ || chQ,
           number: numberQ,
           fileName: row.file?.name || '',
         });
@@ -1245,7 +1259,9 @@ export function createUploadTool(d) {
           for (const [s, n] of Object.entries(seriesCounts)) {
             if (n > bestN) { bestSeries = s; bestN = n; }
           }
+          // Canal de una sola serie tipo "BRSRKR #01": series = canal si el parseo la dejó igual o vacía
           if (bestSeries) seriesInp.value = bestSeries;
+          else if (chName) seriesInp.value = chName;
         }
         // Re-parsear con la serie global definitiva (mejor número/título)
         const seriesFinal = seriesInp.value.trim();

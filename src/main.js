@@ -2438,7 +2438,17 @@ async function getChannelCoverBlob(ch, files) {
     const b = await kv.get(channelCoverKey(ch));
     if (b instanceof Blob && b.size) return b;
   } catch (_) {}
-  return firstAvailableCover(ch, files);
+  // Generar desde el primer cómic y GUARDAR (evita re-descargas de varios segundos)
+  const generated = await firstAvailableCover(ch, files);
+  if (generated instanceof Blob && generated.size) {
+    try { await setChannelCoverBlob(ch, generated); } catch (_) {}
+    try {
+      const cached = await kv.get(channelCoverKey(ch));
+      if (cached instanceof Blob && cached.size) return cached;
+    } catch (_) {}
+    return generated;
+  }
+  return null;
 }
 async function setChannelCoverBlob(ch, blob) {
   if (!blob) return;
@@ -2510,11 +2520,12 @@ function channelCoverNode(ch, files) {
       }
     } catch (_) {}
 
-    // 3) Primer cómic del canal con portada disponible (no solo el 1º archivo)
+    // 3) Primer cómic del canal con portada → cachear en cc: para la próxima vez
     try {
       const comic = await firstAvailableCover(ch, files);
       if (comic) {
         showOnHost(comic);
+        try { await setChannelCoverBlob(ch, comic); } catch (_) {}
         return;
       }
     } catch (_) {}
