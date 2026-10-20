@@ -907,7 +907,13 @@ function show() {
   // Al entrar en vista nueva (sin scroll guardado) ir arriba; al volver restaurar
   applyScroll();
   try {
-    e.render(e);
+    const ret = e.render(e);
+    if (ret && typeof ret.then === 'function') {
+      ret.catch((err) => {
+        console.error('[show] render async', err);
+        try { msg('Error al cargar la vista: ' + (err?.message || err)); } catch (_) {}
+      });
+    }
   } catch (err) {
     console.error('[show] render', err);
     try { msg('Error al cargar la vista: ' + (err?.message || err)); } catch (_) {}
@@ -1455,7 +1461,11 @@ function openComic(ch, f, queue, opts) {
 
 const viewsApi = createViews({
   el, app, top, h1, actions, search,
+  titleEl,
   setLastScrollY: (y) => { lastScrollY = y; },
+  fetchFiles,
+  mapLimit,
+  alive,
 
   get LIB() { return LIB; },
   get synced() { return synced; },

@@ -28,6 +28,24 @@ export function createViews(d) {
     if (typeof d.setLastScrollY === 'function') d.setLastScrollY(y);
     else if (typeof d.lastScrollY !== 'undefined') { try { d.lastScrollY = y; } catch (_) {} }
   };
+  // Dependencias que deben resolverse en tiempo de ejecución (no snapshot)
+  const alive = (e) => {
+    const st = d.stack;
+    return Array.isArray(st) && st.length && st[st.length - 1] === e;
+  };
+  const fetchFiles = async (...a) => {
+    if (typeof d.fetchFiles !== 'function') return [];
+    return d.fetchFiles(...a);
+  };
+  const mapLimit = async (...a) => {
+    if (typeof d.mapLimit === 'function') return d.mapLimit(...a);
+    // fallback secuencial
+    const [items, , fn] = a;
+    const out = [];
+    for (const it of (items || [])) out.push(await fn(it));
+    return out;
+  };
+  const titleEl = d.titleEl || d.h1 || null;
 
   const msg = (...a) => (typeof d.msg === 'function' ? d.msg(...a) : undefined);
   const libNow = () => {
