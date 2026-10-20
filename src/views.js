@@ -1,3 +1,16 @@
+import {
+  isComicRead as isComicReadFn,
+  readProgress as readProgressFn,
+  getContinueList as getContinueListFn,
+  markComicRead as markComicReadFn,
+  markComicUnread as markComicUnreadFn,
+  markSeriesRead as markSeriesReadFn,
+  markSeriesUnread as markSeriesUnreadFn,
+  getPageIndex as getPageIndexFn,
+  getPagesTotal as getPagesTotalFn,
+  listUnfinishedProgress as listUnfinishedProgressFn,
+} from './progress.js';
+
 /**
  * Vistas de navegación: home (editoriales), canales, series, archivos.
  */
@@ -19,7 +32,7 @@ export function createViews(d) {
     pref, setPref,
     appAlert, appConfirm, appPrompt,
     parseComicName, issueDisplay,
-    buildSearchIndex, filterSearchIndex, listUnfinishedProgress,
+    buildSearchIndex, filterSearchIndex,
   } = d;
   const openComic = (...a) => d.openComic(...a);
   const setLastScrollY = (y) => {
@@ -47,22 +60,30 @@ export function createViews(d) {
   const seriesBase = (...a) => (typeof d.seriesBase === 'function' ? d.seriesBase(...a) : '');
   const setBlobImg = (...a) => (typeof d.setBlobImg === 'function' ? d.setBlobImg(...a) : null);
 
-  // Progreso / lectura: siempre desde d (evita undefined por destructuring)
+  // Progreso / lectura: import directo de progress.js (no depende de d)
   const isComicRead = (chId, msgId) => {
-    try { return !!(d.isComicRead && d.isComicRead(chId, msgId)); } catch { return false; }
+    try { return !!(isComicReadFn(chId, msgId)); } catch { return false; }
   };
   const readProgress = (chId, msgId) => {
-    try { return d.readProgress ? d.readProgress(chId, msgId) : null; } catch { return null; }
+    try { return readProgressFn(chId, msgId); } catch { return null; }
   };
   const getContinueList = () => {
-    try { return d.getContinueList ? d.getContinueList() : []; } catch { return []; }
+    try { return getContinueListFn() || []; } catch { return []; }
   };
-  const markComicRead = (...a) => d.markComicRead && d.markComicRead(...a);
-  const markComicUnread = (...a) => d.markComicUnread && d.markComicUnread(...a);
-  const markSeriesRead = (...a) => d.markSeriesRead && d.markSeriesRead(...a);
-  const markSeriesUnread = (...a) => d.markSeriesUnread && d.markSeriesUnread(...a);
-  const getPageIndex = (...a) => (d.getPageIndex ? d.getPageIndex(...a) : 0);
-  const getPagesTotal = (...a) => (d.getPagesTotal ? d.getPagesTotal(...a) : 0);
+  const markComicRead = (...a) => markComicReadFn(...a);
+  const markComicUnread = (...a) => markComicUnreadFn(...a);
+  const markSeriesRead = (...a) => markSeriesReadFn(...a);
+  const markSeriesUnread = (...a) => markSeriesUnreadFn(...a);
+  const getPageIndex = (...a) => { try { return getPageIndexFn(...a); } catch { return 0; } };
+  const getPagesTotal = (...a) => { try { return getPagesTotalFn(...a); } catch { return 0; } };
+  // listUnfinishedProgress: preferir import; d por si acaso
+  const listUnfinishedProgress = () => {
+    try {
+      if (typeof listUnfinishedProgressFn === 'function') return listUnfinishedProgressFn() || [];
+      if (typeof d.listUnfinishedProgress === 'function') return d.listUnfinishedProgress() || [];
+    } catch (_) {}
+    return [];
+  };
 
   const msg = (...a) => (typeof d.msg === 'function' ? d.msg(...a) : undefined);
   const libNow = () => {

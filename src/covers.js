@@ -1,12 +1,16 @@
 /**
  * Portadas de cómics: generación, optimización y nodos de UI.
  */
+import { isComicRead as isComicReadImport, readProgress as readProgressImport } from './progress.js';
+
 export function createCovers(state, d) {
   const {
     el, kv, zip,
     TgReader, getMsg, pageBlob, sniff, pagesOf,
-    readProgress, isComicRead, stripExt,
+    readProgress: readProgressDep, isComicRead: isComicReadDep, stripExt,
   } = d;
+  const isComicRead = isComicReadDep || isComicReadImport;
+  const readProgress = readProgressDep || readProgressImport;
 
   const cq = [];
   let crun = 0;

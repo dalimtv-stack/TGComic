@@ -1,3 +1,5 @@
+import { isComicRead, getPageIndex, getPagesTotal, readProgress } from './progress.js';
+
 /**
  * Información y edición: cómic, serie, canal, editorial; selectores de portada.
  */
