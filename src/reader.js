@@ -314,9 +314,9 @@ export function createReader(state, d) {
       const showMosaic = (ev) => {
         try { ev?.preventDefault?.(); ev?.stopPropagation?.(); } catch (_) {}
         pokeUI();
-        document.querySelector('.mosaic')?.remove();
+        document.querySelectorAll('.mosaic').forEach((x) => x.remove());
         const overlay = el('div', 'mosaic');
-        overlay.style.zIndex = '100';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:200;';
         const head = el('div', 'mosaic-head');
         head.append(el('span', '', 'Páginas'), el('button', 'btn', 'Cerrar'));
         head.querySelector('button').onclick = (e) => {
@@ -325,8 +325,12 @@ export function createReader(state, d) {
         };
         const g = el('div', 'mosaic-grid');
         const thumbs = [];
+        // En modo doble página n es la página derecha; resaltar ambas
+        const hiL = (pref('mode', 'page') === 'page' && pref('spread', '0') === '1' && n > 0) ? n - 1 : n;
+        const hiR = n;
         for (let i = 0; i < pages.length; i++) {
-          const cell = el('button', 'mosaic-cell' + (i === n ? ' on' : ''));
+          const on = (i === hiL || i === hiR) ? ' on' : '';
+          const cell = el('button', 'mosaic-cell' + on);
           cell.type = 'button';
           cell.append(el('span', 'mosaic-num', String(i + 1)));
           const ph = el('div', 'mosaic-ph');
@@ -341,8 +345,8 @@ export function createReader(state, d) {
         }
         overlay.append(head, g);
         overlay.addEventListener('click', (ev2) => { if (ev2.target === overlay) overlay.remove(); });
-        // Dentro de #rd para que se vea también en fullscreen nativo (Android)
-        rd.append(overlay);
+        // body: funciona en Página y en Vertical/Horizontal (absolute dentro de #rd fallaba al hacer scroll)
+        document.body.append(overlay);
         (async () => {
           for (const { i, ph } of thumbs) {
             if (!overlay.isConnected) return;
@@ -360,61 +364,110 @@ export function createReader(state, d) {
           }
         })();
       };
-      gridBtn.onclick = showMosaic;
+      const bindGridBtn = () => {
+        gridBtn.onclick = showMosaic;
+        gridBtn.onpointerup = (ev) => {
+          if (ev.button != null && ev.button !== 0) return;
+          showMosaic(ev);
+        };
+      };
+      bindGridBtn();
 
       let goToPage = (i) => {}; // se asigna en cada modo
 
       if (!continuous) {
-        rd.className = 'page fit-' + pref('fit', 'screen');
+        rd.className = 'page fit-' + pref('fit', 'screen') + (pref('spread', '0') === '1' ? ' spread' : '');
         const fit = el('button', 'btn');
+        const pageHost = el('div', 'page-host');
         let img = el('img');
+        pageHost.append(img);
         const fitLabel = () => (fit.textContent = pref('fit', 'screen') === 'screen' ? '↔ Ancho' : '⤢ Pantalla');
         fit.onclick = () => {
           setPref('fit', pref('fit', 'screen') === 'screen' ? 'width' : 'screen');
           rd.className = rd.className.replace(/fit-\w+/, 'fit-' + pref('fit', 'screen'));
+          if (pref('spread', '0') === '1') rd.classList.add('spread');
+          else rd.classList.remove('spread');
           fitLabel();
           updateStatus();
           pokeUI();
         };
         fitLabel();
+        const spreadBtn = el('button', 'btn spread-btn');
+        const spreadLabel = () => {
+          const on = pref('spread', '0') === '1';
+          spreadBtn.textContent = on ? '▯' : '▥';
+          spreadBtn.title = on ? 'Una página' : 'Doble página';
+          spreadBtn.setAttribute('aria-label', spreadBtn.title);
+        };
+        spreadLabel();
+        spreadBtn.onclick = () => {
+          setPref('spread', pref('spread', '0') === '1' ? '0' : '1');
+          spreadLabel();
+          if (pref('spread', '0') === '1') rd.classList.add('spread');
+          else rd.classList.remove('spread');
+          updateStatus();
+          pokeUI();
+          turn(n);
+        };
         cluster.append(fit, cnt);
+        try {
+          cluster.insertBefore(spreadBtn, gridBtn);
+        } catch (_) {
+          cluster.append(spreadBtn);
+        }
         img.draggable = false;
         const eL = el('div', 'edge l'), eR = el('div', 'edge r');
-        rd.append(img, eL, eR, top, bot);
+        rd.append(pageHost, eL, eR, top, bot);
+        const isSpread = () => pref('spread', '0') === '1';
+        const setCountSpread = () => {
+          if (isSpread() && n > 0) cnt.textContent = (n) + '–' + (n + 1) + ' / ' + pages.length;
+          else setCount();
+        };
         const turn = async (i) => {
           if (i > pages.length - 1) { if (hasNext) openNext(); return; }
           if (i < 0) return;
-          const t = Math.max(0, Math.min(pages.length - 1, i));
-          if (t === n && img.src) return;
-          n = t; savePage(n); setCount();
+          const right = Math.max(0, Math.min(pages.length - 1, i));
+          const left = isSpread() && right > 0 ? right - 1 : null;
+          n = right;
+          savePage(n);
+          if (isSpread() && left != null) setCountSpread();
+          else setCount();
           try {
-            // clearZoom aún no existe aquí en el source order; limpiar a mano
             if (typeof zoomLevel !== 'undefined') zoomLevel = 1;
             rd.classList.remove('zoom');
-            const im0 = rd.querySelector('img');
-            if (im0) {
-              im0.style.removeProperty('width');
-              im0.style.removeProperty('max-width');
-              im0.style.removeProperty('max-height');
-            }
             rd.scrollTo(0, 0);
           } catch (_) {}
           const mine = ++token;
           try {
-            const u = await load(n);
-            if (mine !== token) return;
-            const im = el('img'); im.draggable = false; im.src = u;
-            await im.decode().catch(() => {});
-            if (mine !== token) return;
-            img.replaceWith(im); img = im; rd.scrollTo(0, 0);
-            const keep = networkPreloadRadius() + 1;
+            if (isSpread() && left != null) {
+              const pair = await Promise.all([load(left), load(right)]);
+              if (mine !== token) return;
+              const imL = el('img'); imL.draggable = false; imL.className = 'spread-l'; imL.src = pair[0];
+              const imR = el('img'); imR.draggable = false; imR.className = 'spread-r'; imR.src = pair[1];
+              await Promise.all([imL.decode().catch(() => {}), imR.decode().catch(() => {})]);
+              if (mine !== token) return;
+              pageHost.replaceChildren(imL, imR);
+              img = imR;
+            } else {
+              const u = await load(right);
+              if (mine !== token) return;
+              const im = el('img'); im.draggable = false; im.src = u;
+              await im.decode().catch(() => {});
+              if (mine !== token) return;
+              pageHost.replaceChildren(im);
+              img = im;
+            }
+            rd.scrollTo(0, 0);
+            const keep = networkPreloadRadius() + 2;
             for (const i2 of [...urls.keys()]) if (i2 < n - keep || i2 > n + keep + 1) drop(i2);
             await preloadAround(n, token, mine);
+            if (left != null) await preloadAround(left, token, mine);
           } catch (err) { cnt.textContent = 'Error'; console.error(err); }
         };
         goToPage = (i) => turn(i);
-        eL.onclick = () => turn(n - 1);
-        eR.onclick = () => turn(n + 1);
+        eL.onclick = () => turn(isSpread() ? n - 2 : n - 1);
+        eR.onclick = () => turn(isSpread() ? n + 2 : n + 1);
+
 
         /** Zoom variable: doble toque (~2.5×) y pellizco (1×–4×). Pan con un dedo. */
         let zoomLevel = 1;
@@ -522,11 +575,12 @@ export function createReader(state, d) {
         };
 
         // Laterales: una sola acción (evitar doble turn por touch + click)
+        const pageStep = () => (isSpread() ? 2 : 1);
         const edgeGo = (dir) => {
           if (suppressClick) return;
           armSuppressClick();
           clearZoom();
-          turn(dir < 0 ? n - 1 : n + 1);
+          turn(dir < 0 ? n - pageStep() : n + pageStep());
         };
         eL.onclick = (ev) => { ev.stopPropagation(); edgeGo(-1); };
         eR.onclick = (ev) => { ev.stopPropagation(); edgeGo(1); };
@@ -535,14 +589,14 @@ export function createReader(state, d) {
           ev.stopPropagation();
           armSuppressClick();
           clearZoom();
-          turn(n - 1);
+          turn(n - pageStep());
         }, { passive: false });
         eR.addEventListener('touchend', (ev) => {
           ev.preventDefault();
           ev.stopPropagation();
           armSuppressClick();
           clearZoom();
-          turn(n + 1);
+          turn(n + pageStep());
         }, { passive: false });
 
         let sx = null, sy = 0, moved = false;
@@ -643,7 +697,7 @@ export function createReader(state, d) {
               return;
             }
             if (Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy)) {
-              turn(dx < 0 ? n + 1 : n - 1);
+              turn(dx < 0 ? n + pageStep() : n - pageStep());
             }
             return;
           }
@@ -653,7 +707,7 @@ export function createReader(state, d) {
           }
         }, { passive: true });
 
-        document.onkeydown = (e) => { if (e.key === 'ArrowRight') turn(n + 1); if (e.key === 'ArrowLeft') turn(n - 1); };
+        document.onkeydown = (e) => { const s = (typeof isSpread === 'function' && isSpread()) ? 2 : 1; if (e.key === 'ArrowRight') turn(n + s); if (e.key === 'ArrowLeft') turn(n - s); };
         // Página + Ancho: rueda hace scroll en la hoja; solo al borde cambia de página.
         // Página + Pantalla: sin cambios (siempre cabe → rueda cambia página).
         const onWheel = (e) => {
@@ -671,21 +725,21 @@ export function createReader(state, d) {
                   return;
                 }
                 e.preventDefault();
-                turn(n + 1);
+                turn(n + pageStep());
                 return;
               }
               if (e.deltaY < -10) {
                 if (!atTop) return;
                 e.preventDefault();
-                turn(n - 1);
+                turn(n - pageStep());
                 return;
               }
               return;
             }
           }
           e.preventDefault();
-          if (e.deltaY > 10) turn(n + 1);
-          else if (e.deltaY < -10) turn(n - 1);
+          if (e.deltaY > 10) turn(n + pageStep());
+          else if (e.deltaY < -10) turn(n - pageStep());
         };
         rd.addEventListener('wheel', onWheel, { passive: false });
         observers._wheel = onWheel;
@@ -696,7 +750,7 @@ export function createReader(state, d) {
           const h = Math.round(window.visualViewport?.height || window.innerHeight);
           rd.style.width = w + 'px';
           rd.style.height = h + 'px';
-          rd.className = 'page fit-' + pref('fit', 'screen');
+          rd.className = 'page fit-' + pref('fit', 'screen') + (pref('spread', '0') === '1' ? ' spread' : '');
           if (img) {
             img.style.width = '';
             img.style.height = '';

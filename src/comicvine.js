@@ -490,10 +490,15 @@ export async function fetchIssueDetail(apiDetailUrlOrId) {
       pencilers.push(n);
       continue;
     }
-    if (/(^|\b)artist(\b|$)/.test(role) && !/colorist|letterer/.test(role)) {
-      if (/\bcover\b/.test(role)) artistsCover.push(n);
+    // "artist" (puede ir con colorist/cover). No excluir colorist (Ian Gibson: artist, colorist, cover).
+    // Prioridad: penciler > artist interior > artist+cover solo portada
+    if (/\bartist\b/.test(role) && !/^\s*letterer\s*$/i.test(role)) {
+      const pureCover = /\bcover\b/.test(role)
+        && !/\b(colorist|inker|interior|penciler|penciller)\b/.test(role);
+      if (pureCover) artistsCover.push(n);
       else artists.push(n);
     }
+
   }
   const artistsFinal = [
     ...new Set(
