@@ -1135,19 +1135,115 @@ const alive = (e) => stack[stack.length - 1] === e;
 })();
 
 const ART = { groups: {}, channels: {} };
+/** Variantes por nombre base: { label, file, url, primary }[] */
+const ART_VARIANTS = { groups: {}, channels: {} };
 const artNorm = (s) => s.normalize('NFC').trim().toLowerCase();
 const artLoose = (s) => artNorm(String(s || '').replace(/[\s_\-]+/g, ''));
+const EXT_PREF = { webp: 0, png: 1, jpg: 2, jpeg: 2, gif: 3, avif: 4 };
 const reg = (kind, files) => {
+  const buckets = new Map(); // baseNorm -> [{file, url, base, altTag, ext}]
   for (const [p, url] of Object.entries(files)) {
-    const base = decodeURIComponent(p.split('/').pop()).replace(/\.\w+$/i, '').trim();
-    ART[kind][artNorm(base)] = url;
-    ART[kind][base.normalize('NFD').trim().toLowerCase()] = url;
-    // Sin espacios: WildStorm / Wild Storm / Wildstorm → misma clave
-    ART[kind][artLoose(base)] = url;
+    const file = decodeURIComponent(p.split('/').pop() || '').trim();
+    if (!file) continue;
+    const m = file.match(/^(.*)\.([a-z0-9]+)$/i);
+    if (!m) continue;
+    const stem = m[1].trim();
+    const ext = m[2].toLowerCase();
+    // Cemetery Beach.alt / .alt1 / .alt2 …
+    const altM = stem.match(/^(.*)\.(alt\d*|alt)$/i);
+    const base = (altM ? altM[1] : stem).trim();
+    const altTag = altM ? altM[2].toLowerCase() : '';
+    if (!base) continue;
+    const bn = artNorm(base);
+    if (!buckets.has(bn)) buckets.set(bn, []);
+    buckets.get(bn).push({ file, url, base, altTag, ext });
+    // Índices de búsqueda rápida → URL primaria (se rellena después)
+  }
+  for (const [bn, list] of buckets) {
+    // Orden: sin alt primero, luego por extensión preferida, luego nombre
+    list.sort((a, b) => {
+      const aa = a.altTag ? 1 : 0;
+      const bb = b.altTag ? 1 : 0;
+      if (aa !== bb) return aa - bb;
+      const ea = EXT_PREF[a.ext] ?? 9;
+      const eb = EXT_PREF[b.ext] ?? 9;
+      if (ea !== eb) return ea - eb;
+      return a.file.localeCompare(b.file, undefined, { numeric: true });
+    });
+    const variants = list.map((it, i) => {
+      let label;
+      if (!it.altTag) label = i === 0 ? 'Predeterminada (GitHub)' : `GitHub (${it.ext})`;
+      else {
+        const n = it.altTag.replace(/^alt/i, '') || '';
+        label = n ? `Alternativa ${n}` : 'Alternativa';
+        // alt, alt1, alt2 → Alternativa / Alternativa 1 / Alternativa 2
+        if (it.altTag === 'alt') label = 'Alternativa 1';
+        else if (/^alt\d+$/i.test(it.altTag)) label = 'Alternativa ' + it.altTag.replace(/^alt/i, '');
+      }
+      return {
+        label,
+        file: it.file,
+        url: it.url,
+        primary: !it.altTag && i === list.findIndex((x) => !x.altTag),
+        altTag: it.altTag,
+        ext: it.ext,
+        base: it.base,
+      };
+    });
+    // Ajustar labels de predeterminada si hay varias sin .alt
+    let altIdx = 1;
+    for (const v of variants) {
+      if (v.altTag) {
+        v.label = v.altTag === 'alt' ? 'Alternativa 1' : (
+          /^alt\d+$/i.test(v.altTag)
+            ? 'Alternativa ' + v.altTag.replace(/^alt/i, '')
+            : 'Alternativa ' + (altIdx++)
+        );
+      }
+    }
+    const primary = variants.find((v) => !v.altTag) || variants[0];
+    if (!primary) continue;
+    const baseName = primary.base;
+    ART[kind][artNorm(baseName)] = primary.url;
+    ART[kind][baseName.normalize('NFD').trim().toLowerCase()] = primary.url;
+    ART[kind][artLoose(baseName)] = primary.url;
+    const vKey = artNorm(baseName);
+    ART_VARIANTS[kind][vKey] = variants;
+    ART_VARIANTS[kind][artLoose(baseName)] = variants;
   }
 };
 reg('groups', import.meta.glob(['/groups/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP}', '/src/groups/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP}'], { eager: true, query: '?url', import: 'default' }));
 reg('channels', import.meta.glob(['/channels/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP}', '/src/channels/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP}'], { eager: true, query: '?url', import: 'default' }));
+
+/** Lista variantes GitHub para un canal/editorial. */
+function listGithubArtVariants(kind, name) {
+  const nfc = String(name || '').normalize('NFC').trim();
+  if (!nfc) return [];
+  const map = ART_VARIANTS[kind] || {};
+  let list = map[artNorm(nfc)] || map[artLoose(nfc)] || null;
+  if (!list) {
+    // búsqueda flexible
+    const target = artLoose(nfc);
+    for (const [k, v] of Object.entries(map)) {
+      if (artLoose(k) === target) { list = v; break; }
+    }
+  }
+  return Array.isArray(list) ? list.slice() : [];
+}
+
+async function fetchOptimizeArtBlob(url, keepAlpha = true) {
+  const res = await fetch(url, { cache: 'no-cache' });
+  if (!res.ok) return null;
+  const blob = await res.blob();
+  if (!blob.size) return null;
+  try {
+    const opt = await optimizeImageBlob(blob, 384, 0.75, { keepAlpha });
+    return opt || blob;
+  } catch {
+    return blob;
+  }
+}
+
 async function fetchArtBlob(url, cached) {
   const headers = {};
   if (cached?.etag) headers['If-None-Match'] = cached.etag;
@@ -2514,7 +2610,7 @@ async function getChannelCoverBlob(ch, files) {
 async function setChannelCoverBlob(ch, blob) {
   if (!blob) return;
   try {
-    const opt = await optimizeImageBlob(blob, 384, 0.75, { keepAlpha: kind === 'groups' || kind === 'channels' });
+    const opt = await optimizeImageBlob(blob, 384, 0.75, { keepAlpha: true });
     await kv.set(channelCoverKey(ch), opt || blob);
   } catch (e) {
     console.warn('channel cover', e);
@@ -2597,37 +2693,49 @@ function channelCoverNode(ch, files) {
 async function clearChannelCover(ch) {
   try { await kv.del(channelCoverKey(ch)); } catch (_) {}
 }
-async function getGithubChannelArtBlob(ch) {
-  const key = `art:channels:${artNorm((ch.name || '').normalize('NFC').trim())}`;
+async function getGithubChannelArtBlob(ch, preferredUrl) {
+  const nfc = (ch?.name || '').normalize('NFC').trim();
+  const key = `art:channels:${artNorm(nfc)}`;
   try {
-    const cached = await kv.get(key);
-    if (cached?.blob instanceof Blob && !cached.fromComic) return cached.blob;
-    // Intentar cargar desde candidatos de ART
-    const nfc = (ch.name || '').normalize('NFC').trim();
-    const nfd = (ch.name || '').normalize('NFD').trim();
-    const exts = ['jpg', 'jpeg', 'png', 'webp', 'avif', 'gif', 'JPG', 'JPEG', 'PNG', 'WEBP'];
-    const seen = new Set();
-    const candidates = [];
-    const add = (u) => { if (u && !seen.has(u)) { seen.add(u); candidates.push(u); } };
-    for (const n of [nfc, nfd, ch.name]) {
-      if (!n) continue;
-      add(ART.channels[artNorm(n)]);
-      add(ART.channels[n.normalize('NFD').trim().toLowerCase()]);
-      for (const e of exts) add(`/channels/${encodeURIComponent(n)}.${e}`);
+    if (!preferredUrl) {
+      const cached = await kv.get(key);
+      // Solo reutilizar caché válida (>= 200 bytes); cachés corruptas/negras se regeneran
+      if (cached?.blob instanceof Blob && cached.blob.size >= 200 && !cached.fromComic) {
+        return cached.blob;
+      }
     }
-    for (const url of candidates) {
+    const variants = listGithubArtVariants('channels', nfc);
+    const urls = [];
+    const seen = new Set();
+    const add = (u) => { if (u && !seen.has(u)) { seen.add(u); urls.push(u); } };
+    if (preferredUrl) add(preferredUrl);
+    for (const v of variants) add(v.url);
+    add(ART.channels[artNorm(nfc)]);
+    add(ART.channels[artLoose(nfc)]);
+    const nfd = (ch?.name || '').normalize('NFD').trim();
+    const exts = ['webp', 'png', 'jpg', 'jpeg', 'avif', 'gif', 'WEBP', 'PNG', 'JPG', 'JPEG'];
+    for (const n of [nfc, nfd, ch?.name]) {
+      if (!n) continue;
+      for (const e of exts) {
+        add(`/channels/${encodeURIComponent(n)}.${e}`);
+        add(`/channels/${n}.${e}`);
+      }
+    }
+    for (const url of urls) {
       try {
-        const res = await fetch(url, { cache: 'no-cache' });
-        if (!res.ok) continue;
-        const blob = await res.blob();
-        if (!blob.size) continue;
-        const opt = await optimizeImageBlob(blob, 384, 0.75, { keepAlpha: kind === 'groups' || kind === 'channels' });
-        const meta = { blob: opt || blob, url, optimized: true };
-        await kv.set(key, meta);
-        return meta.blob;
+        const blob = await fetchOptimizeArtBlob(url, true);
+        if (!blob || !blob.size) continue;
+        const meta = { blob, url, optimized: true };
+        // Solo guardar como predeterminada si no es una alternativa forzada distinta
+        if (!preferredUrl || preferredUrl === url) {
+          try { await kv.set(key, meta); } catch (_) {}
+        }
+        return blob;
       } catch (_) {}
     }
-  } catch (_) {}
+  } catch (e) {
+    console.warn('[art] channel github', e);
+  }
   return null;
 }
 
@@ -2638,42 +2746,50 @@ async function clearGroupCover(name) {
 async function setGroupCoverBlob(name, blob) {
   if (!blob) return;
   try {
-    const opt = await optimizeImageBlob(blob, 384, 0.75, { keepAlpha: kind === 'groups' || kind === 'channels' });
+    const opt = await optimizeImageBlob(blob, 384, 0.75, { keepAlpha: true });
     await kv.set(groupCoverKey(name), opt || blob);
   } catch (e) {
     try { await kv.set(groupCoverKey(name), blob); } catch (_) {}
   }
 }
-async function getGithubGroupArtBlob(name) {
-  const key = `art:groups:${artNorm((name || '').normalize('NFC').trim())}`;
+async function getGithubGroupArtBlob(name, preferredUrl) {
+  const nfc = String(name || '').normalize('NFC').trim();
+  const key = `art:groups:${artNorm(nfc)}`;
   try {
-    const cached = await kv.get(key);
-    if (cached?.blob instanceof Blob) return cached.blob;
-    const nfc = (name || '').normalize('NFC').trim();
-    const nfd = (name || '').normalize('NFD').trim();
-    const exts = ['jpg', 'jpeg', 'png', 'webp', 'avif', 'gif', 'JPG', 'JPEG', 'PNG', 'WEBP'];
+    if (!preferredUrl) {
+      const cached = await kv.get(key);
+      if (cached?.blob instanceof Blob && cached.blob.size >= 200) return cached.blob;
+    }
+    const variants = listGithubArtVariants('groups', nfc);
+    const urls = [];
     const seen = new Set();
-    const candidates = [];
-    const add = (u) => { if (u && !seen.has(u)) { seen.add(u); candidates.push(u); } };
+    const add = (u) => { if (u && !seen.has(u)) { seen.add(u); urls.push(u); } };
+    if (preferredUrl) add(preferredUrl);
+    for (const v of variants) add(v.url);
+    add(ART.groups[artNorm(nfc)]);
+    add(ART.groups[artLoose(nfc)]);
+    const nfd = String(name || '').normalize('NFD').trim();
+    const exts = ['webp', 'png', 'jpg', 'jpeg', 'avif', 'gif', 'WEBP', 'PNG', 'JPG', 'JPEG'];
     for (const n of [nfc, nfd, name]) {
       if (!n) continue;
-      add(ART.groups[artNorm(n)]);
-      add(ART.groups[n.normalize('NFD').trim().toLowerCase()]);
-      for (const e of exts) add(`/groups/${encodeURIComponent(n)}.${e}`);
+      for (const e of exts) {
+        add(`/groups/${encodeURIComponent(n)}.${e}`);
+        add(`/groups/${n}.${e}`);
+      }
     }
-    for (const url of candidates) {
+    for (const url of urls) {
       try {
-        const res = await fetch(url, { cache: 'no-cache' });
-        if (!res.ok) continue;
-        const blob = await res.blob();
-        if (!blob.size) continue;
-        const opt = await optimizeImageBlob(blob, 384, 0.75, { keepAlpha: kind === 'groups' || kind === 'channels' });
-        const meta = { blob: opt || blob, url, optimized: true };
-        await kv.set(key, meta);
-        return meta.blob;
+        const blob = await fetchOptimizeArtBlob(url, true);
+        if (!blob || !blob.size) continue;
+        if (!preferredUrl || preferredUrl === url) {
+          try { await kv.set(key, { blob, url, optimized: true }); } catch (_) {}
+        }
+        return blob;
       } catch (_) {}
     }
-  } catch (_) {}
+  } catch (e) {
+    console.warn('[art] group github', e);
+  }
   return null;
 }
 function groupCoverNode(originalName) {
@@ -2835,11 +2951,33 @@ async function showGroupCoverPicker(originalName, after) {
   const grid0 = el('div', 'cover-pick-grid');
   body.append(el('div', 'info-sec', 'Opciones'));
   body.append(grid0);
-  addCell(grid0, 'GitHub / predeterminada', () => getGithubGroupArtBlob(originalName), async () => {
-    await clearGroupCover(originalName);
-    frame.remove();
-    after?.();
-  });
+  const ghGroupVars = listGithubArtVariants('groups', originalName);
+  if (!ghGroupVars.length) {
+    addCell(grid0, 'GitHub / predeterminada', () => getGithubGroupArtBlob(originalName), async () => {
+      await clearGroupCover(originalName);
+      try {
+        const b = await getGithubGroupArtBlob(originalName);
+        if (b) await setGroupCoverBlob(originalName, b);
+      } catch (_) {}
+      frame.remove();
+      after?.();
+    });
+  } else {
+    for (const v of ghGroupVars) {
+      const lab = v.primary
+        ? (`Predeterminada: ${v.file}`)
+        : (v.altTag ? (`${v.label}: ${v.file}`) : (`Alternativa (${v.ext}): ${v.file}`));
+      addCell(grid0, lab, () => getGithubGroupArtBlob(originalName, v.url), async () => {
+        await clearGroupCover(originalName);
+        try {
+          const b = await getGithubGroupArtBlob(originalName, v.url);
+          if (b) await setGroupCoverBlob(originalName, b);
+        } catch (_) {}
+        frame.remove();
+        after?.();
+      });
+    }
+  }
 
   const chs = LIB.filter((c) => c.group === originalName);
   if (chs.length) {
@@ -3040,13 +3178,41 @@ function showChannelCoverPicker(ch, files, after) {
     return cell;
   };
 
-  // 1) Portada GitHub (quita la personalizada y restaura el flujo original)
-  addCell('GitHub / predeterminada', () => getGithubChannelArtBlob(ch), async () => {
-    await clearChannelCover(ch);
-    // Si hay blob de GitHub, opcionalmente no hace falta guardarlo: art() lo carga solo
-    frame.remove();
-    after?.();
-  });
+  // 1) Portadas GitHub (predeterminada + alternativas .alt / otras extensiones)
+  body.append(el('div', 'info-sec', 'GitHub'));
+  const ghVariants = listGithubArtVariants('channels', ch.name);
+  if (!ghVariants.length) {
+    addCell('GitHub / predeterminada', () => getGithubChannelArtBlob(ch), async () => {
+      await clearChannelCover(ch);
+      try {
+        const b = await getGithubChannelArtBlob(ch);
+        if (b) await setChannelCoverBlob(ch, b);
+      } catch (_) {}
+      frame.remove();
+      after?.();
+    });
+  } else {
+    for (const v of ghVariants) {
+      const lab = v.primary
+        ? (`Predeterminada: ${v.file}`)
+        : (v.altTag ? (`${v.label}: ${v.file}`) : (`Alternativa (${v.ext}): ${v.file}`));
+      addCell(lab, () => getGithubChannelArtBlob(ch, v.url), async () => {
+        await clearChannelCover(ch);
+        try {
+          const b = await getGithubChannelArtBlob(ch, v.url);
+          if (b) await setChannelCoverBlob(ch, b);
+        } catch (_) {}
+        // Guardar también en caché art: del canal la URL elegida
+        try {
+          const key = `art:channels:${artNorm((ch.name || '').normalize('NFC').trim())}`;
+          const b = await getGithubChannelArtBlob(ch, v.url);
+          if (b) await kv.set(key, { blob: b, url: v.url, optimized: true });
+        } catch (_) {}
+        frame.remove();
+        after?.();
+      });
+    }
+  }
 
   // 2) Todos los cómics del canal (también los de series desagrupadas)
   const list = Array.isArray(files) ? files : [];
