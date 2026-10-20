@@ -46,6 +46,8 @@ export function createViews(d) {
     return out;
   };
   const titleEl = d.titleEl || d.h1 || null;
+  const seriesBase = (...a) => (typeof d.seriesBase === 'function' ? d.seriesBase(...a) : '');
+  const setBlobImg = (...a) => (typeof d.setBlobImg === 'function' ? d.setBlobImg(...a) : null);
 
   const msg = (...a) => (typeof d.msg === 'function' ? d.msg(...a) : undefined);
   const libNow = () => {

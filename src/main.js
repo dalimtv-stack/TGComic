@@ -1492,6 +1492,8 @@ const viewsApi = createViews({
   pref, setPref,
   appAlert, appConfirm, appPrompt,
   parseComicName, issueDisplay,
+  seriesBase,
+  setBlobImg,
 });
 const { cardNode, lockToggleOpts, groupsView, channelsView, filesView, seriesView } = viewsApi;
 

@@ -3,8 +3,8 @@
  */
 export function createInfoEdit(d) {
   const {
-    el, kv, client, Api, peerOf, ready,
-    LIB, locks,
+    el, kv, Api, peerOf,
+    locks,
     parseComicName, comicSourceName, issueDisplay, comicDisplay, clean, stripExt,
     parseComicCaption, buildComicCaption,
     groupSeries, seriesOverrideFor, seriesBase, issueLabel,
@@ -27,6 +27,14 @@ export function createInfoEdit(d) {
   const channelCoverKey = (ch) => `cc:${ch.id}`;
   const seriesCoverKey = (ch, label) => `sc:${ch.id}:${String(label || '').toLowerCase()}`;
   const groupCoverKey = (name) => `gc:${artNorm(String(name || ''))}`;
+
+  // Nunca hacer snapshot de client/ready/LIB: se rellenan tras el login
+  const getClient = () => (typeof d.client === 'function' ? d.client() : d.client);
+  const getReady = () => (typeof d.ready === 'function' ? d.ready() : d.ready);
+  const getLIB = () => {
+    const L = typeof d.LIB === 'function' ? d.LIB() : d.LIB;
+    return Array.isArray(L) ? L : [];
+  };
 
 function showComicInfo(ch, f, displayTitle) {
   try {
@@ -168,7 +176,9 @@ function existingSeriesLabels(ch, files) {
 
 async function updateTelegramCaption(ch, f, caption) {
   if (!ch || !f?.id) return;
-  await ready;
+  const readyP = getReady();
+  if (readyP && typeof readyP.then === 'function') await readyP;
+  const client = getClient();
   if (!client) throw new Error('Cliente Telegram no listo');
   const peer = peerOf(ch);
   await client.invoke(new Api.messages.EditMessage({
@@ -1274,7 +1284,7 @@ async function showGroupInfo(originalName) {
   try {
     document.querySelector('.info-frame.group-info')?.remove();
     const display = groupDisplayName(originalName);
-    const chs = LIB.filter((c) => c.group === originalName);
+    const chs = getLIB().filter((c) => c.group === originalName);
     let comics = 0, bytes = 0;
     for (const ch of chs) {
       const files = (await kv.get('f:' + ch.id)) || [];
@@ -1430,7 +1440,7 @@ async function showGroupCoverPicker(originalName, after) {
     }
   }
 
-  const chs = LIB.filter((c) => c.group === originalName);
+  const chs = getLIB().filter((c) => c.group === originalName);
   if (chs.length) {
     body.append(el('div', 'info-sec', 'Canales'));
     const gridCh = el('div', 'cover-pick-grid');
