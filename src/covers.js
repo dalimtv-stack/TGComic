@@ -62,6 +62,10 @@ export function createCovers(state, d) {
     const srcType = String(blob.type || '').toLowerCase();
     // Editoriales / logos: preservar transparencia (PNG/GIF/WebP con alpha)
     const keepAlpha = !!(opts && opts.keepAlpha) || srcType.includes('png') || srcType.includes('gif');
+    // No re-encode logos pequeños: el canvas en Safari/iPhone a veces genera negro
+    if (keepAlpha && blob.size > 0 && blob.size < 400 * 1024) {
+      return blob;
+    }
 
     // Miniatura ya OK (sin alpha forzada a comic covers)
     if (!keepAlpha && srcType.includes('webp') && blob.size < 48 * 1024) {

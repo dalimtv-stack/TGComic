@@ -53,7 +53,6 @@ const natural = (a, b) => a.localeCompare(b, undefined, { numeric: true });
 const pref = (k, d) => localStorage.getItem('pref:' + k) || d;
 const setPref = (k, v) => { localStorage.setItem('pref:' + k, v); try { sync.schedulePush(); } catch (_) {} };
 /** Evita el zoom atascado de iOS al girar el dispositivo */
-const $ = (s) => document.querySelector(s);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 
 const uiApi = createUi({ el, sync });
@@ -64,7 +63,7 @@ const {
   bindLongPress, formatPeople, copyInfoFrameText, showDescriptionPanel,
   grid, sheet,
 } = uiApi;
-const $ = uiApi.$;
+const $ = uiApi.$ || ((s) => document.querySelector(s));
 
 
 // Progreso por canal+mensaje (evita colisiones entre canales)
@@ -1050,8 +1049,18 @@ const reg = (kind, files) => {
     ART_VARIANTS[kind][artLoose(baseName)] = variants;
   }
 };
-reg('groups', import.meta.glob(['/groups/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP}', '/src/groups/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP}'], { eager: true, query: '?url', import: 'default' }));
-reg('channels', import.meta.glob(['/channels/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP}', '/src/channels/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP}'], { eager: true, query: '?url', import: 'default' }));
+reg('groups', import.meta.glob([
+  '/groups/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP,GIF,AVIF}',
+  '/src/groups/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP,GIF,AVIF}',
+  '../public/groups/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP,GIF,AVIF}',
+  '../../public/groups/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP,GIF,AVIF}',
+], { eager: true, query: '?url', import: 'default' }));
+reg('channels', import.meta.glob([
+  '/channels/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP,GIF,AVIF}',
+  '/src/channels/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP,GIF,AVIF}',
+  '../public/channels/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP,GIF,AVIF}',
+  '../../public/channels/*.{jpg,jpeg,png,webp,avif,gif,JPG,JPEG,PNG,WEBP,GIF,AVIF}',
+], { eager: true, query: '?url', import: 'default' }));
 
 /** Lista variantes GitHub para un canal/editorial. */
 function listGithubArtVariants(kind, name) {
@@ -1060,26 +1069,109 @@ function listGithubArtVariants(kind, name) {
   const map = ART_VARIANTS[kind] || {};
   let list = map[artNorm(nfc)] || map[artLoose(nfc)] || null;
   if (!list) {
-    // búsqueda flexible
     const target = artLoose(nfc);
     for (const [k, v] of Object.entries(map)) {
       if (artLoose(k) === target) { list = v; break; }
     }
   }
+  // Coincidencia parcial: archivo "Foo Bar" vs canal "Foo Bar:Editorial::..."
+  if (!list) {
+    const target = artLoose(nfc.split(':')[0] || nfc);
+    let best = null;
+    for (const [k, v] of Object.entries(map)) {
+      const kk = artLoose(k);
+      if (kk === target || target.startsWith(kk) || kk.startsWith(target)) {
+        best = v;
+        if (kk === target) break;
+      }
+    }
+    list = best;
+  }
   return Array.isArray(list) ? list.slice() : [];
 }
+
+/** Prueba rutas estáticas /channels|/groups cuando el glob no indexó public/. */
+async function probeGithubArtVariants(kind, name) {
+  const nfc = String(name || '').normalize('NFC').trim().split(':')[0].trim();
+  if (!nfc) return [];
+  const folder = kind === 'groups' ? 'groups' : 'channels';
+  const stems = [nfc];
+  // variantes de nombre
+  const loose = nfc.replace(/_/g, ' ');
+  if (loose !== nfc) stems.push(loose);
+  const files = [];
+  for (const stem of stems) {
+    for (const ext of ['webp', 'png', 'jpg', 'jpeg', 'gif', 'avif']) {
+      files.push({ file: `${stem}.${ext}`, altTag: '', ext });
+    }
+    for (const alt in ['alt', 'alt1', 'alt2', 'alt3']) {
+      pass
+    }
+    for (const alt of ['alt', 'alt1', 'alt2', 'alt3']) {
+      for (const ext of ['webp', 'png', 'jpg', 'jpeg']) {
+        files.push({ file: `${stem}.${alt}.${ext}`, altTag: alt, ext });
+      }
+    }
+  }
+  const out = [];
+  const seen = new Set();
+  for (const f of files) {
+    if (seen.has(f.file.toLowerCase())) continue;
+    seen.add(f.file.toLowerCase());
+    const urls = [
+      `/${folder}/${encodeURIComponent(f.file)}`,
+      `/${folder}/${f.file}`,
+    ];
+    for (const url of urls) {
+      try {
+        const res = await fetch(url, { method: 'GET', cache: 'force-cache' });
+        if (!res.ok) continue;
+        const blob = await res.blob();
+        if (!blob || blob.size < 50) continue;
+        // tipo imagen
+        const ct = (res.headers.get('content-type') || blob.type || '').toLowerCase();
+        if (ct && !ct.includes('image') && !ct.includes('octet')) continue;
+        let label = f.altTag
+          ? (f.altTag === 'alt' ? 'Alternativa 1' : 'Alternativa ' + f.altTag.replace(/^alt/i, ''))
+          : (out.some((x) => !x.altTag) ? `Alternativa (${f.ext})` : 'Predeterminada');
+        out.push({
+          label,
+          file: f.file,
+          url,
+          primary: !f.altTag && !out.some((x) => x.primary),
+          altTag: f.altTag,
+          ext: f.ext,
+          base: nfc,
+          blob, // cache probe
+        });
+        break;
+      } catch (_) {}
+    }
+    if (out.length >= 12) break;
+  }
+  // Marcar primary la primera sin alt
+  const first = out.find((x) => !x.altTag);
+  if (first) {
+    out.forEach((x) => { x.primary = false; });
+    first.primary = true;
+    first.label = 'Predeterminada';
+  }
+  return out;
+}
+
 
 async function fetchOptimizeArtBlob(url, keepAlpha = true) {
   const res = await fetch(url, { cache: 'no-cache' });
   if (!res.ok) return null;
   const blob = await res.blob();
   if (!blob.size) return null;
+  // Logos GitHub: si ya son razonables, NO re-encode (Safari/canvas los dejaba negros)
+  if (blob.size < 350 * 1024) return blob;
   try {
-    const opt = await optimizeImageBlob(blob, 384, 0.75, { keepAlpha });
-    return opt || blob;
-  } catch {
-    return blob;
-  }
+    const opt = await optimizeImageBlob(blob, 512, 0.85, { keepAlpha: true });
+    if (opt && opt.size >= 100) return opt;
+  } catch (_) {}
+  return blob;
 }
 
 async function fetchArtBlob(url, cached) {
@@ -1165,9 +1257,15 @@ function art(kind, name, ch) {
         if (!res.ok) continue;
         const blob = await res.blob();
         if (!blob.size) continue;
-        const opt = await optimizeImageBlob(blob, 384, 0.75, { keepAlpha: kind === 'groups' || kind === 'channels' });
+        let outBlob = blob;
+        if (blob.size >= 400 * 1024) {
+          try {
+            const opt = await optimizeImageBlob(blob, 512, 0.85, { keepAlpha: true });
+            if (opt && opt.size >= 100) outBlob = opt;
+          } catch (_) {}
+        }
         const meta = {
-          blob: opt || blob,
+          blob: outBlob,
           url,
           etag: res.headers.get('ETag') || '',
           modified: res.headers.get('Last-Modified') || '',
@@ -1206,8 +1304,12 @@ function art(kind, name, ch) {
       const fresh = await fetchArtBlob(cached.url, cached);
       if (fresh?.unchanged) return;
       if (fresh?.blob) {
-        const opt = await optimizeImageBlob(fresh.blob, 384, 0.75, { keepAlpha: kind === 'groups' || kind === 'channels' });
-        fresh.blob = opt || fresh.blob;
+        if (fresh.blob && fresh.blob.size >= 400 * 1024) {
+          try {
+            const opt = await optimizeImageBlob(fresh.blob, 512, 0.85, { keepAlpha: true });
+            if (opt && opt.size >= 100) fresh.blob = opt;
+          } catch (_) {}
+        }
         fresh.url = cached.url;
         fresh.optimized = true;
         await kv.set(key, fresh);
@@ -1257,7 +1359,7 @@ const infoApi = createInfoEdit({
   getComicSeriesOverride, setComicSeries, ungroupMap, setUngroupMode,
   getPageIndex, getPagesTotal, getPageFormat, formatBytes, sizeLabel,
   getCover, saveCoverBlob, optimizeImageBlob, comicCover, io,
-  art, ART, artNorm, artLoose, listGithubArtVariants,
+  art, ART, artNorm, artLoose, listGithubArtVariants, probeGithubArtVariants,
   fetchOptimizeArtBlob,
   setBlobImg,
   appAlert, appConfirm, appPrompt, sheet, bindLongPress, grid, copyInfoFrameText, formatPeople, showDescriptionPanel,

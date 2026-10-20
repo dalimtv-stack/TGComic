@@ -15,7 +15,7 @@ export function createInfoEdit(d) {
     getComicSeriesOverride, setComicSeries, ungroupMap, setUngroupMode,
     getPageIndex, getPagesTotal, getPageFormat, formatBytes, sizeLabel,
     getCover, saveCoverBlob, optimizeImageBlob, comicCover, io,
-    art, ART, artNorm, artLoose, listGithubArtVariants,
+    art, ART, artNorm, artLoose, listGithubArtVariants, probeGithubArtVariants,
     fetchOptimizeArtBlob,
     setBlobImg,
     appAlert, appConfirm, appPrompt, sheet, bindLongPress, grid, copyInfoFrameText, formatPeople, showDescriptionPanel,
@@ -1138,12 +1138,24 @@ async function clearChannelCover(ch) {
 async function getGithubChannelArtBlob(ch, preferredUrl) {
   const nfc = (ch?.name || '').normalize('NFC').trim();
   const key = `art:channels:${artNorm(nfc)}`;
+  const blobIsDecodable = (blob) => new Promise((resolve) => {
+    if (!(blob instanceof Blob) || blob.size < 50) return resolve(false);
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      const ok = img.naturalWidth > 2 && img.naturalHeight > 2;
+      try { URL.revokeObjectURL(url); } catch (_) {}
+      resolve(ok);
+    };
+    img.onerror = () => { try { URL.revokeObjectURL(url); } catch (_) {} resolve(false); };
+    img.src = url;
+  });
   try {
     if (!preferredUrl) {
       const cached = await kv.get(key);
-      // Solo reutilizar caché válida (>= 200 bytes); cachés corruptas/negras se regeneran
       if (cached?.blob instanceof Blob && cached.blob.size >= 200 && !cached.fromComic) {
-        return cached.blob;
+        if (await blobIsDecodable(cached.blob)) return cached.blob;
+        try { await kv.del(key); } catch (_) {}
       }
     }
     const variants = listGithubArtVariants('channels', nfc);
@@ -1622,39 +1634,55 @@ function showChannelCoverPicker(ch, files, after) {
 
   // 1) Portadas GitHub (predeterminada + alternativas .alt / otras extensiones)
   body.append(el('div', 'info-sec', 'GitHub'));
-  const ghVariants = listGithubArtVariants('channels', ch.name);
-  if (!ghVariants.length) {
-    addCell('GitHub / predeterminada', () => getGithubChannelArtBlob(ch), async () => {
+  const ghSecHint = el('p', 'cover-pick-hint', 'Buscando en GitHub…');
+  body.append(ghSecHint);
+
+  const addGhVariant = (v) => {
+    const lab = v.primary
+      ? (`Predeterminada: ${v.file}`)
+      : (v.altTag ? (`${v.label}: ${v.file}`) : (`${v.label || 'Alternativa'}: ${v.file}`));
+    addCell(lab, async () => {
+      if (v.blob) return v.blob;
+      return getGithubChannelArtBlob(ch, v.url);
+    }, async () => {
       await clearChannelCover(ch);
       try {
-        const b = await getGithubChannelArtBlob(ch);
+        let b = v.blob || null;
+        if (!b) b = await getGithubChannelArtBlob(ch, v.url);
         if (b) await setChannelCoverBlob(ch, b);
+        try {
+          const key = `art:channels:${artNorm((ch.name || '').normalize('NFC').trim())}`;
+          if (b) await kv.set(key, { blob: b, url: v.url, optimized: true });
+        } catch (_) {}
       } catch (_) {}
       frame.remove();
       after?.();
     });
-  } else {
-    for (const v of ghVariants) {
-      const lab = v.primary
-        ? (`Predeterminada: ${v.file}`)
-        : (v.altTag ? (`${v.label}: ${v.file}`) : (`Alternativa (${v.ext}): ${v.file}`));
-      addCell(lab, () => getGithubChannelArtBlob(ch, v.url), async () => {
+  };
+
+  (async () => {
+    let ghVariants = [];
+    try {
+      ghVariants = listGithubArtVariants('channels', ch.name) || [];
+    } catch (_) {}
+    if (!ghVariants.length && typeof probeGithubArtVariants === 'function') {
+      try { ghVariants = await probeGithubArtVariants('channels', ch.name); } catch (_) {}
+    }
+    try { ghSecHint.remove(); } catch (_) {}
+    if (!ghVariants.length) {
+      addCell('GitHub / predeterminada', () => getGithubChannelArtBlob(ch), async () => {
         await clearChannelCover(ch);
         try {
-          const b = await getGithubChannelArtBlob(ch, v.url);
+          const b = await getGithubChannelArtBlob(ch);
           if (b) await setChannelCoverBlob(ch, b);
-        } catch (_) {}
-        // Guardar también en caché art: del canal la URL elegida
-        try {
-          const key = `art:channels:${artNorm((ch.name || '').normalize('NFC').trim())}`;
-          const b = await getGithubChannelArtBlob(ch, v.url);
-          if (b) await kv.set(key, { blob: b, url: v.url, optimized: true });
         } catch (_) {}
         frame.remove();
         after?.();
       });
+    } else {
+      for (const v of ghVariants) addGhVariant(v);
     }
-  }
+  })();
 
   // 2) Todos los cómics del canal (también los de series desagrupadas)
   const list = Array.isArray(files) ? files : [];
