@@ -123,16 +123,24 @@ export function createProTools(d) {
 
   async function regenerateCovers(targets, onProgress) {
     let done = 0;
+    let okN = 0;
     const total = targets.length;
     for (const t of targets) {
       try {
-        if (typeof getCover === 'function') await getCover(t.ch, t.f);
+        // force: no usar portada en caché ni mensaje Telegram en memoria
+        if (typeof d.invalidateComicLocal === 'function') {
+          try { await d.invalidateComicLocal(t.ch, t.f); } catch (_) {}
+        }
+        if (typeof getCover === 'function') {
+          const b = await getCover(t.ch, t.f, { force: true });
+          if (b) okN++;
+        }
       } catch (_) {}
       done++;
       onProgress?.(done, total);
       if (done % 3 === 0) await new Promise((r) => setTimeout(r, 0));
     }
-    return done;
+    return okN;
   }
 
   function fillSelect(sel, items, placeholder) {

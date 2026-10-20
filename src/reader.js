@@ -98,7 +98,35 @@ export function createReader(state, d) {
         const status = (t) => { if (!cancelled(ac) && alive(e)) msg(t); };
         const list = queue && queue.length ? queue : await resolveQueue(ch, f);
         const idx = Math.max(0, list.findIndex((x) => x.id === f.id));
-        const arc = await openPages(await getMsg(ch, f), f.size, status, ac);
+        // Preferir entrada fresca del listado (tamaño puede haber cambiado al resubir en Telegram)
+        try {
+          const fresh = list.find((x) => String(x.id) === String(f.id));
+          if (fresh?.size) f = { ...f, size: fresh.size, name: fresh.name || f.name, caption: fresh.caption ?? f.caption };
+        } catch (_) {}
+        const openArc = async () => {
+          const m0 = await getMsg(ch, f, { force: true });
+          let size = Number(f.size) || 0;
+          try {
+            if (m0?.document?.size != null) size = Number(m0.document.size.toString()) || size;
+          } catch (_) {}
+          return openPages(m0, size, status, ac);
+        };
+        let arc;
+        try {
+          arc = await openArc();
+        } catch (errOpen) {
+          const em = String(errOpen?.message || errOpen || '');
+          if (!/central directory|end of central|invalid zip|corrupt|bad zip/i.test(em)) throw errOpen;
+          // Caché de mensaje/páginas obsoleta tras re-subida: limpiar y reintentar
+          try { await pageCache?.clearComic?.(ch.id, f.id); } catch (_) {}
+          try {
+            const files = await fetchFiles(ch);
+            const fresh2 = files.find((x) => String(x.id) === String(f.id));
+            if (fresh2) f = { ...f, size: fresh2.size, name: fresh2.name || f.name, caption: fresh2.caption ?? f.caption };
+          } catch (_) {}
+          status('Reintentando apertura…');
+          arc = await openArc();
+        }
         if (cancelled(ac) || !alive(e)) { try { arc.close(); } catch (_) {} return; }
         if (!arc.pages.length) return msg('No se encontraron imágenes.');
         pageBlob(arc.pages[0]).then((b) => saveCoverBlob(ch, f, b)).catch(() => {});

@@ -147,6 +147,26 @@ export function createPageCache({ kv, pref }) {
     await writeIndex([]);
   }
 
+  /** Borra páginas cacheadas de un cómic concreto (p.ej. archivo resubido con otro tamaño). */
+  async function clearComic(chId, msgId) {
+    if (chId == null || msgId == null) return 0;
+    await flushNow();
+    const idx = await ensureIndex();
+    const keep = [];
+    let n = 0;
+    const cs = String(chId);
+    const ms = String(msgId);
+    for (const row of idx) {
+      if (String(row.chId) === cs && String(row.msgId) === ms) {
+        try { await kv.del(row.key); } catch (_) {}
+        n++;
+      } else keep.push(row);
+    }
+    memIndex = keep;
+    await writeIndex(keep);
+    return n;
+  }
+
   async function stats() {
     const idx = await ensureIndex();
     const bytes = idx.reduce((s, x) => s + (x.size || 0), 0);
@@ -158,5 +178,5 @@ export function createPageCache({ kv, pref }) {
     };
   }
 
-  return { get, set, totalBytes, count, clearAll, stats, maxBytes, pageKey };
+  return { get, set, totalBytes, count, clearAll, clearComic, stats, maxBytes, pageKey };
 }

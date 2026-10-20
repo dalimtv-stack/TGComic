@@ -284,8 +284,21 @@ async function refreshLibrary() {
   return lib;
 }
 
+/** Invalida cachés locales de un cómic (mensaje Telegram, portada, páginas). */
+async function invalidateComicLocal(ch, f) {
+  if (!ch?.id || f?.id == null) return;
+  const k = String(ch.id) + ':' + String(f.id);
+  try { msgs.delete(k); } catch (_) {}
+  try { await kv.del(`c:${ch.id}:${f.id}`); } catch (_) {}
+  try { await pageCache?.clearComic?.(ch.id, f.id); } catch (_) {}
+}
+
 async function fetchFiles(ch) {
   await ready;
+  let prev = [];
+  try { prev = (await kv.get('f:' + ch.id)) || []; } catch (_) { prev = []; }
+  const prevById = new Map((Array.isArray(prev) ? prev : []).map((x) => [String(x.id), x]));
+
   const out = [];
   for await (const m of client.iterMessages(peerOf(ch), { filter: new Api.InputMessagesFilterDocument(), limit: 100000 })) {
     const name = m.document?.attributes?.find((a) => a.className === 'DocumentAttributeFilename')?.fileName;
@@ -300,13 +313,26 @@ async function fetchFiles(ch) {
     });
   }
   out.sort((a, b) => natural(a.name, b.name));
+
+  // Archivo editado en Telegram (mismo id, otro tamaño/nombre): invalidar cachés
+  for (const f of out) {
+    const old = prevById.get(String(f.id));
+    if (!old) continue;
+    if (Number(old.size) !== Number(f.size) || String(old.name || '') !== String(f.name || '')) {
+      try { await invalidateComicLocal(ch, f); } catch (_) {}
+    }
+  }
+
   await kv.set('f:' + ch.id, out);
   return out;
 }
 
 const msgs = new Map();
-async function getMsg(ch, f) {
-  const k = ch.id + ':' + f.id;
+async function getMsg(ch, f, opts = {}) {
+  const k = String(ch.id) + ':' + String(f.id);
+  if (opts.force) {
+    try { msgs.delete(k); } catch (_) {}
+  }
   if (!msgs.has(k)) {
     await ready;
     const p = client.getMessages(peerOf(ch), { ids: [f.id] })
@@ -317,7 +343,17 @@ async function getMsg(ch, f) {
       });
     msgs.set(k, p);
   }
-  return msgs.get(k);
+  let msg = await msgs.get(k);
+  // Si el tamaño del listado no coincide con el del documento en memoria → re-fetch
+  try {
+    const docSize = msg?.document?.size != null ? Number(msg.document.size.toString()) : null;
+    const listSize = f?.size != null ? Number(f.size) : null;
+    if (docSize != null && listSize != null && docSize !== listSize && !opts._retried) {
+      msgs.delete(k);
+      return getMsg(ch, f, { force: true, _retried: true });
+    }
+  } catch (_) {}
+  return msg;
 }
 
 // Reader de zip.js: pide a Telegram solo los trozos necesarios (en paralelo, caché LRU)
@@ -1692,6 +1728,7 @@ const proTools = createProTools({
   setPagesTotal,
   getMsg,
   openPages,
+  invalidateComicLocal,
 });
 
 // ---------- Inicio ----------

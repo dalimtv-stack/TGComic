@@ -26,9 +26,12 @@ export function createCovers(state, d) {
     }
   }
 
-  async function getCover(ch, f) {
+  async function getCover(ch, f, opts = {}) {
     const key = `c:${ch.id}:${f.id}`;
-    let b = await kv.get(key);
+    if (opts.force) {
+      try { await kv.del(key); } catch (_) {}
+    }
+    let b = opts.force ? null : await kv.get(key);
     if (b === 'none') b = undefined;
     if (!b) b = await enqueue(() => makeCover(ch, f, key));
     return b && b !== 'none' ? b : null;
@@ -171,7 +174,14 @@ export function createCovers(state, d) {
   }
 
   async function makeCover(ch, f, key) {
-    const r = new TgReader(await getMsg(ch, f), f.size);
+    // Siempre mensaje fresco: si se resubió el archivo en Telegram, el media cambia
+    const msg = await getMsg(ch, f, { force: true });
+    let size = Number(f?.size) || 0;
+    try {
+      if (msg?.document?.size != null) size = Number(msg.document.size.toString()) || size;
+    } catch (_) {}
+    if (!size) return null;
+    const r = new TgReader(msg, size);
     if ((await sniff(r)) !== 'zip') return null;
     const zr = new zip.ZipReader(r);
     try {
@@ -180,6 +190,29 @@ export function createCovers(state, d) {
       const out = await thumbFromBlob(await pageBlob(first));
       if (out) await kv.set(key, out);
       return out;
+    } catch (e) {
+      const em = String(e?.message || e || '');
+      if (/central directory|end of central|invalid zip|corrupt/i.test(em)) {
+        // Reintento con otro getMsg por si quedó un mensaje a medias
+        try {
+          const msg2 = await getMsg(ch, f, { force: true });
+          let size2 = size;
+          try {
+            if (msg2?.document?.size != null) size2 = Number(msg2.document.size.toString()) || size2;
+          } catch (_) {}
+          const r2 = new TgReader(msg2, size2);
+          if ((await sniff(r2)) !== 'zip') return null;
+          const zr2 = new zip.ZipReader(r2);
+          try {
+            const first2 = pagesOf(await zr2.getEntries())[0];
+            if (!first2) return null;
+            const out2 = await thumbFromBlob(await pageBlob(first2));
+            if (out2) await kv.set(key, out2);
+            return out2;
+          } finally { zr2.close().catch(() => {}); }
+        } catch (_) { return null; }
+      }
+      throw e;
     } finally { zr.close().catch(() => {}); }
   }
 
