@@ -24,6 +24,11 @@ export function createViews(d) {
     buildSearchIndex, filterSearchIndex, listUnfinishedProgress,
   } = d;
   const openComic = (...a) => d.openComic(...a);
+  const setLastScrollY = (y) => {
+    if (typeof d.setLastScrollY === 'function') d.setLastScrollY(y);
+    else if (typeof d.lastScrollY !== 'undefined') { try { d.lastScrollY = y; } catch (_) {} }
+  };
+
   const msg = (...a) => (typeof d.msg === 'function' ? d.msg(...a) : undefined);
   const libNow = () => {
     const L = typeof d.LIB === 'function' ? d.LIB() : d.LIB;
@@ -519,7 +524,7 @@ function groupsView() {
       s.dispatchEvent(new Event('input'));
     }
     window.scrollTo(0, 0);
-    lastScrollY = 0;
+    setLastScrollY(0);
   };
 
   paintHome();
@@ -678,7 +683,7 @@ function channelsView(g) {
       if (s.value.trim()) runSearch();
       else paintGrid();
       window.scrollTo(0, 0);
-      lastScrollY = 0;
+      setLastScrollY(0);
     };
 
     await build();

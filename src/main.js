@@ -882,6 +882,7 @@ function go(title, render) {
   history.pushState(null, '');
   show();
 }
+let lastScrollY = 0, headerHidden = false;
 function show() {
   cleanup?.(); cleanup = null;
   const e = stack[stack.length - 1];
@@ -923,7 +924,6 @@ function show() {
 }
 backBtn.onclick = () => history.back();
 // Header: ocultar al bajar, mostrar al subir
-let lastScrollY = 0, headerHidden = false;
 const onScrollHeader = () => {
   const y = window.scrollY || document.documentElement.scrollTop || 0;
   const top = $('#top');
@@ -1455,6 +1455,8 @@ function openComic(ch, f, queue, opts) {
 
 const viewsApi = createViews({
   el, app, top, h1, actions, search,
+  setLastScrollY: (y) => { lastScrollY = y; },
+
   get LIB() { return LIB; },
   get synced() { return synced; },
   msg,
