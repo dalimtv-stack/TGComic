@@ -464,6 +464,10 @@ const { getCover, saveCoverBlob, optimizeImageBlob, comicCover, pump, io } = cov
 
 // ---------- Navegación y vistas ----------
 const app = $('#app'), titleEl = $('#title'), backBtn = $('#back'), actions = $('#actions');
+const top = $('#top');
+const h1 = titleEl;
+const search = null; // el buscador se crea dentro de cada vista
+
 const stack = [];
 function modeBtn(after) {
   const b = el('button', 'btn mode');
@@ -881,7 +885,11 @@ function go(title, render) {
 function show() {
   cleanup?.(); cleanup = null;
   const e = stack[stack.length - 1];
-  titleEl.textContent = e.title;
+  if (!e || typeof e.render !== 'function') {
+    try { msg('Error de navegación. Recarga la página.'); } catch (_) {}
+    return;
+  }
+  titleEl.textContent = e.title || 'Cómics';
   backBtn.hidden = stack.length < 2;
   $('#top')?.classList.toggle('home', stack.length < 2);
   headerHidden = false;
@@ -897,7 +905,12 @@ function show() {
   };
   // Al entrar en vista nueva (sin scroll guardado) ir arriba; al volver restaurar
   applyScroll();
-  e.render(e);
+  try {
+    e.render(e);
+  } catch (err) {
+    console.error('[show] render', err);
+    try { msg('Error al cargar la vista: ' + (err?.message || err)); } catch (_) {}
+  }
   try { repackTool?.syncFloatingUi?.(); } catch (_) {}
   try { uploadTool?.syncFloatingUi?.(); } catch (_) {}
   // Render async (canal/serie): reaplicar scroll varias veces
@@ -1341,7 +1354,9 @@ function art(kind, name, ch) {
 
 /** Pulsación larga: el menú se abre AL SOLTAR (si no, el touchend cierra el sheet) */
 
-const infoApi = createInfoEdit({
+let infoApi;
+try {
+infoApi = createInfoEdit({
   el, kv,
   get client() { return client; },
   Api,
@@ -1366,35 +1381,38 @@ const infoApi = createInfoEdit({
   comicVineConfigured, searchIssuesSmart, fetchIssueDetail, buildSearchQuery,
   go, show, stack, natural,
 });
-const {
-  showComicInfo,
-  showCaptionEditor,
-  showComicVinePicker,
-  showEditComicTitle,
-  showSeriesInfo,
-  showEditSeries,
-  showEditSeriesName,
-  showSeriesCoverPicker,
-  seriesCoverNode,
-  channelCoverNode,
-  groupCoverNode,
-  showGroupInfo,
-  showEditGroup,
-  showEditGroupName,
-  showGroupCoverPicker,
-  showChannelInfo,
-  showEditChannel,
-  showEditChannelName,
-  showChannelCoverPicker,
-  getChannelCoverBlob,
-  setChannelCoverBlob,
-  clearChannelCover,
-  getSeriesCoverBlob,
-  setSeriesCoverBlob,
-  firstAvailableCover,
-  getGithubChannelArtBlob,
-  getGithubGroupArtBlob,
-} = infoApi;
+} catch (e) {
+  console.error('[info] createInfoEdit falló', e);
+  infoApi = {};
+}
+const showComicInfo = infoApi.showComicInfo || (() => {});
+const showCaptionEditor = infoApi.showCaptionEditor || (() => {});
+const showComicVinePicker = infoApi.showComicVinePicker || (() => {});
+const showEditComicTitle = infoApi.showEditComicTitle || (() => {});
+const showSeriesInfo = infoApi.showSeriesInfo || (() => {});
+const showEditSeries = infoApi.showEditSeries || (() => {});
+const showEditSeriesName = infoApi.showEditSeriesName || (() => {});
+const showSeriesCoverPicker = infoApi.showSeriesCoverPicker || (() => {});
+const seriesCoverNode = infoApi.seriesCoverNode || ((ch, lab, files) => el('div', 'cover'));
+const channelCoverNode = infoApi.channelCoverNode || ((ch) => el('div', 'cover'));
+const groupCoverNode = infoApi.groupCoverNode || ((n) => el('div', 'cover square'));
+const showGroupInfo = infoApi.showGroupInfo || (() => {});
+const showEditGroup = infoApi.showEditGroup || (() => {});
+const showEditGroupName = infoApi.showEditGroupName || (() => {});
+const showGroupCoverPicker = infoApi.showGroupCoverPicker || (() => {});
+const showChannelInfo = infoApi.showChannelInfo || (() => {});
+const showEditChannel = infoApi.showEditChannel || (() => {});
+const showEditChannelName = infoApi.showEditChannelName || (() => {});
+const showChannelCoverPicker = infoApi.showChannelCoverPicker || (() => {});
+const getChannelCoverBlob = infoApi.getChannelCoverBlob;
+const setChannelCoverBlob = infoApi.setChannelCoverBlob;
+const clearChannelCover = infoApi.clearChannelCover;
+const getSeriesCoverBlob = infoApi.getSeriesCoverBlob;
+const setSeriesCoverBlob = infoApi.setSeriesCoverBlob;
+const firstAvailableCover = infoApi.firstAvailableCover || (async () => null);
+const getGithubChannelArtBlob = infoApi.getGithubChannelArtBlob || (async () => null);
+const getGithubGroupArtBlob = infoApi.getGithubGroupArtBlob || (async () => null);
+
 
 
 
@@ -1438,6 +1456,12 @@ function openComic(ch, f, queue, opts) {
 const viewsApi = createViews({
   el, app, top, h1, actions, search,
   get LIB() { return LIB; },
+  get synced() { return synced; },
+  msg,
+  buildSearchIndex,
+  filterSearchIndex,
+  listUnfinishedProgress,
+  get repackTool() { return repackTool; },
   locks, ART,
   groupDisplayName, channelDisplayName, seriesDisplayName, comicDisplayName,
   comicDisplay, comicSourceName, issueLabel, groupSeries, seriesOverrideFor,

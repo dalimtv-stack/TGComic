@@ -4,7 +4,7 @@
 export function createViews(d) {
   const {
     el, app, top, h1, actions, search,
-    LIB, locks, ART,
+    locks, ART,
     groupDisplayName, channelDisplayName, seriesDisplayName, comicDisplayName,
     comicDisplay, comicSourceName, issueLabel, groupSeries, seriesOverrideFor,
     clean, stripExt, sizeLabel, formatBytes,
@@ -17,13 +17,27 @@ export function createViews(d) {
     getContinueList, readProgress, isComicRead, markComicRead, markComicUnread,
     markSeriesRead, markSeriesUnread, getPageIndex, getPagesTotal,
     ungroupMap, setUngroupMode, getComicSeriesOverride,
-    lockToggleOpts: lockToggleOptsInj,
     firstAvailableCover, kv, natural,
     pref, setPref,
     appAlert, appConfirm, appPrompt,
     parseComicName, issueDisplay,
+    buildSearchIndex, filterSearchIndex, listUnfinishedProgress,
   } = d;
   const openComic = (...a) => d.openComic(...a);
+  const msg = (...a) => (typeof d.msg === 'function' ? d.msg(...a) : undefined);
+  const libNow = () => {
+    const L = typeof d.LIB === 'function' ? d.LIB() : d.LIB;
+    return Array.isArray(L) ? L : [];
+  };
+  const syncedNow = () => !!(typeof d.synced === 'function' ? d.synced() : d.synced);
+  const repackTool = new Proxy({}, {
+    get(_t, prop) {
+      const rt = typeof d.repackTool === 'function' ? d.repackTool() : d.repackTool;
+      if (!rt) return undefined;
+      const val = rt[prop];
+      return typeof val === 'function' ? val.bind(rt) : val;
+    },
+  });
 
 function cardNode(i) {
   const c = el('div', 'card');
@@ -91,6 +105,8 @@ function lockToggleOpts(kind, ref, label, redraw) {
 }
 
 function groupsView() {
+  const LIB = libNow();
+  const synced = syncedNow();
   if (!LIB.length) return msg(synced ? 'No se encontraron canales ...::Comics::tgstorage.' : 'Conectando…');
 
   let searchIndex = null;
@@ -98,8 +114,8 @@ function groupsView() {
   const ensureIndex = () => {
     if (searchIndex) return Promise.resolve(searchIndex);
     if (searchIndexPromise) return searchIndexPromise;
-    searchIndexPromise = buildSearchIndex({
-      LIB,
+    searchIndexPromise = (buildSearchIndex || d.buildSearchIndex)({
+      LIB: libNow(),
       getFiles: async (ch) => (await kv.get('f:' + ch.id)) || [],
       groupDisplayName,
       channelDisplayName,
@@ -193,7 +209,7 @@ function groupsView() {
         try {
           const lib = (Array.isArray(LIB) && LIB.length) ? LIB : ((await kv.get('lib')) || []);
           const byCh = new Map(lib.map((c) => [String(c.id), c]));
-          for (const u of listUnfinishedProgress()) {
+          for (const u of (listUnfinishedProgress || d.listUnfinishedProgress || (() => []))()) {
             const id = String(u.chId) + ':' + String(u.msgId);
             if (seen.has(id)) continue;
             const ch = byCh.get(String(u.chId));
@@ -293,7 +309,7 @@ function groupsView() {
           try {
             const lib = (Array.isArray(LIB) && LIB.length) ? LIB : ((await kv.get('lib')) || []);
             const byCh = new Map(lib.map((c) => [String(c.id), c]));
-            const unfinished = listUnfinishedProgress();
+            const unfinished = (listUnfinishedProgress || d.listUnfinishedProgress || (() => []))();
             let added = false;
             for (const u of unfinished) {
               const id = String(u.chId) + ':' + String(u.msgId);
@@ -509,6 +525,8 @@ function groupsView() {
   paintHome();
 }
 function channelsView(g) {
+  const LIB = libNow();
+
   if (!locks.guardRestricted('group', g, groupDisplayName(g))) return;
 
   go(groupDisplayName(g), async (e) => {
@@ -677,6 +695,8 @@ function channelsView(g) {
   });
 }
 function filesView(ch) {
+  const LIB = libNow();
+
   if (!locks.guardRestricted('channel', ch, channelDisplayName(ch))) return;
 
   go(channelDisplayName(ch), async (e) => {
@@ -835,6 +855,8 @@ function filesView(ch) {
   });
 }
 function seriesView(ch, s, files) {
+  const LIB = libNow();
+
   if (!locks.guardRestricted('series', { ch, seriesLabel: s }, seriesDisplayName(ch, s))) return;
 
   const title = seriesDisplayName(ch, s);
