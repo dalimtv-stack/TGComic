@@ -14,8 +14,6 @@ export function createViews(d) {
     sheet, bindLongPress, grid,
     showGroupInfo, showEditGroup, showChannelInfo, showEditChannel,
     showSeriesInfo, showEditSeries, showComicInfo, showEditComicTitle,
-    getContinueList, readProgress, isComicRead, markComicRead, markComicUnread,
-    markSeriesRead, markSeriesUnread, getPageIndex, getPagesTotal,
     ungroupMap, setUngroupMode, getComicSeriesOverride,
     firstAvailableCover, kv, natural,
     pref, setPref,
@@ -48,6 +46,23 @@ export function createViews(d) {
   const titleEl = d.titleEl || d.h1 || null;
   const seriesBase = (...a) => (typeof d.seriesBase === 'function' ? d.seriesBase(...a) : '');
   const setBlobImg = (...a) => (typeof d.setBlobImg === 'function' ? d.setBlobImg(...a) : null);
+
+  // Progreso / lectura: siempre desde d (evita undefined por destructuring)
+  const isComicRead = (chId, msgId) => {
+    try { return !!(d.isComicRead && d.isComicRead(chId, msgId)); } catch { return false; }
+  };
+  const readProgress = (chId, msgId) => {
+    try { return d.readProgress ? d.readProgress(chId, msgId) : null; } catch { return null; }
+  };
+  const getContinueList = () => {
+    try { return d.getContinueList ? d.getContinueList() : []; } catch { return []; }
+  };
+  const markComicRead = (...a) => d.markComicRead && d.markComicRead(...a);
+  const markComicUnread = (...a) => d.markComicUnread && d.markComicUnread(...a);
+  const markSeriesRead = (...a) => d.markSeriesRead && d.markSeriesRead(...a);
+  const markSeriesUnread = (...a) => d.markSeriesUnread && d.markSeriesUnread(...a);
+  const getPageIndex = (...a) => (d.getPageIndex ? d.getPageIndex(...a) : 0);
+  const getPagesTotal = (...a) => (d.getPagesTotal ? d.getPagesTotal(...a) : 0);
 
   const msg = (...a) => (typeof d.msg === 'function' ? d.msg(...a) : undefined);
   const libNow = () => {
