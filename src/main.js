@@ -55,7 +55,13 @@ const setPref = (k, v) => { localStorage.setItem('pref:' + k, v); try { sync.sch
 /** Evita el zoom atascado de iOS al girar el dispositivo */
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 
-const uiApi = createUi({ el, sync });
+const uiApi = createUi({
+  el,
+  sync,
+  pref: (k, d) => localStorage.getItem('pref:' + k) || d,
+  setPref: (k, v) => { localStorage.setItem('pref:' + k, v); try { sync.schedulePush(); } catch (_) {} },
+  getApp: () => document.querySelector('#app'),
+});
 const {
   resetMobileViewport, setBlobImg,
   appDialog, appAlert, appConfirm, appPrompt,

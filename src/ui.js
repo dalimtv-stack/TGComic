@@ -1,8 +1,21 @@
 /**
  * UI compartida: diálogos, scroll lock, long-press, sheet, grid, helpers.
  */
-export function createUi({ el, sync }) {
+export function createUi({ el, sync, pref: prefFn, setPref: setPrefFn, getApp } = {}) {
   const $ = (s) => document.querySelector(s);
+  const pref = typeof prefFn === 'function'
+    ? prefFn
+    : ((k, d) => { try { return localStorage.getItem('pref:' + k) || d; } catch { return d; } });
+  const setPref = typeof setPrefFn === 'function'
+    ? setPrefFn
+    : ((k, v) => { try { localStorage.setItem('pref:' + k, v); } catch (_) {} });
+  const appRef = () => {
+    if (typeof getApp === 'function') {
+      try { return getApp(); } catch (_) {}
+    }
+    return document.querySelector('#app');
+  };
+
 
 function resetMobileViewport() {
   const meta = document.querySelector('meta[name="viewport"]');
@@ -353,7 +366,8 @@ function grid(items, withSearch, searchPlaceholder) {
     nodes.push(wrap);
   }
   nodes.push(g);
-  app.replaceChildren(...nodes);
+  const app = appRef();
+  if (app) app.replaceChildren(...nodes);
   draw();
   // No forzar scroll a 0: show()/go() restauran la posición al volver del lector
 }
