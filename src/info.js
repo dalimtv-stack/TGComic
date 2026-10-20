@@ -1178,11 +1178,15 @@ async function getGithubChannelArtBlob(ch, preferredUrl) {
     add(ART.channels[artLoose(nfc)]);
     const nfd = (ch?.name || '').normalize('NFD').trim();
     const exts = ['webp', 'png', 'jpg', 'jpeg', 'avif', 'gif', 'WEBP', 'PNG', 'JPG', 'JPEG'];
+    const altTags = ['', 'alt', 'alt1', 'alt2', 'alt3'];
     for (const n of [nfc, nfd, ch?.name]) {
       if (!n) continue;
       for (const e of exts) {
-        add(`/channels/${encodeURIComponent(n)}.${e}`);
-        add(`/channels/${n}.${e}`);
+        for (const alt of altTags) {
+          const stem = alt ? `${n}.${alt}` : n;
+          add(`/channels/${encodeURIComponent(stem)}.${e}`);
+          add(`/channels/${stem}.${e}`);
+        }
       }
     }
     for (const url of urls) {
@@ -1233,11 +1237,15 @@ async function getGithubGroupArtBlob(name, preferredUrl) {
     add(ART.groups[artLoose(nfc)]);
     const nfd = String(name || '').normalize('NFD').trim();
     const exts = ['webp', 'png', 'jpg', 'jpeg', 'avif', 'gif', 'WEBP', 'PNG', 'JPG', 'JPEG'];
+    const altTags = ['', 'alt', 'alt1', 'alt2', 'alt3'];
     for (const n of [nfc, nfd, name]) {
       if (!n) continue;
       for (const e of exts) {
-        add(`/groups/${encodeURIComponent(n)}.${e}`);
-        add(`/groups/${n}.${e}`);
+        for (const alt of altTags) {
+          const stem = alt ? `${n}.${alt}` : n;
+          add(`/groups/${encodeURIComponent(stem)}.${e}`);
+          add(`/groups/${stem}.${e}`);
+        }
       }
     }
     for (const url of urls) {

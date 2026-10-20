@@ -377,6 +377,39 @@ export function createReader(state, d) {
       };
       bindGridBtn();
 
+      const bindMousePageDrag = (getAxis, goPrev, goNext) => {
+        let start = null;
+        const onDown = (e) => {
+          if (e.button !== 0) return;
+          if (e.target.closest?.('.bar, .edge, .mosaic, .btn, .spread-fab, input, textarea')) return;
+          start = { x: e.clientX, y: e.clientY };
+        };
+        const onUp = (e) => {
+          if (!start) return;
+          const dx = e.clientX - start.x;
+          const dy = e.clientY - start.y;
+          start = null;
+          const axis = getAxis();
+          if (axis === 'x') {
+            if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.15) return;
+            try { pokeUI(); } catch (_) {}
+            if (dx < 0) goNext(); else goPrev();
+          } else {
+            if (Math.abs(dy) < 70 || Math.abs(dy) < Math.abs(dx) * 1.15) return;
+            try { pokeUI(); } catch (_) {}
+            if (dy < 0) goNext(); else goPrev();
+          }
+        };
+        rd.addEventListener('mousedown', onDown);
+        window.addEventListener('mouseup', onUp);
+        if (!rd._dragCleanups) rd._dragCleanups = [];
+        rd._dragCleanups.push(() => {
+          rd.removeEventListener('mousedown', onDown);
+          window.removeEventListener('mouseup', onUp);
+        });
+      };
+
+
       let goToPage = (i) => {}; // se asigna en cada modo
 
       if (!continuous) {
@@ -396,34 +429,28 @@ export function createReader(state, d) {
           pokeUI();
         };
         fitLabel();
-        const spreadBtn = el('button', 'btn spread-btn');
+        const spreadBtn = el('button', 'btn spread-fab');
         const spreadLabel = () => {
           const on = pref('spread', '0') === '1';
-          // Activo = modo actual: 📄📄 = dos páginas; 📄 = una
-          spreadBtn.textContent = on ? '📄📄' : '📄';
+          // on = doble página → icono de libro abierto; off = una página
+          spreadBtn.innerHTML = on ? `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25"/></svg>` : `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2z"/></svg>`;
           spreadBtn.title = on ? 'Cambiar a una página' : 'Cambiar a doble página';
           spreadBtn.setAttribute('aria-label', spreadBtn.title);
         };
         spreadLabel();
-        spreadBtn.onclick = () => {
+        spreadBtn.onclick = (ev) => {
+          try { ev.stopPropagation(); } catch (_) {}
           setPref('spread', pref('spread', '0') === '1' ? '0' : '1');
           spreadLabel();
           if (pref('spread', '0') === '1') rd.classList.add('spread');
           else rd.classList.remove('spread');
           updateStatus();
           pokeUI();
-          // Al activar doble página desde portada (0), seguir en portada sola
           turn(n);
         };
+        // Fuera de la barra inferior: centrado encima del botbar
+        rd.append(spreadBtn);
         cluster.append(fit, cnt);
-        // Columna encima del mosaico (no al lado)
-        try {
-          const stack = el('div', 'bot-stack');
-          stack.append(spreadBtn, gridBtn);
-          cluster.insertBefore(stack, fit);
-        } catch (_) {
-          try { cluster.insertBefore(spreadBtn, gridBtn); } catch (_) { cluster.append(spreadBtn); }
-        }
         img.draggable = false;
         const eL = el('div', 'edge l'), eR = el('div', 'edge r');
         rd.append(pageHost, eL, eR, top, bot);
@@ -504,6 +531,10 @@ export function createReader(state, d) {
         goToPage = (i) => turn(isSpread() ? toSpreadRight(i) : i);
         eL.onclick = () => turn(isSpread() ? prevSpread(n) : n - 1);
         eR.onclick = () => turn(isSpread() ? nextSpread(n) : n + 1);
+        bindMousePageDrag(() => 'x',
+          () => turn(isSpread() ? prevSpread(n) : n - 1),
+          () => turn(isSpread() ? nextSpread(n) : n + 1)
+        );
 
 
         /** Zoom variable: doble toque (~2.5×) y pellizco (1×–4×). Pan con un dedo. */
@@ -1060,6 +1091,11 @@ export function createReader(state, d) {
             setTimeout(() => { syncLock = false; }, 150);
           });
         };
+        bindMousePageDrag(
+          () => (horiz ? 'x' : 'y'),
+          () => { goToPage(n - 1); },
+          () => { goToPage(n + 1); }
+        );
 
         const onScroll = () => {
           if (syncLock) return;

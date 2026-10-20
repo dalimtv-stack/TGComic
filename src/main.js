@@ -1079,12 +1079,18 @@ const reg = (kind, files) => {
   for (const [bn, list] of buckets) {
     // Orden: sin alt primero, luego por extensión preferida, luego nombre
     list.sort((a, b) => {
-      const aa = a.altTag ? 1 : 0;
-      const bb = b.altTag ? 1 : 0;
-      if (aa !== bb) return aa - bb;
+      // 1) extensión (webp → png → jpg…), 2) base antes que .alt / .alt1 / .alt2
       const ea = EXT_PREF[a.ext] ?? 9;
       const eb = EXT_PREF[b.ext] ?? 9;
       if (ea !== eb) return ea - eb;
+      const altRank = (t) => {
+        if (!t) return 0;
+        if (t === 'alt') return 1;
+        const mm = String(t).match(/^alt(\d+)$/i);
+        return mm ? 1 + parseInt(mm[1], 10) : 40;
+      };
+      const ar = altRank(a.altTag) - altRank(b.altTag);
+      if (ar) return ar;
       return a.file.localeCompare(b.file, undefined, { numeric: true });
     });
     const variants = list.map((it, i) => {
@@ -1181,14 +1187,10 @@ async function probeGithubArtVariants(kind, name) {
   if (loose !== nfc) stems.push(loose);
   const files = [];
   for (const stem of stems) {
+    // Orden de búsqueda: por extensión, y dentro de cada una base → alt → alt1 → alt2…
     for (const ext of ['webp', 'png', 'jpg', 'jpeg', 'gif', 'avif']) {
       files.push({ file: `${stem}.${ext}`, altTag: '', ext });
-    }
-    for (const alt in ['alt', 'alt1', 'alt2', 'alt3']) {
-      pass
-    }
-    for (const alt of ['alt', 'alt1', 'alt2', 'alt3']) {
-      for (const ext of ['webp', 'png', 'jpg', 'jpeg']) {
+      for (const alt of ['alt', 'alt1', 'alt2', 'alt3']) {
         files.push({ file: `${stem}.${alt}.${ext}`, altTag: alt, ext });
       }
     }

@@ -619,3 +619,17 @@ textarea.meta-desc-lg.edit-input{
 .bot-stack{display:flex;flex-direction:column;gap:4px;align-items:stretch}
 .bot-stack .btn{min-width:44px;height:40px;padding:0 .55rem;font-size:1rem;line-height:1.1}
 .spread-btn{letter-spacing:-.12em}
+
+/* Botón 1/2 páginas centrado (no forma parte del bot-cluster) */
+#rd .spread-fab{
+  position:absolute;left:50%;bottom:calc(env(safe-area-inset-bottom,0px) + 58px);
+  transform:translateX(-50%);z-index:14;
+  width:48px;height:48px;min-width:48px;padding:0;
+  border-radius:14px;background:#1c1d22e6;color:var(--fg);
+  -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+  box-shadow:0 4px 18px #0008;display:inline-flex;align-items:center;justify-content:center;
+  border:0;cursor:pointer;
+}
+#rd .spread-fab svg{display:block;pointer-events:none}
+#rd.ui-off .spread-fab{opacity:0;pointer-events:none;transition:opacity .2s}
+#rd .spread-fab{transition:opacity .2s}
