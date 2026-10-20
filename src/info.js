@@ -785,7 +785,6 @@ async function firstAvailableCover(ch, files) {
   return null;
 }
 
-const seriesCoverKey = (ch, label) => `sc:${ch.id}:${String(label || '').toLowerCase()}`;
 async function getSeriesCoverBlob(ch, seriesLabel, files) {
   try {
     const b = await kv.get(seriesCoverKey(ch, seriesLabel));
@@ -1031,7 +1030,6 @@ function showSeriesCoverPicker(ch, seriesLabel, files, after) {
   document.body.append(frame);
 }
 
-const channelCoverKey = (ch) => `cc:${ch.id}`;
 async function getChannelCoverBlob(ch, files) {
   try {
     const b = await kv.get(channelCoverKey(ch));
@@ -1193,7 +1191,6 @@ async function getGithubChannelArtBlob(ch, preferredUrl) {
   return null;
 }
 
-const groupCoverKey = (name) => `gc:${artNorm(String(name || ''))}`;
 async function clearGroupCover(name) {
   try { await kv.del(groupCoverKey(name)); } catch (_) {}
 }

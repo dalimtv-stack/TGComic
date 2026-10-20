@@ -15,8 +15,6 @@ function resetMobileViewport() {
     try { document.body.scrollTop = 0; document.documentElement.scrollTop = 0; } catch (_) {}
   });
 }
-const $ = (s) => document.querySelector(s);
-const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 
 /** Asigna blob a img con Object URL y revoca el anterior del owner. */
 function setBlobImg(img, blob, owner) {
