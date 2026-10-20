@@ -19,6 +19,7 @@ export function createProTools(d) {
     closeAppMenu,
     onCoversChanged,
     copyInfoFrameText,
+    clearAllReadingData,
   } = d;
 
   const getLIB = () => (typeof d.LIB === 'function' ? d.LIB() : d.LIB) || [];
@@ -543,6 +544,30 @@ export function createProTools(d) {
       showDevCoverInfo();
     };
     body.append(devBtn);
+
+    const resetReadBtn = el('button', 'btn cover-pick-device', 'Reiniciar vistos / no vistos / seguir leyendo');
+    resetReadBtn.type = 'button';
+    resetReadBtn.onclick = async () => {
+      const ok = await appConfirm(
+        'Se borrará todo el progreso de lectura local (página actual, leídos, seguir leyendo). No borra cómics ni portadas. ¿Continuar?',
+        'Reiniciar progreso'
+      );
+      if (!ok) return;
+      let n = 0;
+      try {
+        n = typeof clearAllReadingData === 'function' ? clearAllReadingData() : 0;
+      } catch (e) {
+        await appAlert('Error: ' + (e?.message || e));
+        return;
+      }
+      try { onCoversChanged?.(); } catch (_) {}
+      frame.remove();
+      await appAlert(
+        n ? `Progreso reiniciado (${n} claves).` : 'No había datos de progreso.',
+        'Progreso'
+      );
+    };
+    body.append(resetReadBtn);
 
     const actions = el('div', 'edit-actions');
     const cancel = el('button', 'btn', 'Cerrar');

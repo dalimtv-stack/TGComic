@@ -15,6 +15,7 @@ export function createRepackTool(d) {
     parseComicName, comicDisplay, comicDisplayName,
     seriesDisplayName, getComicSeriesOverride,
     parseComicCaption, buildComicCaption,
+    onUploadDone,
   } = d;
   const getClient = () => d.client;
   const getReady = () => d.ready;
@@ -692,6 +693,19 @@ export function createRepackTool(d) {
         caption = (lastNl > 200 ? cut.slice(0, lastNl) : cut).trimEnd();
         status(`Caption recortado a ${caption.length}/1024`);
       }
+      if (!caption || !String(caption).trim()) {
+        caption = typeof buildComicCaption === 'function'
+          ? buildComicCaption({ fileName: outName })
+          : ('Nombre de archivo: ' + outName);
+      } else if (typeof parseComicCaption === 'function' && typeof buildComicCaption === 'function') {
+        try {
+          const fields = parseComicCaption(caption);
+          if (!fields.fileName) {
+            fields.fileName = outName;
+            caption = buildComicCaption(fields);
+          }
+        } catch (_) {}
+      }
       status(caption ? ('Caption: ' + caption.length + ' caracteres') : 'Sin caption');
       try {
         await uploadCbz(ch, outName, cbz, caption, statusWithProg);
@@ -713,6 +727,13 @@ export function createRepackTool(d) {
         status('Original borrado');
       }
       try { await fetchFiles(ch); } catch (_) {}
+      try {
+        if (typeof onUploadDone === 'function') {
+          await onUploadDone(ch, { outName, outNames: [outName] });
+        }
+      } catch (e) {
+        console.warn('[repack] onUploadDone', e);
+      }
       prog(100);
     } catch (e) {
       if (!e?.cancelled && !abort) {

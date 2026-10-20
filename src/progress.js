@@ -40,6 +40,27 @@ export function setPagesTotal(chId, msgId, tot) {
   } catch (_) {}
 }
 
+/** Reinicia todo el progreso local: páginas, leídos, seguir leyendo. */
+export function clearAllReadingData() {
+  const keys = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k) continue;
+      if (
+        k === lastReadKey || k === recentKey
+        || k.startsWith('page:') || k.startsWith('pages:')
+        || k.startsWith('pagefmt:') || k.startsWith('read:')
+      ) keys.push(k);
+    }
+  } catch (_) {}
+  for (const k of keys) {
+    try { localStorage.removeItem(k); } catch (_) {}
+  }
+  try { sync.schedulePush(400); } catch (_) {}
+  return keys.length;
+}
+
 /** Borra progreso/leído de un cómic (p.ej. tras subida nueva). */
 export function clearComicProgress(chId, msgId) {
   if (chId == null || msgId == null) return;

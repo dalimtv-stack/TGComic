@@ -16,7 +16,7 @@ import {
   getPageFormat, setPageFormat, detectPageFormats,
   isComicRead, readProgress, markComicRead, markComicUnread,
   markSeriesRead, markSeriesUnread,
-  setLastRead, getContinueList, listUnfinishedProgress,
+  setLastRead, getContinueList, listUnfinishedProgress, clearAllReadingData,
   clearComicProgress, migrateLegacyProgress,
 } from './progress.js';
 import {
@@ -1231,7 +1231,7 @@ function art(kind, name, ch) {
         if (!res.ok) continue;
         const blob = await res.blob();
         if (!blob.size) continue;
-        const opt = await optimizeImageBlob(blob, 384, 0.75);
+        const opt = await optimizeImageBlob(blob, 384, 0.75, { keepAlpha: kind === 'groups' || kind === 'channels' });
         const meta = {
           blob: opt || blob,
           url,
@@ -1272,7 +1272,7 @@ function art(kind, name, ch) {
       const fresh = await fetchArtBlob(cached.url, cached);
       if (fresh?.unchanged) return;
       if (fresh?.blob) {
-        const opt = await optimizeImageBlob(fresh.blob, 384, 0.75);
+        const opt = await optimizeImageBlob(fresh.blob, 384, 0.75, { keepAlpha: kind === 'groups' || kind === 'channels' });
         fresh.blob = opt || fresh.blob;
         fresh.url = cached.url;
         fresh.optimized = true;
@@ -2514,7 +2514,7 @@ async function getChannelCoverBlob(ch, files) {
 async function setChannelCoverBlob(ch, blob) {
   if (!blob) return;
   try {
-    const opt = await optimizeImageBlob(blob, 384, 0.75);
+    const opt = await optimizeImageBlob(blob, 384, 0.75, { keepAlpha: kind === 'groups' || kind === 'channels' });
     await kv.set(channelCoverKey(ch), opt || blob);
   } catch (e) {
     console.warn('channel cover', e);
@@ -2621,7 +2621,7 @@ async function getGithubChannelArtBlob(ch) {
         if (!res.ok) continue;
         const blob = await res.blob();
         if (!blob.size) continue;
-        const opt = await optimizeImageBlob(blob, 384, 0.75);
+        const opt = await optimizeImageBlob(blob, 384, 0.75, { keepAlpha: kind === 'groups' || kind === 'channels' });
         const meta = { blob: opt || blob, url, optimized: true };
         await kv.set(key, meta);
         return meta.blob;
@@ -2638,7 +2638,7 @@ async function clearGroupCover(name) {
 async function setGroupCoverBlob(name, blob) {
   if (!blob) return;
   try {
-    const opt = await optimizeImageBlob(blob, 384, 0.75);
+    const opt = await optimizeImageBlob(blob, 384, 0.75, { keepAlpha: kind === 'groups' || kind === 'channels' });
     await kv.set(groupCoverKey(name), opt || blob);
   } catch (e) {
     try { await kv.set(groupCoverKey(name), blob); } catch (_) {}
@@ -2667,7 +2667,7 @@ async function getGithubGroupArtBlob(name) {
         if (!res.ok) continue;
         const blob = await res.blob();
         if (!blob.size) continue;
-        const opt = await optimizeImageBlob(blob, 384, 0.75);
+        const opt = await optimizeImageBlob(blob, 384, 0.75, { keepAlpha: kind === 'groups' || kind === 'channels' });
         const meta = { blob: opt || blob, url, optimized: true };
         await kv.set(key, meta);
         return meta.blob;
@@ -4045,6 +4045,31 @@ const repackTool = createRepackTool({
     if (x < 1024 * 1024) return (x / 1024).toFixed(1) + ' KB';
     return (x / (1024 * 1024)).toFixed(2) + ' MB';
   },
+  onUploadDone: async (ch, meta = {}) => {
+    // Misma lógica que subida: refrescar listado actual
+    try {
+      if (ch?.id) await fetchFiles(ch);
+    } catch (_) {}
+    try {
+      const names = [].concat(meta.outNames || [], meta.outName ? [meta.outName] : [])
+        .map((n) => String(n || '').toLowerCase());
+      if (ch?.id && names.length) {
+        let files = [];
+        try { files = await kv.get('f:' + ch.id) || []; } catch (_) {}
+        for (const f of files || []) {
+          const fn = String(f?.name || '').toLowerCase();
+          if (names.some((n) => n && fn === n)) {
+            try { clearComicProgress(ch.id, f.id); } catch (_) {}
+          }
+        }
+      }
+    } catch (_) {}
+    try {
+      const top = stack[stack.length - 1];
+      if (top) top.scrollY = window.scrollY || 0;
+      show();
+    } catch (_) {}
+  },
 });
 
 
@@ -4175,6 +4200,7 @@ const proTools = createProTools({
     } catch (_) {}
   },
   copyInfoFrameText,
+  clearAllReadingData,
 });
 
 // ---------- Inicio ----------

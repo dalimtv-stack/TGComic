@@ -57,15 +57,27 @@ export function createCovers(state, d) {
    * PC → WebP ~16 KB; iPhone sin encoder WebP → JPEG más agresivo (antes devolvía
    * el blob original o un JPEG grande → más peso y peor aspecto).
    */
-  async function optimizeImageBlob(blob, maxEdge = 280, quality = 0.72) {
+  async function optimizeImageBlob(blob, maxEdge = 280, quality = 0.72, opts = {}) {
     if (!blob || !blob.size) return null;
+    const srcType = String(blob.type || '').toLowerCase();
+    // Editoriales / logos: preservar transparencia (PNG/GIF/WebP con alpha)
+    const keepAlpha = !!(opts && opts.keepAlpha) || srcType.includes('png') || srcType.includes('gif');
 
-    // Ya es una miniatura WebP razonable: reutilizar
-    if ((blob.type || '').includes('webp') && blob.size < 48 * 1024) {
+    // Miniatura ya OK (sin alpha forzada a comic covers)
+    if (!keepAlpha && srcType.includes('webp') && blob.size < 48 * 1024) {
       try {
-        const bmp = await createImageBitmap(blob);
-        const ok = Math.max(bmp.width, bmp.height) <= maxEdge + 16;
-        bmp.close?.();
+        const bmp0 = await createImageBitmap(blob);
+        const ok = Math.max(bmp0.width, bmp0.height) <= maxEdge + 16;
+        bmp0.close?.();
+        if (ok) return blob;
+      } catch (_) {}
+    }
+    // PNG/GIF pequeño ya reescalado: reutilizar
+    if (keepAlpha && (srcType.includes('png') || srcType.includes('gif')) && blob.size < 120 * 1024) {
+      try {
+        const bmp0 = await createImageBitmap(blob);
+        const ok = Math.max(bmp0.width, bmp0.height) <= maxEdge + 16;
+        bmp0.close?.();
         if (ok) return blob;
       } catch (_) {}
     }
@@ -101,26 +113,40 @@ export function createCovers(state, d) {
     const cv = el('canvas');
     cv.width = w;
     cv.height = h;
-    const ctx = cv.getContext('2d', { alpha: false });
+    const ctx = cv.getContext('2d', { alpha: keepAlpha });
+    if (keepAlpha) {
+      ctx.clearRect(0, 0, w, h);
+    }
     ctx.drawImage(bmp, 0, 0, w, h);
     try { bmp.close?.(); } catch (_) {}
 
     let out = null;
-    if (await supportsWebP()) {
-      out = await canvasToBlob(cv, 'image/webp', quality);
-      if (!(out && out.size && (out.type || '').includes('webp'))) out = null;
-    }
-    if (!out) {
-      const jq = Math.min(0.62, quality);
-      out = await canvasToBlob(cv, 'image/jpeg', jq);
-    }
-    if (!out || !out.size) {
-      out = await canvasToBlob(cv, 'image/jpeg', 0.5);
+    if (keepAlpha) {
+      // PNG mantiene transparencia; WebP con alpha si el navegador lo soporta bien
+      out = await canvasToBlob(cv, 'image/png');
+      if (!(out && out.size)) {
+        if (await supportsWebP()) {
+          const wout = await canvasToBlob(cv, 'image/webp', quality);
+          if (wout && wout.size && (wout.type || '').includes('webp')) out = wout;
+        }
+      }
+    } else {
+      if (await supportsWebP()) {
+        out = await canvasToBlob(cv, 'image/webp', quality);
+        if (!(out && out.size && (out.type || '').includes('webp'))) out = null;
+      }
+      if (!out) {
+        const jq = Math.min(0.62, quality);
+        out = await canvasToBlob(cv, 'image/jpeg', jq);
+      }
+      if (!out || !out.size) {
+        out = await canvasToBlob(cv, 'image/jpeg', 0.5);
+      }
     }
 
     cv.width = 0;
     cv.height = 0;
-    // NUNCA devolver el original (página completa de varios MB)
+    // NUNCA devolver el original (página completa de varios MB) salvo arte con alpha que no se pudo reescalar
     return out && out.size ? out : null;
   }
 
