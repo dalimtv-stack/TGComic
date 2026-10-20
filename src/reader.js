@@ -304,11 +304,15 @@ export function createReader(state, d) {
         }, { passive: true });
         rd.append(edgeBack);
       }
-      let uiTimer = setTimeout(() => rd.classList.add('ui-off'), 2500);
+      const uiHideMs = () => {
+        const sec = Math.max(3, Math.min(120, +(pref('uiHideSec', '15') || 15)));
+        return sec * 1000;
+      };
+      let uiTimer = setTimeout(() => rd.classList.add('ui-off'), uiHideMs());
       const pokeUI = () => {
         rd.classList.remove('ui-off');
         clearTimeout(uiTimer);
-        uiTimer = setTimeout(() => rd.classList.add('ui-off'), 2500);
+        uiTimer = setTimeout(() => rd.classList.add('ui-off'), uiHideMs());
       };
 
       const showMosaic = (ev) => {
@@ -395,8 +399,9 @@ export function createReader(state, d) {
         const spreadBtn = el('button', 'btn spread-btn');
         const spreadLabel = () => {
           const on = pref('spread', '0') === '1';
-          spreadBtn.textContent = on ? '▯' : '▥';
-          spreadBtn.title = on ? 'Una página' : 'Doble página';
+          // Activo = modo actual: 📄📄 = dos páginas; 📄 = una
+          spreadBtn.textContent = on ? '📄📄' : '📄';
+          spreadBtn.title = on ? 'Cambiar a una página' : 'Cambiar a doble página';
           spreadBtn.setAttribute('aria-label', spreadBtn.title);
         };
         spreadLabel();
@@ -407,27 +412,59 @@ export function createReader(state, d) {
           else rd.classList.remove('spread');
           updateStatus();
           pokeUI();
+          // Al activar doble página desde portada (0), seguir en portada sola
           turn(n);
         };
         cluster.append(fit, cnt);
+        // Columna encima del mosaico (no al lado)
         try {
-          cluster.insertBefore(spreadBtn, gridBtn);
+          const stack = el('div', 'bot-stack');
+          stack.append(spreadBtn, gridBtn);
+          cluster.insertBefore(stack, fit);
         } catch (_) {
-          cluster.append(spreadBtn);
+          try { cluster.insertBefore(spreadBtn, gridBtn); } catch (_) { cluster.append(spreadBtn); }
         }
         img.draggable = false;
         const eL = el('div', 'edge l'), eR = el('div', 'edge r');
         rd.append(pageHost, eL, eR, top, bot);
         const isSpread = () => pref('spread', '0') === '1';
+        // Portada (0) siempre sola. Pares interiores: 1|2, 3|4… (n = página derecha guardada)
+        const toSpreadRight = (i) => {
+          i = Math.max(0, Math.min(pages.length - 1, i));
+          if (i <= 0) return 0;
+          // índice impar → derecha del par (1→2, 3→4)
+          if (i % 2 === 1) return Math.min(pages.length - 1, i + 1);
+          return i;
+        };
+        const spreadPair = (right) => {
+          right = Math.max(0, Math.min(pages.length - 1, right));
+          if (!isSpread() || right <= 0) return { left: null, right };
+          // right debe ser par >= 2 para tener izquierda >= 1
+          right = toSpreadRight(right);
+          if (right <= 0) return { left: null, right: 0 };
+          const left = right - 1;
+          if (left <= 0) return { left: null, right: 0 };
+          return { left, right };
+        };
+        const nextSpread = (right) => {
+          if (right <= 0) return Math.min(pages.length - 1, pages.length > 1 ? 2 : 0);
+          return Math.min(pages.length - 1, right + 2);
+        };
+        const prevSpread = (right) => {
+          if (right <= 2) return 0;
+          return right - 2;
+        };
         const setCountSpread = () => {
-          if (isSpread() && n > 0) cnt.textContent = (n) + '–' + (n + 1) + ' / ' + pages.length;
+          const { left, right } = spreadPair(n);
+          if (left != null) cnt.textContent = (left + 1) + '–' + (right + 1) + ' / ' + pages.length;
           else setCount();
         };
         const turn = async (i) => {
           if (i > pages.length - 1) { if (hasNext) openNext(); return; }
           if (i < 0) return;
-          const right = Math.max(0, Math.min(pages.length - 1, i));
-          const left = isSpread() && right > 0 ? right - 1 : null;
+          let right = Math.max(0, Math.min(pages.length - 1, i));
+          if (isSpread()) right = toSpreadRight(right);
+          const { left } = spreadPair(right);
           n = right;
           savePage(n);
           if (isSpread() && left != null) setCountSpread();
@@ -464,9 +501,9 @@ export function createReader(state, d) {
             if (left != null) await preloadAround(left, token, mine);
           } catch (err) { cnt.textContent = 'Error'; console.error(err); }
         };
-        goToPage = (i) => turn(i);
-        eL.onclick = () => turn(isSpread() ? n - 2 : n - 1);
-        eR.onclick = () => turn(isSpread() ? n + 2 : n + 1);
+        goToPage = (i) => turn(isSpread() ? toSpreadRight(i) : i);
+        eL.onclick = () => turn(isSpread() ? prevSpread(n) : n - 1);
+        eR.onclick = () => turn(isSpread() ? nextSpread(n) : n + 1);
 
 
         /** Zoom variable: doble toque (~2.5×) y pellizco (1×–4×). Pan con un dedo. */
@@ -580,7 +617,8 @@ export function createReader(state, d) {
           if (suppressClick) return;
           armSuppressClick();
           clearZoom();
-          turn(dir < 0 ? n - pageStep() : n + pageStep());
+          if (isSpread()) turn(dir < 0 ? prevSpread(n) : nextSpread(n));
+          else turn(dir < 0 ? n - 1 : n + 1);
         };
         eL.onclick = (ev) => { ev.stopPropagation(); edgeGo(-1); };
         eR.onclick = (ev) => { ev.stopPropagation(); edgeGo(1); };
@@ -589,14 +627,14 @@ export function createReader(state, d) {
           ev.stopPropagation();
           armSuppressClick();
           clearZoom();
-          turn(n - pageStep());
+          if (isSpread()) turn(prevSpread(n)); else turn(n - 1);
         }, { passive: false });
         eR.addEventListener('touchend', (ev) => {
           ev.preventDefault();
           ev.stopPropagation();
           armSuppressClick();
           clearZoom();
-          turn(n + pageStep());
+          if (isSpread()) turn(nextSpread(n)); else turn(n + 1);
         }, { passive: false });
 
         let sx = null, sy = 0, moved = false;
@@ -697,7 +735,7 @@ export function createReader(state, d) {
               return;
             }
             if (Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy)) {
-              turn(dx < 0 ? n + pageStep() : n - pageStep());
+              turn(dx < 0 ? (isSpread() ? nextSpread(n) : n + 1) : (isSpread() ? prevSpread(n) : n - 1));
             }
             return;
           }
@@ -707,7 +745,7 @@ export function createReader(state, d) {
           }
         }, { passive: true });
 
-        document.onkeydown = (e) => { const s = (typeof isSpread === 'function' && isSpread()) ? 2 : 1; if (e.key === 'ArrowRight') turn(n + s); if (e.key === 'ArrowLeft') turn(n - s); };
+        document.onkeydown = (e) => { if (e.key === 'ArrowRight') turn(isSpread() ? nextSpread(n) : n + 1); if (e.key === 'ArrowLeft') turn(isSpread() ? prevSpread(n) : n - 1); };
         // Página + Ancho: rueda hace scroll en la hoja; solo al borde cambia de página.
         // Página + Pantalla: sin cambios (siempre cabe → rueda cambia página).
         const onWheel = (e) => {
@@ -725,21 +763,21 @@ export function createReader(state, d) {
                   return;
                 }
                 e.preventDefault();
-                turn(n + pageStep());
+                turn(isSpread() ? nextSpread(n) : n + 1);
                 return;
               }
               if (e.deltaY < -10) {
                 if (!atTop) return;
                 e.preventDefault();
-                turn(n - pageStep());
+                turn(isSpread() ? prevSpread(n) : n - 1);
                 return;
               }
               return;
             }
           }
           e.preventDefault();
-          if (e.deltaY > 10) turn(n + pageStep());
-          else if (e.deltaY < -10) turn(n - pageStep());
+          if (e.deltaY > 10) turn(isSpread() ? nextSpread(n) : n + 1);
+          else if (e.deltaY < -10) turn(isSpread() ? prevSpread(n) : n - 1);
         };
         rd.addEventListener('wheel', onWheel, { passive: false });
         observers._wheel = onWheel;

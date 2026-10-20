@@ -255,6 +255,13 @@ export function createCovers(state, d) {
       img.onload = () => {
         try { ltr.remove(); } catch (_) {}
         if (d.querySelector('img')) d.querySelector('img').remove();
+        try {
+          if (img.naturalWidth > 0 && img.naturalHeight > 0 && img.naturalWidth > img.naturalHeight) {
+            d.classList.add('landscape');
+          } else {
+            d.classList.remove('landscape');
+          }
+        } catch (_) {}
         d.prepend(img);
       };
       img.onerror = () => {

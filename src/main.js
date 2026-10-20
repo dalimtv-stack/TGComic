@@ -797,7 +797,26 @@ function showViewerConfig() {
   );
 
   section('Caché de páginas (lectura)');
-  const pcWrap = el('div', 'cfg-group');
+  
+  section('Menú del visor');
+  const hideWrap = el('div');
+  const hideLab = el('label', 'sync-label', 'Ocultar menús tras (segundos)');
+  const hideInp = el('input', 'edit-input');
+  hideInp.type = 'number';
+  hideInp.min = '3';
+  hideInp.max = '120';
+  hideInp.step = '1';
+  hideInp.value = pref('uiHideSec', '15');
+  hideInp.onchange = () => {
+    let v = Math.max(3, Math.min(120, +hideInp.value || 15));
+    hideInp.value = String(v);
+    setPref('uiHideSec', String(v));
+  };
+  const hideHint = el('p', 'cover-pick-hint', 'Por defecto 15 s sin interacción. Afecta a la barra superior e inferior del lector.');
+  hideWrap.append(hideLab, hideInp, hideHint);
+  body.append(hideWrap);
+
+const pcWrap = el('div', 'cfg-group');
   const pcLab = el('p', 'sync-status', 'Máximo de caché de páginas (MB)');
   const pcInp = el('input', 'edit-input');
   pcInp.type = 'number';
