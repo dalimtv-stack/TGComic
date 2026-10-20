@@ -1688,6 +1688,10 @@ const proTools = createProTools({
   },
   copyInfoFrameText,
   clearAllReadingData,
+  getPagesTotal,
+  setPagesTotal,
+  getMsg,
+  openPages,
 });
 
 // ---------- Inicio ----------

@@ -20,6 +20,10 @@ export function createProTools(d) {
     onCoversChanged,
     copyInfoFrameText,
     clearAllReadingData,
+    getPagesTotal,
+    setPagesTotal,
+    getMsg,
+    openPages,
   } = d;
 
   const getLIB = () => (typeof d.LIB === 'function' ? d.LIB() : d.LIB) || [];
@@ -513,6 +517,125 @@ export function createProTools(d) {
     })();
   }
 
+
+  /** Todos los cómics listados en caché (f:canal). */
+  async function collectAllComics() {
+    const out = [];
+    for (const ch of getLIB()) {
+      let files = [];
+      try { files = (await kv.get('f:' + ch.id)) || []; } catch (_) { files = []; }
+      if (!Array.isArray(files)) continue;
+      for (const f of files) {
+        if (!f || f.id == null) continue;
+        out.push({ ch, f });
+      }
+    }
+    return out;
+  }
+
+  async function loadMissingCovers() {
+    try { closeAppMenu?.(); } catch (_) {}
+    const all = await collectAllComics();
+    const missing = [];
+    for (const it of all) {
+      const key = `c:${it.ch.id}:${it.f.id}`;
+      let b = null;
+      try { b = await kv.get(key); } catch (_) {}
+      if (!b || b === 'none') missing.push(it);
+    }
+    if (!missing.length) {
+      await appAlert('Todas las portadas de la biblioteca local ya están en caché.', 'Portadas');
+      return;
+    }
+    const ok = await appConfirm(
+      `Hay ${missing.length} cómic(s) sin portada en caché. ¿Descargarlas ahora? (usa Telegram; puede tardar)`,
+      'Cargar portadas faltantes'
+    );
+    if (!ok) return;
+    const prog = showProgressFrame('Cargar portadas faltantes');
+    let done = 0, okN = 0, fail = 0;
+    prog.setProgress(0, missing.length);
+    for (const { ch, f } of missing) {
+      prog.setStatus((f.name || f.id || '').slice(0, 60));
+      try {
+        const b = await getCover(ch, f);
+        if (b) okN++;
+        else fail++;
+      } catch (_) { fail++; }
+      done++;
+      prog.setProgress(done, missing.length);
+      if (done % 3 === 0) await new Promise((r) => setTimeout(r, 0));
+    }
+    prog.close();
+    try { onCoversChanged?.(); } catch (_) {}
+    await appAlert(
+      `Portadas: ${okN} cargadas` + (fail ? `, ${fail} sin imagen` : '') + '.',
+      'Portadas'
+    );
+  }
+
+  async function countPagesForComic(ch, f) {
+    if (typeof openPages !== 'function' || typeof getMsg !== 'function') return 0;
+    const ac = { aborted: false };
+    let closer = null;
+    try {
+      const msg = await getMsg(ch, f);
+      if (!msg) return 0;
+      const status = () => {};
+      const pack = await openPages(msg, f.size, status, ac);
+      closer = pack?.close;
+      const n = Array.isArray(pack?.pages) ? pack.pages.length : 0;
+      return n > 0 ? n : 0;
+    } catch (_) {
+      return 0;
+    } finally {
+      try { await closer?.(); } catch (_) {}
+    }
+  }
+
+  async function loadMissingPageCounts() {
+    try { closeAppMenu?.(); } catch (_) {}
+    const all = await collectAllComics();
+    const missing = [];
+    for (const it of all) {
+      const tot = typeof getPagesTotal === 'function'
+        ? getPagesTotal(it.ch.id, it.f.id)
+        : 0;
+      if (!(tot > 0)) missing.push(it);
+    }
+    if (!missing.length) {
+      await appAlert('Todos los cómics listados ya tienen número de páginas guardado.', 'Páginas');
+      return;
+    }
+    const ok = await appConfirm(
+      `Hay ${missing.length} cómic(s) sin número de páginas. ¿Contarlos ahora? (descarga cada archivo; puede tardar mucho)`,
+      'Cargar número de páginas'
+    );
+    if (!ok) return;
+    const prog = showProgressFrame('Cargar número de páginas');
+    let done = 0, okN = 0, fail = 0;
+    prog.setProgress(0, missing.length);
+    for (const { ch, f } of missing) {
+      prog.setStatus((f.name || f.id || '').slice(0, 60));
+      try {
+        const n = await countPagesForComic(ch, f);
+        if (n > 0 && typeof setPagesTotal === 'function') {
+          setPagesTotal(ch.id, f.id, n);
+          okN++;
+        } else fail++;
+      } catch (_) { fail++; }
+      done++;
+      prog.setProgress(done, missing.length);
+      if (done % 2 === 0) await new Promise((r) => setTimeout(r, 0));
+    }
+    prog.close();
+    try { onCoversChanged?.(); } catch (_) {}
+    await appAlert(
+      `Páginas: ${okN} actualizados` + (fail ? `, ${fail} fallidos` : '') + '.',
+      'Páginas'
+    );
+  }
+
   /** Menú Configuración Avanzada */
   function showAdvancedConfig() {
     try { closeAppMenu?.(); } catch (_) {}
@@ -536,6 +659,22 @@ export function createProTools(d) {
       showReloadCoversFrame();
     };
     body.append(reloadCoversBtn);
+
+    const missingCoversBtn = el('button', 'btn cover-pick-device', 'Cargar portadas faltantes');
+    missingCoversBtn.type = 'button';
+    missingCoversBtn.onclick = () => {
+      frame.remove();
+      loadMissingCovers();
+    };
+    body.append(missingCoversBtn);
+
+    const missingPagesBtn = el('button', 'btn cover-pick-device', 'Cargar número de páginas');
+    missingPagesBtn.type = 'button';
+    missingPagesBtn.onclick = () => {
+      frame.remove();
+      loadMissingPageCounts();
+    };
+    body.append(missingPagesBtn);
 
     const devBtn = el('button', 'btn cover-pick-device', 'Info desarrollo');
     devBtn.type = 'button';
