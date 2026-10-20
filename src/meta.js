@@ -83,14 +83,27 @@ export function comicDisplayName(ch, f, fallback) {
   const derived = () => {
     try {
       const cap = parseComicCaption(f.caption || '');
-      const titleEs = cap.titleEs && String(cap.titleEs).trim();
+      let titleEs = cap.titleEs && String(cap.titleEs).trim();
       if (titleEs) {
+        // No mostrar [corchetes]
+        titleEs = titleEs.replace(/\s*\[[^\]]*\]/g, '').replace(/\s+/g, ' ').trim();
+        // Título España que ya empieza por # (o Special/…) = etiqueta de número lista
+        // No re-parsear como nombre de archivo (rompe "(Especial 4 de 5)" → "#4 - de 5)")
+        const isIssueLabel = /^#/.test(titleEs)
+          || /^(?:Special|Especial|Extra|Annual|Anual|One[-\s]?Shot|OneShot)\b/i.test(titleEs);
+        if (isIssueLabel) {
+          if (inSeriesView) {
+            return /^#/.test(titleEs) ? titleEs : ('#' + titleEs);
+          }
+          return titleEs;
+        }
+        // Sin #: intentar parseo como nombre de archivo (legado)
         const asName = /\.cb[zr]$/i.test(titleEs) ? titleEs : (titleEs + '.cbz');
         const pCap = parseComicName(asName, ch.name);
         if (inSeriesView) {
           if (pCap) return issueDisplay(pCap);
           const mHash = titleEs.match(/#\s*(.+)$/);
-          return mHash ? ('#' + mHash[1].replace(/^#\s*/, '').trim()) : fb;
+          return mHash ? ('#' + mHash[1].replace(/^#\s*/, '').trim()) : (fb || titleEs);
         }
         if (pCap) return comicDisplay(asName, ch.name) || issueDisplay(pCap);
         return titleEs;
