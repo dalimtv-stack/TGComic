@@ -145,10 +145,7 @@ function showComicInfo(ch, f, displayTitle, siblings) {
       };
       body.append(fillBtn);
     }
-    box.append(head, body);
-    frame.append(box);
-
-    // Navegación lateral anterior / siguiente
+    // Navegación lateral anterior / siguiente (lados del frame/caja)
     const nav = el('div', 'info-nav');
     const prevBtn = el('button', 'btn info-nav-btn info-nav-prev', '‹');
     const nextBtn = el('button', 'btn info-nav-btn info-nav-next', '›');
@@ -159,8 +156,9 @@ function showComicInfo(ch, f, displayTitle, siblings) {
     prevBtn.disabled = true;
     nextBtn.disabled = true;
     nav.append(prevBtn, nextBtn);
-    frame.append(nav);
     nav.hidden = true;
+    box.append(head, body, nav);
+    frame.append(box);
 
     const wireNav = (list) => {
       if (!Array.isArray(list) || list.length < 2 || !f) {
