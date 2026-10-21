@@ -312,8 +312,10 @@ function showDescriptionPanel(text) {
 }
 
 
-function grid(items, withSearch, searchPlaceholder) {
-  const g = el('div', 'grid'), nodes = [];
+function grid(items, withSearch, searchPlaceholder, gridKind) {
+  // gridKind: 'comics' | 'series' | 'channels' | 'mixed'
+  const kind = gridKind || 'mixed';
+  const g = el('div', 'grid grid-' + kind), nodes = [];
   const matchItem = (i, q) => {
     if (!q) return true;
     if ((i.label || '').toLowerCase().includes(q)) return true;

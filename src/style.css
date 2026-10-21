@@ -10,14 +10,36 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 .btn:active{opacity:.6}
 #back{font-size:1.6rem;padding:0 .6rem}
 #search{display:block;margin:.25rem .75rem .75rem;width:calc(100% - 1.5rem);height:44px;border:0;border-radius:12px;background:var(--card);color:inherit;padding:0 1rem;font:inherit}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--cover-min-comic,150px),1fr));gap:1.1rem .8rem;padding:.25rem .75rem calc(var(--sab) + 2rem)}
-.card{border:0;background:none;color:inherit;font:inherit;text-align:center;cursor:default;padding:0}
-.cover{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;position:relative;aspect-ratio:2/3;height:var(--cover-h-comic,225px);width:auto;max-width:100%;margin-inline:auto;border-radius:14px;background:var(--card);overflow:hidden;display:grid;place-items:center;font-size:2.4rem;font-weight:700;color:var(--mut);box-shadow:0 6px 18px #0007}
-.cover.cover-series{height:var(--cover-h-series,225px)}
-.cover.cover-channel{height:var(--cover-h-channel,225px)}
-.cover.cover-comic{height:var(--cover-h-comic,225px)}
+.grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(var(--cover-grid-min,150px),1fr));
+  gap:1.1rem .8rem;
+  padding:.25rem .75rem calc(var(--sab) + 2rem);
+}
+/* Tamaño por vista (no mezcla alturas fijas dentro de la misma celda) */
+.grid.grid-comics{--cover-grid-min:var(--cover-w-comic,150px)}
+.grid.grid-series{--cover-grid-min:var(--cover-w-series,150px)}
+.grid.grid-channels{--cover-grid-min:var(--cover-w-channel,150px)}
+.grid.grid-mixed{--cover-grid-min:min(var(--cover-w-comic,150px),var(--cover-w-series,150px))}
+.card{border:0;background:none;color:inherit;font:inherit;text-align:center;cursor:default;padding:0;min-width:0}
+/* Portada: ocupa todo el ancho de la celda; la altura sale del 2:3 */
+.cover{
+  -webkit-touch-callout:none;-webkit-user-select:none;user-select:none;
+  position:relative;aspect-ratio:2/3;width:100%;height:auto;max-width:100%;
+  margin:0;border-radius:14px;background:var(--card);overflow:hidden;
+  display:grid;place-items:center;font-size:2.4rem;font-weight:700;color:var(--mut);
+  box-shadow:0 6px 18px #0007;
+}
 .card .name{margin-top:.45rem}
-.card b{font-size:clamp(.72rem,calc(var(--cover-h-comic,225px) * 0.0045 + .55rem),.95rem)}
+.card b{
+  display:-webkit-box;margin-top:.5rem;font-weight:600;line-height:1.25;
+  -webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+  font-size:clamp(.68rem,calc(var(--cover-grid-min,150px) * .0058),.95rem);
+}
+.card small{
+  color:var(--mut);display:block;
+  font-size:clamp(.62rem,calc(var(--cover-grid-min,150px) * .0048),.82rem);
+}
 .cover img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
 .cover.landscape{background:transparent}
 .cover.landscape img{object-fit:contain;object-position:center;inset:0;width:100%;height:100%;transform:none}

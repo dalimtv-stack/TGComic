@@ -689,7 +689,7 @@ function channelsView(g) {
       resultsHost.hidden = true;
       nodes.push(resultsHost);
 
-      const gridHost = el('div', 'grid');
+      const gridHost = el('div', 'grid grid-channels');
       nodes.push(gridHost);
 
       const paintGrid = () => {
@@ -932,7 +932,7 @@ function filesView(ch) {
       }
       // Orden alfabético por el nombre visible (incluye series renombradas)
       items.sort((a, b) => natural(a.label, b.label));
-      grid(items, true, 'Buscar en este canal…');
+      grid(items, true, 'Buscar en este canal…', 'mixed');
     };
     const cached = await kv.get('f:' + ch.id);
     if (cached) draw(cached); else msg('Cargando…');
@@ -1021,7 +1021,7 @@ function seriesView(ch, s, files) {
           longPress: () => sheet(displayLabel, opts.concat(lockToggleOpts('comic', { ch, f }, displayLabel, redraw))),
         };
       });
-      grid(items, true, 'Buscar en esta serie…');
+      grid(items, true, 'Buscar en esta serie…', 'comics');
     };
     redraw();
   });

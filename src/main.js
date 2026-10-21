@@ -152,13 +152,21 @@ function applyCoverSizePrefs() {
   try {
     const root = document.documentElement;
     const p = (typeof pref === 'function') ? pref : earlyPref;
+    // Preferencia = altura deseada; el ancho de celda es alto × 2/3 (ratio 2:3)
     const comic = Math.max(120, Math.min(400, +(p('coverHComic', '225') || 225)));
     const series = Math.max(120, Math.min(400, +(p('coverHSeries', '225') || 225)));
     const channel = Math.max(100, Math.min(400, +(p('coverHChannel', '225') || 225)));
+    const wComic = Math.round(comic * 2 / 3);
+    const wSeries = Math.round(series * 2 / 3);
+    const wChannel = Math.round(channel * 2 / 3);
     root.style.setProperty('--cover-h-comic', comic + 'px');
     root.style.setProperty('--cover-h-series', series + 'px');
     root.style.setProperty('--cover-h-channel', channel + 'px');
-    root.style.setProperty('--cover-min-comic', Math.round(comic * 2 / 3) + 'px');
+    root.style.setProperty('--cover-w-comic', wComic + 'px');
+    root.style.setProperty('--cover-w-series', wSeries + 'px');
+    root.style.setProperty('--cover-w-channel', wChannel + 'px');
+    // Por defecto (por si un grid no tiene clase)
+    root.style.setProperty('--cover-grid-min', wComic + 'px');
   } catch (_) {}
 }
 try { applyCoverSizePrefs(); } catch (_) {}
