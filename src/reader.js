@@ -268,8 +268,12 @@ export function createReader(state, d) {
       const cnt = el('span', 'cnt');
       const setCount = () => (cnt.textContent = `${n + 1} / ${pages.length}`);
       const cluster = el('div', 'bot-cluster');
-      // Mosaico siempre visible en la barra (fit/cnt se añaden después según modo)
-      cluster.append(back, mb, gridBtn);
+      const botLeft = el('div', 'bot-side bot-left');
+      const botCenter = el('div', 'bot-side bot-center');
+      const botRight = el('div', 'bot-side bot-right');
+      botLeft.append(back, mb);
+      botCenter.append(gridBtn);
+      cluster.append(botLeft, botCenter, botRight);
       bot.append(cluster);
       document.body.append(rd);
       document.body.style.overflow = 'hidden';
@@ -314,6 +318,16 @@ export function createReader(state, d) {
         clearTimeout(uiTimer);
         uiTimer = setTimeout(() => rd.classList.add('ui-off'), uiHideMs());
       };
+      cluster.addEventListener('mouseenter', () => {
+        rd.classList.remove('ui-off');
+        clearTimeout(uiTimer);
+      });
+      cluster.addEventListener('mouseleave', () => { pokeUI(); });
+      bot.addEventListener('mouseenter', () => {
+        rd.classList.remove('ui-off');
+        clearTimeout(uiTimer);
+      });
+      bot.addEventListener('mouseleave', () => { pokeUI(); });
 
       const showMosaic = (ev) => {
         try { ev?.preventDefault?.(); ev?.stopPropagation?.(); } catch (_) {}
@@ -377,18 +391,44 @@ export function createReader(state, d) {
       };
       bindGridBtn();
 
-      const bindMousePageDrag = (getAxis, goPrev, goNext) => {
+      /** Modo página: soltar tras arrastrar cambia de página. Vertical/Horizontal: arrastrar desplaza el scroll. */
+      const bindMousePageDrag = (getAxis, goPrev, goNext, scrollWhileDrag) => {
         let start = null;
+        let dragging = false;
         const onDown = (e) => {
           if (e.button !== 0) return;
           if (e.target.closest?.('.bar, .edge, .mosaic, .btn, .spread-fab, input, textarea')) return;
-          start = { x: e.clientX, y: e.clientY };
+          start = {
+            x: e.clientX,
+            y: e.clientY,
+            sl: rd.scrollLeft,
+            st: rd.scrollTop,
+          };
+          dragging = false;
+        };
+        const onMove = (e) => {
+          if (!start || !scrollWhileDrag) return;
+          const dx = e.clientX - start.x;
+          const dy = e.clientY - start.y;
+          if (!dragging && Math.hypot(dx, dy) < 4) return;
+          dragging = true;
+          try { e.preventDefault(); } catch (_) {}
+          const axis = getAxis();
+          if (axis === 'x') rd.scrollLeft = start.sl - dx;
+          else rd.scrollTop = start.st - dy;
+          try { pokeUI(); } catch (_) {}
         };
         const onUp = (e) => {
           if (!start) return;
           const dx = e.clientX - start.x;
           const dy = e.clientY - start.y;
+          const wasDrag = dragging;
           start = null;
+          dragging = false;
+          if (scrollWhileDrag) {
+            // El scroll ya se hizo en mousemove; no saltar de página
+            return;
+          }
           const axis = getAxis();
           if (axis === 'x') {
             if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.15) return;
@@ -401,10 +441,12 @@ export function createReader(state, d) {
           }
         };
         rd.addEventListener('mousedown', onDown);
+        window.addEventListener('mousemove', onMove);
         window.addEventListener('mouseup', onUp);
         if (!rd._dragCleanups) rd._dragCleanups = [];
         rd._dragCleanups.push(() => {
           rd.removeEventListener('mousedown', onDown);
+          window.removeEventListener('mousemove', onMove);
           window.removeEventListener('mouseup', onUp);
         });
       };
@@ -450,7 +492,7 @@ export function createReader(state, d) {
         };
         // Fuera de la barra inferior: centrado encima del botbar
         rd.append(spreadBtn);
-        cluster.append(fit, cnt);
+        botRight.append(fit, cnt);
         img.draggable = false;
         const eL = el('div', 'edge l'), eR = el('div', 'edge r');
         rd.append(pageHost, eL, eR, top, bot);
@@ -855,7 +897,7 @@ export function createReader(state, d) {
           onResize?.();
         };
         fitLabel();
-        cluster.append(fit, cnt);
+        botRight.append(fit, cnt);
 
         const vw = () => Math.round(window.visualViewport?.width || window.innerWidth);
         const vh = () => Math.round(window.visualViewport?.height || window.innerHeight);
@@ -1094,7 +1136,8 @@ export function createReader(state, d) {
         bindMousePageDrag(
           () => (horiz ? 'x' : 'y'),
           () => { goToPage(n - 1); },
-          () => { goToPage(n + 1); }
+          () => { goToPage(n + 1); },
+          true
         );
 
         const onScroll = () => {
