@@ -312,22 +312,41 @@ export function createReader(state, d) {
         const sec = Math.max(3, Math.min(120, +(pref('uiHideSec', '15') || 15)));
         return sec * 1000;
       };
-      let uiTimer = setTimeout(() => rd.classList.add('ui-off'), uiHideMs());
-      const pokeUI = () => {
-        rd.classList.remove('ui-off');
+      // --- Auto-ocultar menús: UN solo temporizador y UNA sola ruta para mostrar/ocultar ---
+      let uiTimer = null;
+      let uiHover = false;
+      const armUiHide = () => {
         clearTimeout(uiTimer);
-        uiTimer = setTimeout(() => rd.classList.add('ui-off'), uiHideMs());
+        uiTimer = setTimeout(() => {
+          if (!uiHover && !document.querySelector('.mosaic')) rd.classList.add('ui-off');
+        }, uiHideMs());
       };
-      cluster.addEventListener('mouseenter', () => {
-        rd.classList.remove('ui-off');
-        clearTimeout(uiTimer);
-      });
-      cluster.addEventListener('mouseleave', () => { pokeUI(); });
-      bot.addEventListener('mouseenter', () => {
-        rd.classList.remove('ui-off');
-        clearTimeout(uiTimer);
-      });
-      bot.addEventListener('mouseleave', () => { pokeUI(); });
+      const pokeUI = () => { rd.classList.remove('ui-off'); armUiHide(); };
+      const toggleUI = () => {
+        if (rd.classList.contains('ui-off')) pokeUI();
+        else { clearTimeout(uiTimer); rd.classList.add('ui-off'); }
+      };
+      // Solo ratón real (en táctil el mouseenter emulado dejaba el timer cancelado para siempre)
+      for (const node of [cluster, bot]) {
+        node.addEventListener('pointerenter', (e) => {
+          if (e.pointerType !== 'mouse') return;
+          uiHover = true;
+          rd.classList.remove('ui-off');
+          clearTimeout(uiTimer);
+        });
+        node.addEventListener('pointerleave', (e) => {
+          if (e.pointerType !== 'mouse') return;
+          uiHover = false;
+          armUiHide();
+        });
+      }
+      armUiHide();
+      // rd.className = ... borra 'ui-off'; esta utilidad lo conserva
+      const setRdClass = (cls) => {
+        const off = rd.classList.contains('ui-off');
+        rd.className = cls;
+        if (off) rd.classList.add('ui-off');
+      };
 
       const showMosaic = (ev) => {
         try { ev?.preventDefault?.(); ev?.stopPropagation?.(); } catch (_) {}
@@ -487,7 +506,7 @@ export function createReader(state, d) {
       let goToPage = (i) => {}; // se asigna en cada modo
 
       if (!continuous) {
-        rd.className = 'page fit-' + pref('fit', 'screen') + (pref('spread', '0') === '1' ? ' spread' : '');
+        setRdClass('page fit-' + pref('fit', 'screen') + (pref('spread', '0') === '1' ? ' spread' : ''));
         const fit = el('button', 'btn');
         const pageHost = el('div', 'page-host');
         let img = el('img');
@@ -502,7 +521,7 @@ export function createReader(state, d) {
         };
         fit.onclick = () => {
           setPref('fit', pref('fit', 'screen') === 'screen' ? 'width' : 'screen');
-          rd.className = rd.className.replace(/fit-\w+/, 'fit-' + pref('fit', 'screen'));
+          setRdClass(rd.className.replace(/fit-\w+/, 'fit-' + pref('fit', 'screen')));
           if (pref('spread', '0') === '1') rd.classList.add('spread');
           else rd.classList.remove('spread');
           fitLabel();
@@ -686,7 +705,7 @@ export function createReader(state, d) {
           setZoomLevel(ZOOM_DBL, clientX, clientY);
         };
 
-        let lastTapT = 0, lastTapX = 0, lastTapY = 0, uiTimer = null, suppressClick = false;
+        let lastTapT = 0, lastTapX = 0, lastTapY = 0, tapTimer = null, suppressClick = false;
         const DBL_MS = 420;
         const DBL_DIST = 56;
 
@@ -695,7 +714,7 @@ export function createReader(state, d) {
           const dt = t - lastTapT;
           const dist = Math.hypot(clientX - lastTapX, clientY - lastTapY);
           if (dt > 0 && dt < DBL_MS && dist < DBL_DIST) {
-            clearTimeout(uiTimer);
+            clearTimeout(tapTimer);
             lastTapT = 0;
             applyZoomAt(clientX, clientY);
             return true;
@@ -703,9 +722,9 @@ export function createReader(state, d) {
           lastTapT = t;
           lastTapX = clientX;
           lastTapY = clientY;
-          clearTimeout(uiTimer);
-          uiTimer = setTimeout(() => {
-            if (!rd.classList.contains('zoom')) rd.classList.toggle('ui-off');
+          clearTimeout(tapTimer);
+          tapTimer = setTimeout(() => {
+            if (!rd.classList.contains('zoom')) toggleUI();
           }, DBL_MS);
           return false;
         };
@@ -772,7 +791,7 @@ export function createReader(state, d) {
               d0: Math.max(1, touchDist(e.touches[0], e.touches[1])),
               z0: Math.max(1, zoomLevel),
             };
-            clearTimeout(uiTimer);
+            clearTimeout(tapTimer);
             lastTapT = 0;
             return;
           }
@@ -900,7 +919,7 @@ export function createReader(state, d) {
           const h = Math.round(window.visualViewport?.height || window.innerHeight);
           rd.style.width = w + 'px';
           rd.style.height = h + 'px';
-          rd.className = 'page fit-' + pref('fit', 'screen') + (pref('spread', '0') === '1' ? ' spread' : '');
+          setRdClass('page fit-' + pref('fit', 'screen') + (pref('spread', '0') === '1' ? ' spread' : ''));
           if (img) {
             img.style.width = '';
             img.style.height = '';
@@ -923,7 +942,7 @@ export function createReader(state, d) {
       } else {
         const GAP = 8; // hueco uniforme siempre
         const fitMode = () => (pref('fit', 'screen') === 'width' ? 'width' : 'screen');
-        rd.className = (horiz ? 'horiz' : 'vert') + ' fit-' + fitMode();
+        setRdClass((horiz ? 'horiz' : 'vert') + ' fit-' + fitMode());
         const fit = el('button', 'btn');
         const fitLabel = () => {
           const w = fitMode() === 'width';
@@ -936,7 +955,7 @@ export function createReader(state, d) {
         let onResize = null;
         fit.onclick = () => {
           setPref('fit', fitMode() === 'screen' ? 'width' : 'screen');
-          rd.className = (horiz ? 'horiz' : 'vert') + ' fit-' + fitMode();
+          setRdClass((horiz ? 'horiz' : 'vert') + ' fit-' + fitMode());
           fitLabel();
           updateStatus();
           pokeUI();
@@ -1237,7 +1256,7 @@ export function createReader(state, d) {
 
         rd.onclick = (ev) => {
           if (ev.target.closest?.('.bar, .next-btn, .mosaic')) return;
-          rd.classList.toggle('ui-off');
+          toggleUI();
         };
 
         onResize = () => {

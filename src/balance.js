@@ -8,8 +8,8 @@
 const ctx = document.createElement('canvas').getContext('2d');
 const SEP_ONLY = /^[-–—:&/·|+]+$/;
 // Márgenes para que la decisión sea la misma en todos los dispositivos aunque cambie la tipografía del sistema
-const ONE_LINE_FIT = 0.98;  // una línea solo si ocupa ≤ 90 % del ancho
-const LINE_FIT = 0.99;     // cada línea de un corte ≤ 98 % del ancho
+const ONE_LINE_FIT = 0.998; // una línea si ocupa ≤ 99.8 % del ancho útil (ya se resta 1 px)
+const LINE_FIT = 0.998;    // cada línea de un corte ≤ 99.8 % del ancho útil
 const isShortWord = (w) => /^\p{L}{1,2}$/u.test(w);
 
 export function tokenize(text) {
@@ -58,7 +58,7 @@ export function layout(tokens, avail, measure) {
   return measure(full) <= avail ? [full] : null;
 }
 
-const AUTO_MIN = 5;
+const AUTO_MIN = 8;
 const AUTO_KINDS = {
   'cover-comic': ['textAutoComic', 'coverTextComic'],
   'cover-series': ['textAutoSeries', 'coverTextSeries'],
@@ -86,8 +86,9 @@ function fitSmall(sm, maxPx) {
   const text = sm.textContent || '';
   if (!(w > 20) || !text) { sm.style.removeProperty('font-size'); return; }
   let size = maxPx;
-  for (; size > AUTO_MIN; size -= 0.5) {
+  for (; size > AUTO_MIN; size -= 0.25) {
     ctx.font = `${scs.fontStyle} ${scs.fontWeight} ${size}px ${scs.fontFamily}`;
+    try { ctx.letterSpacing = scs.letterSpacing === 'normal' ? '0px' : scs.letterSpacing; } catch (_) {}
     if (ctx.measureText(text).width <= w) break;
   }
   size = Math.max(AUTO_MIN, size);
@@ -118,8 +119,9 @@ export function balanceTitles(root = document) {
     if (auto) {
       let size = auto.max;
       lines = null;
-      for (; size >= AUTO_MIN; size -= 0.5) {
+      for (; size >= AUTO_MIN; size -= 0.25) {
         ctx.font = fontAt(cs.fontStyle, size, cs.fontFamily, cs.fontWeight);
+        try { ctx.letterSpacing = cs.letterSpacing === 'normal' ? '0px' : cs.letterSpacing; } catch (_) {}
         lines = layout(tokens, avail, measure);
         if (lines) break;
       }

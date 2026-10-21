@@ -14,7 +14,7 @@ function lsKeysOfInterest() {
       if (!k) continue;
       if (LS_KEYS_EXACT.includes(k) || LS_PREFIXES.some((p) => k.startsWith(p))) out.push(k);
       // meta.js keys
-      if (/^(ug:|sn:|cn:|gn:|chn:|cov:)/.tests(k)) out.push(k);
+      if (/^(ug:|sn:|cn:|gn:|chn:|cov:)/.test(k)) out.push(k);
     }
   } catch (_) {}
   return [...new Set(out)];

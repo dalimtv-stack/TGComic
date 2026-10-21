@@ -174,7 +174,7 @@ export function markComicRead(ch, f, after) {
   }
   try {
     const list = getRecentReads().filter((x) => !(x.ch?.id === ch.id && x.f?.id === f.id));
-    localStorage.setItem(recentKey, JSON.stringify(list.slice(0, 5)));
+    localStorage.setItem(recentKey, JSON.stringify(list.slice(0, 12)));
   } catch (_) {}
   try { sync.schedulePush(); } catch (_) {}
   after?.();

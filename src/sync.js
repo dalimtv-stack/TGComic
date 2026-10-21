@@ -55,7 +55,15 @@ async function userRowId(username) {
   return sha256Hex('tgcomic-user:' + normalizeUser(username));
 }
 
+const _keyCache = new Map();
 async function deriveKey(username, password) {
+  const ck = normalizeUser(username) + '\n' + password;
+  if (_keyCache.has(ck)) return _keyCache.get(ck);
+  const k = await _deriveKey(username, password);
+  _keyCache.set(ck, k);
+  return k;
+}
+async function _deriveKey(username, password) {
   const enc = new TextEncoder();
   const base = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
   const salt = enc.encode('tgcomic-sync-v1:' + normalizeUser(username));
@@ -181,7 +189,8 @@ export function applySnapshot(snap) {
  * - recentReads → unión por id de cómic (remoto primero)
  * - resto (prefs, nombres…) → remoto gana si existe; si no, se conserva local
  */
-function mergeKeyMaps(localKeys, remoteKeys) {
+function mergeKeyMaps(localKeys, remoteKeys, opts = {}) {
+  const preferLocal = !!opts.preferLocal;
   const local = localKeys && typeof localKeys === 'object' ? localKeys : {};
   const remote = remoteKeys && typeof remoteKeys === 'object' ? remoteKeys : {};
   const out = { ...local };
@@ -252,8 +261,8 @@ function mergeKeyMaps(localKeys, remoteKeys) {
         out[k] = rv || lv;
       }
     } else {
-      // prefs, renombres, etc.: el remoto (nube) actualiza al abrir
-      out[k] = rv;
+      // prefs, renombres, etc.: al abrir gana la nube; al subir ganan los cambios locales
+      out[k] = preferLocal ? lv : rv;
     }
   }
   return out;
@@ -373,7 +382,7 @@ export async function login(username, password) {
     throw new Error('Usuario no encontrado. Crea una cuenta primero.');
   }
   const snap = await decryptPayload(u, password, row.payload);
-  applySnapshot(snap);
+  writeKeyMap(mergeKeyMaps(collectSnapshot().keys, snap?.keys));
   saveSession(u, password);
   setMeta(row.updated_at, snapshotByteSize());
   // Tras login, subir estado fusionado (local + remoto) con verificador correcto
@@ -400,8 +409,9 @@ export async function push() {
   const id = await userRowId(u);
   const row = await getRemote(id);
   if (row?.payload) {
-    // Prueba de contraseña en cliente antes de tocar el servidor
-    await decryptPayload(u, p, row.payload);
+    // Prueba de contraseña + fusión: no sobrescribir progreso de otros equipos
+    const remoteSnap = await decryptPayload(u, p, row.payload);
+    writeKeyMap(mergeKeyMaps(collectSnapshot().keys, remoteSnap?.keys, { preferLocal: true }));
   }
   const verifier = await passwordVerifier(u, p);
   const payload = await encryptPayload(u, p, collectSnapshot());
@@ -422,9 +432,33 @@ export async function pull() {
   const remoteKeys = remoteSnap?.keys && typeof remoteSnap.keys === 'object' ? remoteSnap.keys : {};
   const localKeys = localSnap?.keys && typeof localSnap.keys === 'object' ? localSnap.keys : {};
   const merged = mergeKeyMaps(localKeys, remoteKeys);
+  const before = JSON.stringify(localKeys);
   writeKeyMap(merged);
   setMeta(row.updated_at, snapshotByteSize());
+  if (JSON.stringify(collectSnapshot().keys) !== before) {
+    try { window.dispatchEvent(new CustomEvent('tg-sync-pulled')); } catch (_) {}
+  }
   return true;
+}
+
+let autoTimer = null;
+let autoBusy = false;
+/**
+ * Sincronización casi inmediata: pull al volver a la pestaña/app y cada N segundos
+ * mientras está visible. Emite 'tg-sync-pulled' solo si algo cambió.
+ */
+export function startAutoPull(intervalMs = 15000) {
+  if (typeof window === 'undefined' || autoTimer) return;
+  const tick = async () => {
+    if (autoBusy || !isLoggedIn() || document.visibilityState !== 'visible') return;
+    if (pushTimer) return; // hay cambios locales pendientes: primero subirlos
+    autoBusy = true;
+    try { await pull(); } catch (e) { console.warn('[sync] auto-pull', e); } finally { autoBusy = false; }
+  };
+  autoTimer = setInterval(tick, intervalMs);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') tick(); });
+  window.addEventListener('focus', tick);
+  window.addEventListener('online', tick);
 }
 
 let pushTimer = null;
