@@ -147,6 +147,23 @@ const earlyPref = (k, d = '') => {
   } catch { return d; }
 };
 
+
+function applyCoverSizePrefs() {
+  try {
+    const root = document.documentElement;
+    const p = (typeof pref === 'function') ? pref : earlyPref;
+    const comic = Math.max(120, Math.min(400, +(p('coverHComic', '225') || 225)));
+    const series = Math.max(120, Math.min(400, +(p('coverHSeries', '225') || 225)));
+    const channel = Math.max(100, Math.min(400, +(p('coverHChannel', '225') || 225)));
+    root.style.setProperty('--cover-h-comic', comic + 'px');
+    root.style.setProperty('--cover-h-series', series + 'px');
+    root.style.setProperty('--cover-h-channel', channel + 'px');
+    root.style.setProperty('--cover-min-comic', Math.round(comic * 2 / 3) + 'px');
+  } catch (_) {}
+}
+try { applyCoverSizePrefs(); } catch (_) {}
+try { window.applyCoverSizePrefs = applyCoverSizePrefs; } catch (_) {}
+
 const pageCache = createPageCache({ kv, pref: earlyPref });
 let jobQueue = null;
 
@@ -800,8 +817,6 @@ function showViewerConfig() {
     (v) => setPref('fit', v)
   );
 
-  section('Caché de páginas (lectura)');
-  
   section('Menú del visor');
   const hideWrap = el('div');
   const hideLab = el('label', 'sync-label', 'Ocultar menús tras (segundos)');
@@ -820,8 +835,9 @@ function showViewerConfig() {
   hideWrap.append(hideLab, hideInp, hideHint);
   body.append(hideWrap);
 
-const pcWrap = el('div', 'cfg-group');
-  const pcLab = el('p', 'sync-status', 'Máximo de caché de páginas (MB)');
+  section('Caché de páginas (lectura)');
+  const pcWrap = el('div', 'cfg-group');
+  const pcLab = el('label', 'sync-label', 'Máximo de caché de páginas (MB)');
   const pcInp = el('input', 'edit-input');
   pcInp.type = 'number';
   pcInp.min = '50';
@@ -1282,7 +1298,7 @@ async function fetchArtBlob(url, cached) {
 }
 
 function art(kind, name, ch) {
-  const d = el('div', kind === 'groups' ? 'cover square' : 'cover');
+  const d = el('div', kind === 'groups' ? 'cover square cover-channel' : 'cover cover-channel');
   const ltr = el('span', '', name.slice(0, 1).toUpperCase());
   d.append(ltr);
   const nfc = name.normalize('NFC').trim();

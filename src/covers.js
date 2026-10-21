@@ -221,7 +221,7 @@ export function createCovers(state, d) {
   }), { rootMargin: '400px' });
 
   function comicCover(ch, f, badge, series) {
-    const d = el('div', 'cover');
+    const d = el('div', 'cover cover-comic');
     const ltr = el('span', '', stripExt(f.name).slice(0, 1).toUpperCase());
     d.append(ltr);
     if (badge != null && badge !== '') {

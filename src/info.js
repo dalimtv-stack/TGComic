@@ -837,7 +837,7 @@ function seriesReadProgress(ch, files) {
 }
 
 function seriesCoverNode(ch, seriesLabel, files, badge) {
-  const d = el('div', 'cover'), ltr = el('span', '', (seriesDisplayName(ch, seriesLabel) || seriesLabel || '?').slice(0, 1).toUpperCase());
+  const d = el('div', 'cover cover-series'), ltr = el('span', '', (seriesDisplayName(ch, seriesLabel) || seriesLabel || '?').slice(0, 1).toUpperCase());
   d.append(ltr);
   if (badge != null && badge !== '') {
     d.append(el('span', 'badge series', String(badge)));
@@ -1100,7 +1100,7 @@ function applyCoverProgress(node, prog) {
 }
 
 function channelCoverNode(ch, files) {
-  const host = el('div', 'cover');
+  const host = el('div', 'cover cover-channel');
   const letter = el('span', '', (channelDisplayName(ch) || '?').slice(0, 1).toUpperCase());
   host.append(letter);
   const prog = channelReadProgress(ch, files);

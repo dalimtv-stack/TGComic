@@ -644,6 +644,80 @@ export function createProTools(d) {
     );
   }
 
+
+  function showImageConfig() {
+    document.querySelector('.info-frame.img-cfg')?.remove();
+    const frame = el('div', 'info-frame img-cfg');
+    const box = el('div', 'info-box');
+    const head = el('div', 'info-head');
+    head.append(el('span', '', 'Configuración Imágenes'));
+    const close = el('button', 'btn info-close', '×');
+    close.onclick = () => frame.remove();
+    head.append(close);
+    const body = el('div', 'info-body');
+    body.append(el('p', 'cover-pick-hint',
+      'Altura de las portadas en este dispositivo (no se sincroniza). El texto debajo se adapta al tamaño.'
+    ));
+
+    const mk = (key, label, def) => {
+      const wrap = el('div', 'cfg-group');
+      const lab = el('label', 'sync-label', label + ' (px)');
+      const inp = el('input', 'edit-input');
+      inp.type = 'number';
+      inp.min = '100';
+      inp.max = '400';
+      inp.step = '5';
+      const cur = Math.max(100, Math.min(400, +(pref(key, String(def)) || def)));
+      inp.value = String(cur);
+      const hint = el('p', 'cover-pick-hint', 'Actual: ' + cur + ' px');
+      inp.oninput = () => {
+        const v = Math.max(100, Math.min(400, +inp.value || def));
+        hint.textContent = 'Actual: ' + v + ' px';
+      };
+      inp.onchange = () => {
+        const v = Math.max(100, Math.min(400, +inp.value || def));
+        inp.value = String(v);
+        setPref(key, String(v));
+        hint.textContent = 'Actual: ' + v + ' px';
+        try {
+          if (typeof window.applyCoverSizePrefs === 'function') window.applyCoverSizePrefs();
+          else if (typeof applyCoverSizePrefs === 'function') applyCoverSizePrefs();
+          else {
+            const root = document.documentElement;
+            if (key === 'coverHComic') root.style.setProperty('--cover-h-comic', v + 'px');
+            if (key === 'coverHSeries') root.style.setProperty('--cover-h-series', v + 'px');
+            if (key === 'coverHChannel') root.style.setProperty('--cover-h-channel', v + 'px');
+            if (key === 'coverHComic') root.style.setProperty('--cover-min-comic', Math.round(v * 2 / 3) + 'px');
+          }
+        } catch (_) {}
+        try { onCoversChanged?.(); } catch (_) {}
+      };
+      wrap.append(lab, inp, hint);
+      body.append(wrap);
+    };
+    mk('coverHComic', 'Portadas de los cómics', 225);
+    mk('coverHSeries', 'Portadas de las series', 225);
+    mk('coverHChannel', 'Portadas de los canales', 225);
+
+    const actions = el('div', 'edit-actions');
+    const reset = el('button', 'btn', 'Restaurar valores');
+    reset.onclick = () => {
+      setPref('coverHComic', '225');
+      setPref('coverHSeries', '225');
+      setPref('coverHChannel', '225');
+      try { (window.applyCoverSizePrefs || (typeof applyCoverSizePrefs === 'function' ? applyCoverSizePrefs : null))?.(); } catch (_) {}
+      frame.remove();
+      showImageConfig();
+    };
+    const done = el('button', 'btn edit-save', 'Listo');
+    done.onclick = () => frame.remove();
+    actions.append(reset, done);
+    body.append(actions);
+    box.append(head, body);
+    frame.append(box);
+    document.body.append(frame);
+  }
+
   /** Menú Configuración Avanzada */
   function showAdvancedConfig() {
     try { closeAppMenu?.(); } catch (_) {}
@@ -659,6 +733,14 @@ export function createProTools(d) {
     body.append(el('p', 'cover-pick-hint',
       'Herramientas de mantenimiento de la caché local.'
     ));
+
+    const imgCfgBtn = el('button', 'btn cover-pick-device', 'Configuración Imágenes');
+    imgCfgBtn.type = 'button';
+    imgCfgBtn.onclick = () => {
+      frame.remove();
+      showImageConfig();
+    };
+    body.append(imgCfgBtn);
 
     const reloadCoversBtn = el('button', 'btn protools-accent', 'Recargar portadas');
     reloadCoversBtn.type = 'button';

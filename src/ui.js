@@ -347,11 +347,12 @@ function grid(items, withSearch, searchPlaceholder) {
   }));
   };
   if (withSearch) {
-    const wrap = el('div', 'search-wrap');
+    // Mismo layout que canales (editorial): home-search-wrap, sin #search con márgenes extra
+    const wrap = el('div', 'home-search-wrap');
     const s = el('input');
-    s.id = 'search';
     s.type = 'search';
     s.placeholder = searchPlaceholder || 'Buscar…';
+    s.autocomplete = 'off';
     const clear = el('button', 'search-clear', '×');
     clear.type = 'button';
     clear.hidden = true;
