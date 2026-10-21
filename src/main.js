@@ -52,6 +52,26 @@ const SEP = '::', TSEP = ':', POST = SEP + 'tgstorage', LIBRARY = 'comics', MB =
 const natural = (a, b) => a.localeCompare(b, undefined, { numeric: true });
 const pref = (k, d) => localStorage.getItem('pref:' + k) || d;
 const setPref = (k, v) => { localStorage.setItem('pref:' + k, v); try { sync.schedulePush(); } catch (_) {} };
+
+// Ajustes SOLO de este dispositivo (tamaño de portadas y textos): prefijo propio 'device:'.
+// No pasan por setPref → nunca se envían ni se reciben en la sincronización entre dispositivos.
+const DEV_PREFIX = 'device:';
+const COVER_KEYS = ['coverHComic', 'coverHSeries', 'coverHChannel', 'coverTextComic', 'coverTextSeries', 'coverTextChannel'];
+const devPref = (k, d) => {
+  try { const v = localStorage.getItem(DEV_PREFIX + k); return v == null || v === '' ? d : v; } catch { return d; }
+};
+const setDevPref = (k, v) => { try { localStorage.setItem(DEV_PREFIX + k, String(v)); } catch (_) {} };
+// Migración: valores antiguos pref:cover* (se sincronizaban) → locales; se borran de pref:* para que no vuelvan a viajar
+(() => {
+  try {
+    for (const k of COVER_KEYS) {
+      const old = localStorage.getItem('pref:' + k);
+      if (old == null) continue;
+      if (localStorage.getItem(DEV_PREFIX + k) == null) localStorage.setItem(DEV_PREFIX + k, old);
+      localStorage.removeItem('pref:' + k);
+    }
+  } catch (_) {}
+})();
 /** Evita el zoom atascado de iOS al girar el dispositivo */
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 
@@ -151,10 +171,10 @@ const earlyPref = (k, d = '') => {
 function applyCoverSizePrefs() {
   try {
     const root = document.documentElement;
-    const p = (typeof pref === 'function') ? pref : earlyPref;
+    const p = devPref;
     // Preferencia = altura deseada; el ancho de celda es alto × 2/3 (ratio 2:3)
-    const comic = Math.max(120, Math.min(400, +(p('coverHComic', '225') || 225)));
-    const series = Math.max(120, Math.min(400, +(p('coverHSeries', '225') || 225)));
+    const comic = Math.max(100, Math.min(400, +(p('coverHComic', '225') || 225)));
+    const series = Math.max(100, Math.min(400, +(p('coverHSeries', '225') || 225)));
     const channel = Math.max(100, Math.min(400, +(p('coverHChannel', '225') || 225)));
     const wComic = Math.round(comic * 2 / 3);
     const wSeries = Math.round(series * 2 / 3);
@@ -176,6 +196,12 @@ function applyCoverSizePrefs() {
 }
 try { applyCoverSizePrefs(); } catch (_) {}
 try { window.applyCoverSizePrefs = applyCoverSizePrefs; } catch (_) {}
+// Si otra pestaña cambia los tamaños de este dispositivo, aplicarlos aquí también
+try {
+  window.addEventListener('storage', (e) => {
+    if (e.key && e.key.startsWith(DEV_PREFIX)) applyCoverSizePrefs();
+  });
+} catch (_) {}
 
 const pageCache = createPageCache({ kv, pref: earlyPref });
 let jobQueue = null;
@@ -1789,6 +1815,8 @@ const proTools = createProTools({
   kv,
   pref,
   setPref,
+  devPref,
+  setDevPref,
   get LIB() { return LIB; },
   getCover,
   groupSeries,
@@ -1854,6 +1882,7 @@ async function migrateCacheImages() {
   if (!apiId || !apiHash) return msg('Faltan VITE_API_ID y VITE_API_HASH.');
   // Sync antes de biblioteca / seguir leyendo
   try { await sync.syncOnStartup(); } catch (_) {}
+  try { applyCoverSizePrefs(); } catch (_) {} // por si la sincronización tocó algo: los tamaños son locales
   LIB = (await kv.get('lib')) || [];
   // Migrar progreso legado page:msg → page:ch:msg solo para cómics conocidos; borra legados sueltos
   try {

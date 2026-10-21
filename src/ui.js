@@ -314,7 +314,10 @@ function showDescriptionPanel(text) {
 
 function grid(items, withSearch, searchPlaceholder, gridKind) {
   // gridKind: 'comics' | 'series' | 'channels' | 'mixed'
-  const kind = gridKind || 'mixed';
+  // Tipo de rejilla según lo que contiene de verdad (no según la pista del llamador)
+  const KIND_CLASS = { comic: 'comics', series: 'series', channel: 'channels' };
+  const kinds = new Set(items.map((i) => KIND_CLASS[i.kind]).filter(Boolean));
+  const kind = kinds.size === 1 ? [...kinds][0] : (kinds.size > 1 ? 'mixed' : (gridKind || 'mixed'));
   const g = el('div', 'grid grid-' + kind), nodes = [];
   const matchItem = (i, q) => {
     if (!q) return true;
@@ -329,7 +332,13 @@ function grid(items, withSearch, searchPlaceholder, gridKind) {
     }
     g.replaceChildren(...list.map((i) => {
     const c = el('div', 'card'), hit = el('button', 'hit'), name = el('div', 'name'), t = el('b', '', i.label);
-    hit.append(i.cover());
+    const cv = i.cover();
+    // La portada lleva SIEMPRE la clase de su tipo (comic/series/channel): ancho y texto salen de sus propios ajustes
+    if (i.kind && cv && cv.classList) {
+      cv.classList.remove('cover-comic', 'cover-series', 'cover-channel');
+      cv.classList.add('cover-' + i.kind);
+    }
+    hit.append(cv);
     hit.onclick = i.go;
     if (i.longPress) bindLongPress(hit, i.longPress);
     if (i.menu) {

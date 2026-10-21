@@ -41,6 +41,21 @@ export function createProTools(d) {
     } catch (_) {}
   };
 
+  // Tamaños de portadas/textos: SOLO este dispositivo ('device:'), nunca sincronizados
+  const devPref = (k, def = '') => {
+    try {
+      if (typeof d.devPref === 'function') return d.devPref(k, def);
+      const v = localStorage.getItem('device:' + k);
+      return v == null || v === '' ? def : v;
+    } catch { return def; }
+  };
+  const setDevPref = (k, v) => {
+    try {
+      if (typeof d.setDevPref === 'function') return d.setDevPref(k, v);
+      localStorage.setItem('device:' + k, String(v));
+    } catch (_) {}
+  };
+
   const getLIB = () => (typeof d.LIB === 'function' ? d.LIB() : d.LIB) || [];
 
   function uniqueSorted(arr, cmp) {
@@ -699,7 +714,7 @@ export function createProTools(d) {
       inpH.min = '100';
       inpH.max = '400';
       inpH.step = '5';
-      let curH = Math.max(100, Math.min(400, +(pref(coverKey, String(coverDef)) || coverDef)));
+      let curH = Math.max(100, Math.min(400, +(devPref(coverKey, String(coverDef)) || coverDef)));
       inpH.value = String(curH);
       const hintH = () => 'Actual: ' + inpH.value + ' px · por defecto ' + coverDef;
       const hintHEl = el('p', 'cfg-hint', hintH());
@@ -710,7 +725,7 @@ export function createProTools(d) {
       inpH.onchange = () => {
         const v = Math.max(100, Math.min(400, +inpH.value || coverDef));
         inpH.value = String(v);
-        setPref(coverKey, String(v));
+        setDevPref(coverKey, String(v));
         hintHEl.textContent = hintH();
         applyNow();
       };
@@ -725,7 +740,7 @@ export function createProTools(d) {
       inpT.min = '8';
       inpT.max = '32';
       inpT.step = '1';
-      let curT = Math.max(8, Math.min(32, +(pref(textKey, String(textDef)) || textDef)));
+      let curT = Math.max(8, Math.min(32, +(devPref(textKey, String(textDef)) || textDef)));
       inpT.value = String(curT);
       const hintT = () => 'Actual: ' + inpT.value + ' px · por defecto ' + textDef;
       const hintTEl = el('p', 'cfg-hint', hintT());
@@ -736,7 +751,7 @@ export function createProTools(d) {
       inpT.onchange = () => {
         const v = Math.max(8, Math.min(32, +inpT.value || textDef));
         inpT.value = String(v);
-        setPref(textKey, String(v));
+        setDevPref(textKey, String(v));
         hintTEl.textContent = hintT();
         applyNow();
       };
@@ -756,12 +771,12 @@ export function createProTools(d) {
     const actions = el('div', 'edit-actions');
     const reset = el('button', 'btn', 'Restaurar valores');
     reset.onclick = () => {
-      setPref('coverHComic', '225');
-      setPref('coverHSeries', '225');
-      setPref('coverHChannel', '225');
-      setPref('coverTextComic', '15');
-      setPref('coverTextSeries', '15');
-      setPref('coverTextChannel', '15');
+      setDevPref('coverHComic', '225');
+      setDevPref('coverHSeries', '225');
+      setDevPref('coverHChannel', '225');
+      setDevPref('coverTextComic', '15');
+      setDevPref('coverTextSeries', '15');
+      setDevPref('coverTextChannel', '15');
       applyNow();
       frame.remove();
       showImageConfig();

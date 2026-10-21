@@ -104,7 +104,13 @@ function cardNode(i) {
   const c = el('div', 'card');
   if (i.hiddenMeta) c.classList.add('card-locked');
   const hit = el('button', 'hit');
-  hit.append(i.cover());
+  const cv = i.cover();
+  // La portada lleva siempre la clase de su tipo (comic/series/channel), también si está bloqueada
+  if (i.kind && cv && cv.classList) {
+    cv.classList.remove('cover-comic', 'cover-series', 'cover-channel');
+    cv.classList.add('cover-' + i.kind);
+  }
+  hit.append(cv);
   hit.onclick = i.go;
   if (i.longPress) bindLongPress(hit, i.longPress);
   c.append(hit);
@@ -648,6 +654,7 @@ function channelsView(g) {
         const n = files.length;
         const label = channelDisplayName(ch);
         gridItems.push({
+          kind: 'channel',
           cover: () => locks.isContentRestricted('channel', ch)
             ? locks.lockedCoverNode(ART)
             : channelCoverNode(ch, files),
@@ -828,6 +835,7 @@ function filesView(ch) {
         }]);
         const comicRestricted = locks.isContentRestricted('comic', { ch, f });
         return {
+          kind: 'comic',
           label: comicRestricted ? '' : label,
           sub: comicRestricted ? '' : sizeLabel(f, ch),
           searchText: (label + ' ' + (f.name || '') + ' ' + (seriesLabel || '')).toLowerCase(),
@@ -909,6 +917,7 @@ function filesView(ch) {
           const seriesRestricted = locks.isContentRestricted('series', { ch, seriesLabel });
           const seriesLockOpts = () => lockToggleOpts('series', { ch, seriesLabel }, seriesDisplayName(ch, seriesLabel), redraw);
           items.push({
+            kind: 'series',
             label: seriesRestricted ? '' : seriesShown,
             sub: `${fs.length} números`,
             searchText: seriesSearch,
@@ -1010,6 +1019,7 @@ function seriesView(ch, s, files) {
           ['Añadir versión WebP', () => { try { repackTool?.offerWebpVersion?.(ch, f); } catch (err) { appAlert(err?.message || err); } }],
         ];
         return {
+          kind: 'comic',
           label: displayLabel,
           sub: sizeLabel(f, ch),
           searchText: (displayLabel + ' ' + (f.name || '')).toLowerCase(),
