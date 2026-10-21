@@ -159,9 +159,9 @@ function applyCoverSizePrefs() {
     const wComic = Math.round(comic * 2 / 3);
     const wSeries = Math.round(series * 2 / 3);
     const wChannel = Math.round(channel * 2 / 3);
-    const tComic = Math.max(10, Math.min(28, +(p('coverTextComic', '15') || 15)));
-    const tSeries = Math.max(10, Math.min(28, +(p('coverTextSeries', '15') || 15)));
-    const tChannel = Math.max(10, Math.min(28, +(p('coverTextChannel', '15') || 15)));
+    const tComic = Math.max(8, Math.min(32, +(p('coverTextComic', '15') || 15)));
+    const tSeries = Math.max(8, Math.min(32, +(p('coverTextSeries', '15') || 15)));
+    const tChannel = Math.max(8, Math.min(32, +(p('coverTextChannel', '15') || 15)));
     root.style.setProperty('--cover-h-comic', comic + 'px');
     root.style.setProperty('--cover-h-series', series + 'px');
     root.style.setProperty('--cover-h-channel', channel + 'px');

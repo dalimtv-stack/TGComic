@@ -21,37 +21,55 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 .grid.grid-series{--cover-grid-min:var(--cover-w-series,150px)}
 .grid.grid-channels{--cover-grid-min:var(--cover-w-channel,150px)}
 .grid.grid-mixed{--cover-grid-min:max(var(--cover-w-comic,150px),var(--cover-w-series,150px))}
-.card{border:0;background:none;color:inherit;font:inherit;text-align:center;cursor:default;padding:0;min-width:0}
-.hit{display:block;width:100%;padding:0;border:0;background:transparent;color:inherit;cursor:pointer}
-/* Cada tipo tiene SU ancho; altura por ratio 2:3. No se pisan entre sí. */
+.card{
+  border:0;background:none;color:inherit;font:inherit;text-align:center;cursor:default;padding:0;min-width:0;
+  display:flex;flex-direction:column;align-items:center;
+}
+.hit{
+  display:flex;justify-content:center;align-items:stretch;
+  width:100%;padding:0;border:0;background:transparent;color:inherit;cursor:pointer;
+}
+/* Portada: ancho por tipo (no el de cómics por defecto) */
 .cover{
   -webkit-touch-callout:none;-webkit-user-select:none;user-select:none;
-  position:relative;aspect-ratio:2/3;height:auto;
-  width:min(100%,var(--cover-w-comic,150px));
-  max-width:100%;margin:0;border-radius:14px;background:var(--card);overflow:hidden;
+  position:relative;aspect-ratio:2/3;height:auto;width:100%;max-width:100%;
+  margin:0;border-radius:14px;background:var(--card);overflow:hidden;
   display:grid;place-items:center;font-size:2.4rem;font-weight:700;color:var(--mut);
   box-shadow:0 6px 18px #0007;
 }
 .cover.cover-comic{width:min(100%,var(--cover-w-comic,150px))}
 .cover.cover-series{width:min(100%,var(--cover-w-series,150px))}
 .cover.cover-channel{width:min(100%,var(--cover-w-channel,150px))}
+/* Meta centrada bajo la portada, mismo ancho, sin sobresalir */
+.card .name,
+.card > small{
+  box-sizing:border-box;width:min(100%,var(--meta-w,100%));max-width:100%;
+  margin-left:auto;margin-right:auto;padding:0 2px;text-align:center;
+  overflow:hidden;
+}
+.card:has(.cover-comic){--meta-w:var(--cover-w-comic,150px)}
+.card:has(.cover-series){--meta-w:var(--cover-w-series,150px)}
+.card:has(.cover-channel){--meta-w:var(--cover-w-channel,150px)}
 .card .name{margin-top:.45rem}
-/* Tipografía ligada al ancho de ESE tipo de portada */
+/* Texto: editoriales usan tamaño fijo; cómic/serie/canal usan sus variables */
 .card b{
-  display:-webkit-box;margin-top:.5rem;font-weight:600;line-height:1.25;
+  display:-webkit-box;margin:0;font-weight:600;line-height:1.25;
   -webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
-  font-size:var(--text-comic,15px)!important;
+  font-size:.92rem;max-width:100%;
 }
 .card small{
-  color:var(--mut);display:block;
-  font-size:calc(var(--text-comic,15px) * .88)!important;
+  color:var(--mut);display:block;font-size:.78rem;max-width:100%;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
+.card:has(.cover-comic) b{font-size:var(--text-comic,15px)!important}
+.card:has(.cover-comic) small{font-size:calc(var(--text-comic,15px) * .88)!important}
 .card:has(.cover-series) b{font-size:var(--text-series,15px)!important}
 .card:has(.cover-series) small{font-size:calc(var(--text-series,15px) * .88)!important}
 .card:has(.cover-channel) b{font-size:var(--text-channel,15px)!important}
 .card:has(.cover-channel) small{font-size:calc(var(--text-channel,15px) * .88)!important}
-.card:has(.cover-comic) b{font-size:var(--text-comic,15px)!important}
-.card:has(.cover-comic) small{font-size:calc(var(--text-comic,15px) * .88)!important}
+/* Editoriales (cuadradas): nunca heredan texto de cómics */
+.card:has(.cover.square) b{font-size:.92rem!important}
+.card:has(.cover.square) small{font-size:.78rem!important}
 .cover img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
 .cover.landscape{background:transparent}
 .cover.landscape img{object-fit:contain;object-position:center;inset:0;width:100%;height:100%;transform:none}
@@ -724,10 +742,15 @@ textarea.meta-desc-lg.edit-input{
 .cfg-field .edit-input{margin:.25rem 0 .15rem}
 .cfg-field .sync-label{margin:.15rem 0 .15rem}
 .cfg-block{
-  margin:.55rem 0 .85rem;padding:.75rem .85rem .55rem;
+  margin:.55rem 0 .85rem;padding:.85rem .9rem .7rem;
   border-radius:14px;background:#ffffff0a;border:1px solid #ffffff0c;
 }
-.cfg-block .info-sec{margin:.1rem 0 .45rem}
-.cfg-block .edit-input{margin:.2rem 0 .15rem}
-.cfg-block .sync-label{margin:.35rem 0 .1rem}
-.cfg-hint{margin:0 0 .35rem;color:var(--mut);font-size:.75rem;line-height:1.3}
+.cfg-block .info-sec{margin:0 0 .55rem}
+.cfg-block .cfg-row{margin:0 0 .65rem}
+.cfg-block .cfg-row:last-child{margin-bottom:.15rem}
+.cfg-block .sync-label{margin:0 0 .2rem;font-size:.85rem;color:var(--fg);font-weight:600}
+.cfg-hint{
+  margin:0 0 .35rem;color:var(--mut);font-size:.75rem;line-height:1.25;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.cfg-block .edit-input{margin:0;height:44px}

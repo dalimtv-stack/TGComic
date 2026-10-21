@@ -671,7 +671,7 @@ export function createProTools(d) {
     head.append(close);
     const body = el('div', 'info-body');
     body.append(el('p', 'cover-pick-hint',
-      'Solo en este dispositivo (no se sincroniza). Portada = alto en px (ratio 2:3). Texto = tamaño del título bajo la portada.'
+      'Solo este dispositivo. No afecta a editoriales de la home.'
     ));
 
     const applyNow = () => {
@@ -682,53 +682,69 @@ export function createProTools(d) {
       try { onCoversChanged?.(); } catch (_) {}
     };
 
+    const field = (parent, label, hint, inp) => {
+      const row = el('div', 'cfg-row');
+      row.append(el('label', 'sync-label', label));
+      row.append(el('p', 'cfg-hint', hint));
+      row.append(inp);
+      parent.append(row);
+    };
+
     const block = (title, coverKey, textKey, coverDef, textDef) => {
       const boxB = el('div', 'cfg-block');
       boxB.append(el('div', 'info-sec', title));
 
-      const labH = el('label', 'sync-label', 'Altura de portada (px)');
       const inpH = el('input', 'edit-input');
       inpH.type = 'number';
       inpH.min = '100';
       inpH.max = '400';
       inpH.step = '5';
-      const curH = Math.max(100, Math.min(400, +(pref(coverKey, String(coverDef)) || coverDef)));
+      let curH = Math.max(100, Math.min(400, +(pref(coverKey, String(coverDef)) || coverDef)));
       inpH.value = String(curH);
-      const hintH = el('p', 'cfg-hint', 'Actual: ' + curH + ' px');
+      const hintH = () => 'Actual: ' + inpH.value + ' px · por defecto ' + coverDef;
+      const hintHEl = el('p', 'cfg-hint', hintH());
       inpH.oninput = () => {
         const v = Math.max(100, Math.min(400, +inpH.value || coverDef));
-        hintH.textContent = 'Actual: ' + v + ' px';
+        hintHEl.textContent = 'Actual: ' + v + ' px · por defecto ' + coverDef;
       };
       inpH.onchange = () => {
         const v = Math.max(100, Math.min(400, +inpH.value || coverDef));
         inpH.value = String(v);
         setPref(coverKey, String(v));
-        hintH.textContent = 'Actual: ' + v + ' px';
+        hintHEl.textContent = hintH();
         applyNow();
       };
-      boxB.append(labH, inpH, hintH);
+      const rowH = el('div', 'cfg-row');
+      rowH.append(el('label', 'sync-label', 'Altura de portada (px)'));
+      rowH.append(hintHEl);
+      rowH.append(inpH);
+      boxB.append(rowH);
 
-      const labT = el('label', 'sync-label', 'Tamaño del texto (px)');
       const inpT = el('input', 'edit-input');
       inpT.type = 'number';
-      inpT.min = '10';
-      inpT.max = '28';
+      inpT.min = '8';
+      inpT.max = '32';
       inpT.step = '1';
-      const curT = Math.max(10, Math.min(28, +(pref(textKey, String(textDef)) || textDef)));
+      let curT = Math.max(8, Math.min(32, +(pref(textKey, String(textDef)) || textDef)));
       inpT.value = String(curT);
-      const hintT = el('p', 'cfg-hint', 'Actual: ' + curT + ' px · subtítulo un poco menor');
+      const hintT = () => 'Actual: ' + inpT.value + ' px · por defecto ' + textDef;
+      const hintTEl = el('p', 'cfg-hint', hintT());
       inpT.oninput = () => {
-        const v = Math.max(10, Math.min(28, +inpT.value || textDef));
-        hintT.textContent = 'Actual: ' + v + ' px · subtítulo un poco menor';
+        const v = Math.max(8, Math.min(32, +inpT.value || textDef));
+        hintTEl.textContent = 'Actual: ' + v + ' px · por defecto ' + textDef;
       };
       inpT.onchange = () => {
-        const v = Math.max(10, Math.min(28, +inpT.value || textDef));
+        const v = Math.max(8, Math.min(32, +inpT.value || textDef));
         inpT.value = String(v);
         setPref(textKey, String(v));
-        hintT.textContent = 'Actual: ' + v + ' px · subtítulo un poco menor';
+        hintTEl.textContent = hintT();
         applyNow();
       };
-      boxB.append(labT, inpT, hintT);
+      const rowT = el('div', 'cfg-row');
+      rowT.append(el('label', 'sync-label', 'Tamaño del texto (px)'));
+      rowT.append(hintTEl);
+      rowT.append(inpT);
+      boxB.append(rowT);
 
       body.append(boxB);
     };
