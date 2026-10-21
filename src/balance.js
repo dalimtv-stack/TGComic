@@ -58,7 +58,7 @@ export function layout(tokens, avail, measure) {
   return measure(full) <= avail ? [full] : null;
 }
 
-const AUTO_MIN = 8;
+const AUTO_MIN = 5;
 const AUTO_KINDS = {
   'cover-comic': ['textAutoComic', 'coverTextComic'],
   'cover-series': ['textAutoSeries', 'coverTextSeries'],
