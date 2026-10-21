@@ -838,7 +838,8 @@ function filesView(ch) {
         }]);
         const comicRestricted = locks.isContentRestricted('comic', { ch, f });
         return {
-          kind: 'comic',
+          // En la vista de series/canal, los cómics sueltos usan los ajustes de SERIES (misma portada y texto que el resto)
+          kind: 'series',
           label: comicRestricted ? '' : label,
           sub: comicRestricted ? '' : sizeLabel(f, ch),
           searchText: (label + ' ' + (f.name || '') + ' ' + (seriesLabel || '')).toLowerCase(),
