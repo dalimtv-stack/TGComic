@@ -198,6 +198,20 @@ function applyCoverSizePrefs() {
 }
 try { applyCoverSizePrefs(); } catch (_) {}
 try { window.applyCoverSizePrefs = applyCoverSizePrefs; } catch (_) {}
+
+/** Rejilla local (device:, no se sincroniza): fill | fixed */
+function applyGridLayoutPref() {
+  try {
+    const v = (typeof devPref === 'function' ? devPref('gridLayout', 'fill') : null)
+      || localStorage.getItem('device:gridLayout')
+      || 'fill';
+    document.documentElement.setAttribute('data-grid-layout', v === 'fixed' ? 'fixed' : 'fill');
+  } catch (_) {
+    try { document.documentElement.setAttribute('data-grid-layout', 'fill'); } catch (_) {}
+  }
+}
+try { applyGridLayoutPref(); } catch (_) {}
+try { window.applyGridLayoutPref = applyGridLayoutPref; } catch (_) {}
 // Si otra pestaña cambia los tamaños de este dispositivo, aplicarlos aquí también
 try {
   window.addEventListener('storage', (e) => {
@@ -1819,6 +1833,7 @@ const proTools = createProTools({
   setPref,
   devPref,
   setDevPref,
+  applyGridLayoutPref,
   get LIB() { return LIB; },
   getCover,
   groupSeries,

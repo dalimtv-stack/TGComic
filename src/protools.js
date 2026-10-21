@@ -805,6 +805,83 @@ export function createProTools(d) {
     document.body.append(frame);
   }
 
+
+  function getGridLayout() {
+    try {
+      const v = devPref('gridLayout', 'fill');
+      return v === 'fixed' ? 'fixed' : 'fill';
+    } catch (_) { return 'fill'; }
+  }
+  function setGridLayout(mode) {
+    const m = mode === 'fixed' ? 'fixed' : 'fill';
+    try { setDevPref('gridLayout', m); } catch (_) {}
+    try {
+      if (typeof d.applyGridLayoutPref === 'function') d.applyGridLayoutPref();
+      else if (typeof window.applyGridLayoutPref === 'function') window.applyGridLayoutPref();
+      else document.documentElement.setAttribute('data-grid-layout', m);
+    } catch (_) {}
+  }
+
+  function showGridConfig() {
+    try { closeAppMenu?.(); } catch (_) {}
+    document.querySelector('.info-frame.grid-config')?.remove();
+    const frame = el('div', 'info-frame grid-config');
+    const box = el('div', 'info-box');
+    const head = el('div', 'info-head');
+    head.append(el('span', '', 'Configuración de rejillas'));
+    const close = el('button', 'btn info-close', '×');
+    close.onclick = () => frame.remove();
+    head.append(close);
+    const body = el('div', 'info-body');
+    body.append(el('p', 'cover-pick-hint',
+      'Solo este dispositivo. No se sincroniza entre aparatos.'
+    ));
+    body.append(el('div', 'info-sec', 'Tipo de rejilla'));
+
+    const wrap = el('div', 'cfg-group');
+    const btns = [];
+    const paint = () => {
+      const cur = getGridLayout();
+      btns.forEach(({ b, val }) => b.classList.toggle('on', val === cur));
+    };
+    const options = [
+      {
+        val: 'fill',
+        label: 'Llenar ancho',
+        desc: 'Las portadas crecen para ocupar todo el ancho disponible. Casi no hay huecos a los lados. En pantallas grandes se ven más grandes.',
+      },
+      {
+        val: 'fixed',
+        label: 'Tamaño fijo (centrado)',
+        desc: 'Las portadas mantienen el tamaño configurado. El espacio sobrante va a los lados. La distancia entre portadas es siempre la misma.',
+      },
+    ];
+    for (const opt of options) {
+      const b = el('button', 'cfg-toggle', opt.label);
+      b.type = 'button';
+      b.onclick = () => { setGridLayout(opt.val); paint(); };
+      btns.push({ b, val: opt.val });
+      wrap.append(b);
+      const hint = el('p', 'cfg-hint', opt.desc);
+      hint.style.whiteSpace = 'normal';
+      hint.style.overflow = 'visible';
+      hint.style.textOverflow = 'unset';
+      hint.style.margin = '0.25rem 0 0.85rem';
+      wrap.append(hint);
+    }
+    body.append(wrap);
+    paint();
+
+    const actions = el('div', 'edit-actions');
+    const cancel = el('button', 'btn', 'Cerrar');
+    cancel.onclick = () => frame.remove();
+    actions.append(cancel);
+    body.append(actions);
+    box.append(head, body);
+    frame.append(box);
+    document.body.append(frame);
+  }
+
   /** Menú Configuración Avanzada */
   function showAdvancedConfig() {
     try { closeAppMenu?.(); } catch (_) {}
@@ -902,6 +979,7 @@ export function createProTools(d) {
 
   return {
     showAdvancedConfig,
+    showGridConfig,
     showReloadCoversFrame,
   };
 }
