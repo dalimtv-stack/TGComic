@@ -26,6 +26,21 @@ export function createProTools(d) {
     openPages,
   } = d;
 
+  // Preferencias solo locales (mismo prefijo que main)
+  const pref = (k, def = '') => {
+    try {
+      if (typeof d.pref === 'function') return d.pref(k, def);
+      const v = localStorage.getItem('pref:' + k);
+      return v == null ? def : v;
+    } catch { return def; }
+  };
+  const setPref = (k, v) => {
+    try {
+      if (typeof d.setPref === 'function') return d.setPref(k, v);
+      localStorage.setItem('pref:' + k, String(v));
+    } catch (_) {}
+  };
+
   const getLIB = () => (typeof d.LIB === 'function' ? d.LIB() : d.LIB) || [];
 
   function uniqueSorted(arr, cmp) {
@@ -737,8 +752,13 @@ export function createProTools(d) {
     const imgCfgBtn = el('button', 'btn cover-pick-device', 'Configuración Imágenes');
     imgCfgBtn.type = 'button';
     imgCfgBtn.onclick = () => {
-      frame.remove();
-      showImageConfig();
+      try {
+        frame.remove();
+        showImageConfig();
+      } catch (err) {
+        console.error('[img-cfg]', err);
+        try { appAlert('No se pudo abrir Configuración Imágenes: ' + (err?.message || err)); } catch (_) {}
+      }
     };
     body.append(imgCfgBtn);
 

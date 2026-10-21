@@ -1749,6 +1749,8 @@ try {
 const proTools = createProTools({
   el,
   kv,
+  pref,
+  setPref,
   get LIB() { return LIB; },
   getCover,
   groupSeries,
