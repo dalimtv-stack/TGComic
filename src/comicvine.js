@@ -457,14 +457,24 @@ export async function searchIssuesSmart(opts = {}) {
 export async function fetchIssueDetail(apiDetailUrlOrId) {
   if (!API_KEY) throw new Error('Falta VITE_COMICVINE_API_KEY');
   let path;
-  const s = String(apiDetailUrlOrId || '');
+  const s = String(apiDetailUrlOrId || '').trim();
   if (/^https?:\/\//i.test(s)) {
-    const m = s.match(/\/api\/(issue\/[^/?#]+)/i);
-    path = m ? '/' + m[1].replace(/\/?$/, '/') : null;
+    // API: .../api/issue/4000-12345/
+    let m = s.match(/\/api\/(issue\/[^/?#]+)/i);
+    if (m) {
+      path = '/' + m[1].replace(/\/?$/, '/');
+    } else {
+      // Sitio web: .../nombre-slug/4000-12345/  o  .../4000-12345
+      m = s.match(/\b(4000-\d+)\b/);
+      if (m) path = '/issue/' + m[1] + '/';
+      else path = null;
+    }
+  } else if (/^4000-\d+$/i.test(s) || /^\d+$/.test(s)) {
+    path = '/issue/4000-' + String(s).replace(/^4000-/i, '') + '/';
   } else {
-    path = '/issue/4000-' + String(s).replace(/^4000-/, '') + '/';
+    path = '/issue/4000-' + String(s).replace(/^4000-/i, '') + '/';
   }
-  if (!path) throw new Error('URL de detalle no válida');
+  if (!path) throw new Error('URL de detalle no válida. Usa un enlace de issue de Comic Vine (…/4000-…).');
   const url = apiUrl(path, {
     field_list: 'id,name,issue_number,volume,cover_date,description,person_credits,site_detail_url,image',
   });

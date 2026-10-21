@@ -808,3 +808,27 @@ textarea.meta-desc-lg.edit-input{
 .cfg-row-head .sync-label{margin:0 0 .2rem}
 .cfg-auto{display:inline-flex;align-items:center;gap:.4rem;margin:0 0 .2rem;font-size:.8rem;font-weight:600;color:var(--fg);cursor:pointer;white-space:nowrap;-webkit-user-select:none;user-select:none}
 .cfg-auto input{width:1.05rem;height:1.05rem;margin:0;accent-color:var(--acc)}
+
+/* Navegación lateral en Información de cómic */
+.info-frame.comic-info{position:fixed}
+.info-nav{
+  position:absolute;inset:0;pointer-events:none;z-index:6;
+}
+.info-nav[hidden]{display:none!important}
+.info-nav-btn{
+  pointer-events:auto;position:absolute;top:50%;transform:translateY(-50%);
+  width:40px;min-width:40px;height:56px;padding:0;border:0;border-radius:12px;
+  background:#1c1d22e6;color:var(--fg);font-size:1.75rem;font-weight:600;line-height:1;
+  display:inline-flex;align-items:center;justify-content:center;
+  -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
+  box-shadow:0 4px 16px #0008;cursor:pointer;
+}
+.info-nav-prev{left:6px}
+.info-nav-next{right:6px}
+.info-nav-btn:active{opacity:.75}
+.info-nav-btn:disabled{opacity:.22;pointer-events:none}
+@media (min-width:720px){
+  .info-nav-btn{width:46px;min-width:46px;height:64px;font-size:2rem}
+  .info-nav-prev{left:10px}
+  .info-nav-next{right:10px}
+}
