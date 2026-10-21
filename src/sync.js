@@ -11,6 +11,25 @@ const SCHEMA = 1;
 const LS_USER = 'sync:username';
 const LS_PASS = 'sync:password';
 const LS_META = 'sync:meta';
+const LS_TS = 'sync:ts'; // marca de tiempo local (ms) de la última edición de cada clave de progreso
+
+// Claves donde "gana el cambio más reciente" (no el valor mayor): permite volver atrás a propósito.
+const TS_PREFIXES = ['page:', 'read:'];
+const isTsKey = (k) => TS_PREFIXES.some((p) => k.startsWith(p));
+
+function loadTs() {
+  try { return JSON.parse(localStorage.getItem(LS_TS) || '{}') || {}; } catch { return {}; }
+}
+
+/** Llamar tras CADA escritura local de page:/read: (acción del usuario en este dispositivo). */
+export function touchKey(k) {
+  if (!k || !isTsKey(k)) return;
+  try {
+    const t = loadTs();
+    t[k] = Date.now();
+    localStorage.setItem(LS_TS, JSON.stringify(t));
+  } catch (_) {}
+}
 
 const SYNC_PREFIXES = [
   'pref:',
@@ -152,7 +171,8 @@ async function upsertRemote(id, payload, verifier) {
 }
 
 export function collectSnapshot() {
-  const data = { v: SCHEMA, keys: {} };
+  const data = { v: SCHEMA, keys: {}, ts: {} };
+  const allTs = loadTs();
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
@@ -161,6 +181,7 @@ export function collectSnapshot() {
       const ok = SYNC_KEYS.includes(k) || SYNC_PREFIXES.some((p) => k.startsWith(p));
       if (!ok) continue;
       data.keys[k] = localStorage.getItem(k);
+      if (isTsKey(k) && allTs[k]) data.ts[k] = allTs[k];
     }
   } catch (_) {}
   return data;
@@ -184,16 +205,22 @@ export function applySnapshot(snap) {
 
 /**
  * Fusiona snapshot remoto con el local.
- * - page: / pages: → se queda el número mayor (más progreso)
- * - read: → leído si cualquiera lo marca
+ * - page: / read: → gana el cambio MÁS RECIENTE (marca de tiempo por clave), así se puede
+ *   retroceder a propósito. Sin marcas (datos antiguos) → fallback: página mayor / leído si alguno
+ * - pages: (total de páginas) → número mayor
  * - recentReads → unión por id de cómic (remoto primero)
  * - resto (prefs, nombres…) → remoto gana si existe; si no, se conserva local
  */
-function mergeKeyMaps(localKeys, remoteKeys, opts = {}) {
+function mergeKeyMaps(localSnap, remoteSnap, opts = {}) {
   const preferLocal = !!opts.preferLocal;
-  const local = localKeys && typeof localKeys === 'object' ? localKeys : {};
-  const remote = remoteKeys && typeof remoteKeys === 'object' ? remoteKeys : {};
+  const lk = localSnap?.keys;
+  const rk = remoteSnap?.keys;
+  const local = lk && typeof lk === 'object' ? lk : {};
+  const remote = rk && typeof rk === 'object' ? rk : {};
+  const lts = localSnap?.ts && typeof localSnap.ts === 'object' ? localSnap.ts : {};
+  const rts = remoteSnap?.ts && typeof remoteSnap.ts === 'object' ? remoteSnap.ts : {};
   const out = { ...local };
+  const outTs = { ...lts };
 
   const mergeRecent = (a, b) => {
     let la = [], lb = [];
@@ -217,13 +244,24 @@ function mergeKeyMaps(localKeys, remoteKeys, opts = {}) {
     const lv = out[k];
     if (lv == null || lv === '') {
       out[k] = rv;
+      if (rts[k]) outTs[k] = rts[k];
       continue;
     }
-    if (k.startsWith('page:') || k.startsWith('pages:')) {
-      const n = Math.max(Number(lv) || 0, Number(rv) || 0);
-      out[k] = String(n);
-    } else if (k.startsWith('read:')) {
-      out[k] = (String(lv) === '1' || String(rv) === '1') ? '1' : String(rv);
+    if (isTsKey(k)) {
+      const lt = Number(lts[k]) || 0;
+      const rt = Number(rts[k]) || 0;
+      if (lt && rt) {
+        // Ambos con marca: gana el más reciente (empate → local)
+        if (rt > lt) { out[k] = rv; outTs[k] = rt; } else out[k] = lv;
+      } else if (k.startsWith('page:')) {
+        out[k] = String(Math.max(Number(lv) || 0, Number(rv) || 0));
+        if (rt && !lt) outTs[k] = rt;
+      } else {
+        out[k] = (String(lv) === '1' || String(rv) === '1') ? '1' : String(rv);
+        if (rt && !lt) outTs[k] = rt;
+      }
+    } else if (k.startsWith('pages:')) {
+      out[k] = String(Math.max(Number(lv) || 0, Number(rv) || 0));
     } else if (k === 'recentReads') {
       out[k] = mergeRecent(lv, rv);
     } else if (k === 'lastRead') {
@@ -265,13 +303,18 @@ function mergeKeyMaps(localKeys, remoteKeys, opts = {}) {
       out[k] = preferLocal ? lv : rv;
     }
   }
-  return out;
+  return { keys: out, ts: outTs };
 }
 
-/** Aplica un mapa de claves ya fusionado a localStorage. */
-function writeKeyMap(keys) {
+/** Aplica el resultado de mergeKeyMaps ({keys, ts}) a localStorage. */
+function writeKeyMap(merged) {
+  const keys = merged?.keys || {};
   try {
-    for (const [k, v] of Object.entries(keys || {})) {
+    const t = { ...loadTs(), ...(merged?.ts || {}) };
+    localStorage.setItem(LS_TS, JSON.stringify(t));
+  } catch (_) {}
+  try {
+    for (const [k, v] of Object.entries(keys)) {
       if (!k || k === 'tg_session' || k.startsWith('sync:')) continue;
       const allowed = SYNC_KEYS.includes(k) || SYNC_PREFIXES.some((p) => k.startsWith(p));
       if (!allowed) continue;
@@ -300,6 +343,7 @@ export function logout() {
   localStorage.removeItem(LS_USER);
   localStorage.removeItem(LS_PASS);
   localStorage.removeItem(LS_META);
+  localStorage.removeItem(LS_TS);
 }
 
 /** Fecha en horario de España: hh:mm:ss DD/MM/AAAA */
@@ -382,7 +426,7 @@ export async function login(username, password) {
     throw new Error('Usuario no encontrado. Crea una cuenta primero.');
   }
   const snap = await decryptPayload(u, password, row.payload);
-  writeKeyMap(mergeKeyMaps(collectSnapshot().keys, snap?.keys));
+  writeKeyMap(mergeKeyMaps(collectSnapshot(), snap));
   saveSession(u, password);
   setMeta(row.updated_at, snapshotByteSize());
   // Tras login, subir estado fusionado (local + remoto) con verificador correcto
@@ -411,7 +455,7 @@ export async function push() {
   if (row?.payload) {
     // Prueba de contraseña + fusión: no sobrescribir progreso de otros equipos
     const remoteSnap = await decryptPayload(u, p, row.payload);
-    writeKeyMap(mergeKeyMaps(collectSnapshot().keys, remoteSnap?.keys, { preferLocal: true }));
+    writeKeyMap(mergeKeyMaps(collectSnapshot(), remoteSnap, { preferLocal: true }));
   }
   const verifier = await passwordVerifier(u, p);
   const payload = await encryptPayload(u, p, collectSnapshot());
@@ -429,9 +473,8 @@ export async function pull() {
   if (!row?.payload) return false;
   const remoteSnap = await decryptPayload(u, p, row.payload);
   const localSnap = collectSnapshot();
-  const remoteKeys = remoteSnap?.keys && typeof remoteSnap.keys === 'object' ? remoteSnap.keys : {};
   const localKeys = localSnap?.keys && typeof localSnap.keys === 'object' ? localSnap.keys : {};
-  const merged = mergeKeyMaps(localKeys, remoteKeys);
+  const merged = mergeKeyMaps(localSnap, remoteSnap);
   const before = JSON.stringify(localKeys);
   writeKeyMap(merged);
   setMeta(row.updated_at, snapshotByteSize());

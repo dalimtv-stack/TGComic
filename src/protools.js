@@ -730,19 +730,7 @@ export function createProTools(d) {
         applyNow();
       };
       const rowH = el('div', 'cfg-row');
-      const headH = el('div', 'cfg-row-head');
-      headH.append(el('label', 'sync-label', 'Altura de portada (px)'));
-      const autoLab = el('label', 'cfg-auto');
-      const autoChk = el('input');
-      autoChk.type = 'checkbox';
-      autoChk.checked = devPref(autoKey, '0') === '1';
-      autoChk.onchange = () => {
-        setDevPref(autoKey, autoChk.checked ? '1' : '0');
-        applyNow();
-      };
-      autoLab.append(autoChk, document.createTextNode('Ajustar Automáticamente'));
-      headH.append(autoLab);
-      rowH.append(headH);
+      rowH.append(el('label', 'sync-label', 'Altura de portada (px)'));
       rowH.append(hintHEl);
       rowH.append(inpH);
       boxB.append(rowH);
@@ -768,7 +756,19 @@ export function createProTools(d) {
         applyNow();
       };
       const rowT = el('div', 'cfg-row');
-      rowT.append(el('label', 'sync-label', 'Tamaño del texto (px)'));
+      const headT = el('div', 'cfg-row-head');
+      headT.append(el('label', 'sync-label', 'Tamaño del texto (px)'));
+      const autoLab = el('label', 'cfg-auto');
+      const autoChk = el('input');
+      autoChk.type = 'checkbox';
+      autoChk.checked = devPref(autoKey, '0') === '1';
+      autoChk.onchange = () => {
+        setDevPref(autoKey, autoChk.checked ? '1' : '0');
+        applyNow();
+      };
+      autoLab.append(autoChk, document.createTextNode('Ajustar Automáticamente'));
+      headT.append(autoLab);
+      rowT.append(headT);
       rowT.append(hintTEl);
       rowT.append(inpT);
       boxB.append(rowT);

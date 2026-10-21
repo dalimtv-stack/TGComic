@@ -3,6 +3,12 @@
  */
 import * as sync from './sync.js';
 
+/** Escribe page:/read: y anota la marca de tiempo para el sync (gana lo más reciente). */
+function setSynced(key, value) {
+  localStorage.setItem(key, value);
+  try { sync.touchKey(key); } catch (_) {}
+}
+
 const pageKey = (chId, msgId) => `page:${chId}:${msgId}`;
 const pagesKey = (chId, msgId) => `pages:${chId}:${msgId}`;
 const legacyPageKey = (msgId) => 'page:' + msgId;
@@ -21,7 +27,7 @@ export function getPageIndex(chId, msgId) {
 
 export function setPageIndex(chId, msgId, n) {
   try {
-    localStorage.setItem(pageKey(chId, msgId), String(n));
+    setSynced(pageKey(chId, msgId), String(n));
     // Limpiar legado suelto para no recontaminar otros canales
     try { localStorage.removeItem(legacyPageKey(msgId)); } catch (_) {}
   } catch (_) {}
@@ -55,7 +61,11 @@ export function clearAllReadingData() {
     }
   } catch (_) {}
   for (const k of keys) {
-    try { localStorage.removeItem(k); } catch (_) {}
+    try {
+      // page:/read: se ponen a 0 (con marca de tiempo) para que el reinicio se propague a la nube
+      if (k.startsWith('page:') || k.startsWith('read:')) setSynced(k, '0');
+      else localStorage.removeItem(k);
+    } catch (_) {}
   }
   try { sync.schedulePush(400); } catch (_) {}
   return keys.length;
@@ -65,10 +75,10 @@ export function clearAllReadingData() {
 export function clearComicProgress(chId, msgId) {
   if (chId == null || msgId == null) return;
   try {
-    localStorage.removeItem(pageKey(chId, msgId));
+    setSynced(pageKey(chId, msgId), '0');
     localStorage.removeItem(pagesKey(chId, msgId));
     localStorage.removeItem(pageFmtKey(chId, msgId));
-    localStorage.removeItem(readFlagKey(chId, msgId));
+    setSynced(readFlagKey(chId, msgId), '0');
     localStorage.removeItem(legacyPageKey(msgId));
     localStorage.removeItem(legacyPagesKey(msgId));
   } catch (_) {}
@@ -167,10 +177,10 @@ export function readProgress(chId, msgId) {
 }
 
 export function markComicRead(ch, f, after) {
-  try { localStorage.setItem(readFlagKey(ch.id, f.id), '1'); } catch (_) {}
+  try { setSynced(readFlagKey(ch.id, f.id), '1'); } catch (_) {}
   const tot = getPagesTotal(ch.id, f.id);
   if (tot > 0) {
-    try { localStorage.setItem(pageKey(ch.id, f.id), String(Math.max(0, tot - 1))); } catch (_) {}
+    try { setSynced(pageKey(ch.id, f.id), String(Math.max(0, tot - 1))); } catch (_) {}
   }
   try {
     const list = getRecentReads().filter((x) => !(x.ch?.id === ch.id && x.f?.id === f.id));
@@ -181,8 +191,9 @@ export function markComicRead(ch, f, after) {
 }
 
 export function markComicUnread(ch, f, after) {
-  try { localStorage.removeItem(readFlagKey(ch.id, f.id)); } catch (_) {}
-  try { localStorage.setItem(pageKey(ch.id, f.id), '0'); } catch (_) {}
+  // '0' en vez de borrar: así "no leído" se propaga y no revive desde otro dispositivo
+  try { setSynced(readFlagKey(ch.id, f.id), '0'); } catch (_) {}
+  try { setSynced(pageKey(ch.id, f.id), '0'); } catch (_) {}
   try { sync.schedulePush(); } catch (_) {}
   after?.();
 }
