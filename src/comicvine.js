@@ -459,8 +459,12 @@ export async function fetchIssueDetail(apiDetailUrlOrId) {
   let path;
   const s = String(apiDetailUrlOrId || '');
   if (/^https?:\/\//i.test(s)) {
-    const m = s.match(/\/api\/(issue\/[^/?#]+)/i);
-    path = m ? '/' + m[1].replace(/\/?$/, '/') : null;
+    const mApi = s.match(/\/api\/(issue\/[^/?#]+)/i);
+    if (mApi) path = '/' + mApi[1].replace(/\/?$/, '/');
+    else {
+      const mSite = s.match(/\/(4000-\d+)\b/);
+      if (mSite) path = '/issue/' + mSite[1] + '/';
+    }
   } else {
     path = '/issue/4000-' + String(s).replace(/^4000-/, '') + '/';
   }
@@ -532,6 +536,54 @@ export async function fetchIssueDetail(apiDetailUrlOrId) {
     artists: artistsFinal,
     siteUrl: r.site_detail_url || '',
   };
+}
+
+
+/** Extrae id de volumen desde URL web o API (4050-xxx). */
+export function parseVolumeIdFromUrl(url) {
+  const s = String(url || '').trim();
+  if (!s) return '';
+  const m = s.match(/4050-(\d+)/i) || s.match(/\/volume\/(?:4050-)?(\d+)/i);
+  return m ? m[1] : '';
+}
+
+/**
+ * Lista TODOS los issues de un volume (paginado).
+ * Acepta id numérico o URL tipo …/4050-4200/
+ */
+export async function listAllIssuesForVolume(volumeIdOrUrl, pageSize = 100) {
+  if (!API_KEY) throw new Error('Falta VITE_COMICVINE_API_KEY');
+  const vid = parseVolumeIdFromUrl(volumeIdOrUrl) || String(volumeIdOrUrl || '').replace(/^4050-/, '').trim();
+  if (!vid) return [];
+  const out = [];
+  const seen = new Set();
+  for (const filterVal of ['volume:' + vid, 'volume:4050-' + vid]) {
+    let offset = 0;
+    let got = 0;
+    do {
+      const url = apiUrl('/issues/', {
+        filter: filterVal,
+        limit: String(Math.min(100, pageSize)),
+        offset: String(offset),
+        field_list: 'id,name,issue_number,volume,cover_date,site_detail_url,image,api_detail_url',
+        sort: 'cover_date:asc',
+      });
+      const data = await jsonp(url);
+      if (data?.error && data.error !== 'OK') throw new Error('Comic Vine: ' + data.error);
+      const batch = (Array.isArray(data?.results) ? data.results : []).map(mapIssue);
+      got = batch.length;
+      for (const r of batch) {
+        if (r.id == null || seen.has(r.id)) continue;
+        seen.add(r.id);
+        out.push(r);
+      }
+      offset += got;
+      if (got < pageSize) break;
+      if (offset > 2000) break;
+    } while (got > 0);
+    if (out.length) break;
+  }
+  return out;
 }
 
 export function buildSearchQuery({ channel, series, number, fileName }) {

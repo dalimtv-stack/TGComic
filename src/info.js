@@ -22,6 +22,7 @@ export function createInfoEdit(d) {
     setBlobImg,
     appAlert, appConfirm, appPrompt, sheet, bindLongPress, grid, copyInfoFrameText, formatPeople, showDescriptionPanel,
     comicVineConfigured, searchIssuesSmart, fetchIssueDetail, buildSearchQuery,
+    listAllIssuesForVolume, parseVolumeIdFromUrl, listIssuesForVolume,
     go, show, stack, natural,
   } = d;
 
@@ -879,6 +880,28 @@ function showSeriesInfo(ch, seriesLabel, files) {
     body.append(row('Editorial', ch?.group || '—'));
     body.append(row('Números', String(n)));
     body.append(row('Tamaño total', formatBytes(bytes)));
+
+    // Cómics sin ficha CV (originalTitle/writer/artist/date)
+    const pending = (files || []).filter((f) => {
+      const cap = parseComicCaption(f?.caption || '');
+      return !(cap.originalTitle || cap.writer || cap.artist || cap.date);
+    });
+    if (pending.length && typeof comicVineConfigured === 'function' && comicVineConfigured()) {
+      const fillBtn = el('button', 'btn cover-pick-device', 'Rellenar fichas (Comic Vine)');
+      fillBtn.type = 'button';
+      fillBtn.style.marginTop = '0.75rem';
+      fillBtn.onclick = () => {
+        frame.remove();
+        showSeriesCvFillForm(ch, seriesLabel, files || []);
+      };
+      body.append(fillBtn);
+      body.append(el('p', 'cover-pick-hint',
+        pending.length + ' número(s) sin título original / créditos / fecha. El resto no se toca.'
+      ));
+    } else if (pending.length && typeof comicVineConfigured === 'function' && !comicVineConfigured()) {
+      body.append(el('p', 'cover-pick-hint', 'Comic Vine no configurado (falta API key).'));
+    }
+
     box.append(head, body);
     frame.append(box);
   // No cerrar al pulsar fuera: solo × / Cancelar
@@ -888,6 +911,240 @@ function showSeriesInfo(ch, seriesLabel, files) {
     appAlert('No se pudo mostrar la información');
   }
 }
+
+/** ¿Ya tiene datos de Comic Vine en el caption? */
+function comicHasCvFields(f) {
+  const cap = parseComicCaption(f?.caption || '');
+  return !!(cap.originalTitle || cap.writer || cap.artist || cap.date);
+}
+
+function normIssueKey(n) {
+  const s = String(n || '').replace(/^#/, '').trim().toLowerCase();
+  if (!s) return '';
+  const stripped = s.replace(/^0+/, '');
+  return stripped || s;
+}
+
+/**
+ * Formulario: URL de serie/volumen Comic Vine → rellena solo
+ * Título original, Guionista, Dibujante, Fecha (resto desde archivo).
+ * No toca cómics que ya tengan esos campos.
+ */
+function showSeriesCvFillForm(ch, seriesLabel, files) {
+  document.querySelector('.info-frame.series-cv-fill')?.remove();
+  const display = seriesDisplayName(ch, seriesLabel);
+  const frame = el('div', 'info-frame series-cv-fill');
+  const box = el('div', 'info-box');
+  const head = el('div', 'info-head');
+  head.append(el('span', '', 'Rellenar serie (Comic Vine)'));
+  const close = el('button', 'btn info-close', '×');
+  close.onclick = () => frame.remove();
+  head.append(close);
+  const body = el('div', 'info-body');
+  body.append(el('p', 'cover-pick-hint',
+    'Serie: ' + display + '. Pega la URL del volumen en Comic Vine. Solo se rellenan Título original, Guionista, Dibujante y Fecha; el resto sale del archivo. Los que ya tengan esos datos no se tocan.'
+  ));
+  body.append(el('label', 'sync-label', 'URL de la serie (Comic Vine)'));
+  const urlInp = el('input', 'edit-input');
+  urlInp.type = 'url';
+  urlInp.placeholder = 'https://comicvine.gamespot.com/…/4050-4200/';
+  urlInp.autocomplete = 'off';
+  body.append(urlInp);
+  body.append(el('p', 'cover-pick-hint', 'Ejemplo: https://comicvine.gamespot.com/legends-of-the-dark-knight/4050-4200/'));
+
+  const actions = el('div', 'edit-actions');
+  const cancel = el('button', 'btn', 'Cancelar');
+  cancel.onclick = () => {
+    frame.remove();
+    showSeriesInfo(ch, seriesLabel, files);
+  };
+  const goBtn = el('button', 'btn edit-save', 'Rellenar');
+  goBtn.type = 'button';
+  goBtn.onclick = async () => {
+    const url = String(urlInp.value || '').trim();
+    if (!url) {
+      await appAlert('Pega la URL del volumen en Comic Vine.');
+      return;
+    }
+    const volId = (typeof parseVolumeIdFromUrl === 'function' ? parseVolumeIdFromUrl(url) : '')
+      || (url.match(/4050-(\d+)/i) || [])[1]
+      || '';
+    if (!volId) {
+      await appAlert('No se reconoce un id de volumen (4050-…) en esa URL.');
+      return;
+    }
+    if (typeof comicVineConfigured === 'function' && !comicVineConfigured()) {
+      await appAlert('Falta VITE_COMICVINE_API_KEY.');
+      return;
+    }
+    frame.remove();
+    await runSeriesCvFill(ch, seriesLabel, files, volId, url);
+  };
+  actions.append(cancel, goBtn);
+  body.append(actions);
+  box.append(head, body);
+  frame.append(box);
+  document.body.append(frame);
+  setTimeout(() => { try { urlInp.focus(); } catch (_) {} }, 50);
+}
+
+async function runSeriesCvFill(ch, seriesLabel, files, volId, sourceUrl) {
+  const progFrame = el('div', 'info-frame series-cv-prog');
+  const progBox = el('div', 'info-box');
+  const progHead = el('div', 'info-head');
+  progHead.append(el('span', '', 'Rellenando fichas'));
+  progBox.append(progHead);
+  const progBody = el('div', 'info-body');
+  const status = el('p', 'cover-pick-hint', 'Consultando Comic Vine…');
+  const bar = el('div', 'repack-panel-bar');
+  const fill = el('div', 'repack-panel-fill');
+  fill.style.width = '0%';
+  bar.append(fill);
+  const count = el('p', 'cover-pick-hint', '');
+  progBody.append(status, bar, count);
+  progBox.append(progBody);
+  progFrame.append(progBox);
+  document.body.append(progFrame);
+
+  const setProg = (done, total, msg) => {
+    if (msg) status.textContent = msg;
+    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+    fill.style.width = pct + '%';
+    count.textContent = total ? `${done} / ${total} (${pct}%)` : '';
+  };
+
+  try {
+    const listFn = typeof listAllIssuesForVolume === 'function'
+      ? listAllIssuesForVolume
+      : (typeof listIssuesForVolume === 'function' ? (id) => listIssuesForVolume(id, null, 100) : null);
+    if (!listFn) throw new Error('listAllIssuesForVolume no disponible');
+
+    status.textContent = 'Listando números del volumen…';
+    const issues = await listFn(volId);
+    if (!issues.length) throw new Error('Comic Vine no devolvió números para ese volumen.');
+
+    // Índice por número normalizado
+    const byNum = new Map();
+    for (const iss of issues) {
+      const k = normIssueKey(iss.issueNumber);
+      if (!k) continue;
+      if (!byNum.has(k)) byNum.set(k, iss);
+    }
+
+    const targets = (files || []).filter((f) => !comicHasCvFields(f));
+    if (!targets.length) {
+      progFrame.remove();
+      await appAlert('Ningún cómic de la serie necesita relleno (todos tienen datos CV o no hay archivos).');
+      showSeriesInfo(ch, seriesLabel, files);
+      return;
+    }
+
+    let ok = 0, skip = 0, fail = 0, noMatch = 0;
+    setProg(0, targets.length, 'Emparejando y guardando…');
+
+    for (let i = 0; i < targets.length; i++) {
+      const f = targets[i];
+      setProg(i, targets.length, (f.name || '').slice(0, 48));
+      try {
+        const parsed = parseComicName(comicSourceName(f), ch?.name);
+        const numKey = normIssueKey(parsed?.number);
+        if (!numKey) { noMatch++; continue; }
+        const iss = byNum.get(numKey);
+        if (!iss) { noMatch++; continue; }
+
+        // Detalle para créditos
+        let detail = null;
+        try {
+          const ref = iss.apiDetailUrl || iss.id;
+          if (ref && typeof fetchIssueDetail === 'function') {
+            detail = await fetchIssueDetail(ref);
+          }
+        } catch (_) {}
+
+        const story = String((detail && detail.name) || iss.name || '').trim();
+        const num = String((detail && detail.issueNumber) || iss.issueNumber || parsed.number || '').replace(/^#/, '').trim();
+        let originalTitle = '';
+        if (num && story) originalTitle = '#' + num + ' - ' + story;
+        else if (num) originalTitle = '#' + num;
+        else originalTitle = story;
+
+        const writers = (detail && detail.writers && detail.writers.length)
+          ? detail.writers.join(' | ')
+          : '';
+        const artists = (detail && detail.artists && detail.artists.length)
+          ? detail.artists.join(' | ')
+          : '';
+        let date = (detail && detail.coverDate) || '';
+        if (!date && iss.coverDate) {
+          const dm = String(iss.coverDate).match(/^(\d{4})-(\d{2})/);
+          date = dm ? (dm[2] + '/' + dm[1]) : String(iss.coverDate).slice(0, 4);
+        }
+
+        // Resto desde archivo / serie local
+        const capPrev = parseComicCaption(f?.caption || '');
+        const issueLab = parsed ? issueDisplay(parsed) : '';
+        let titleEs = (capPrev.titleEs && String(capPrev.titleEs).trim()) || issueLab || '';
+        if (titleEs && !/^#/.test(titleEs.trim()) && issueLab) titleEs = issueLab;
+
+        const caption = buildComicCaption({
+          fileName: capPrev.fileName || f.name || '',
+          titleEs,
+          originalTitle: originalTitle || capPrev.originalTitle || '',
+          series: seriesLabel || capPrev.series || parsed?.series || '',
+          writer: writers || '',
+          artist: artists || '',
+          publisher: capPrev.publisher || '',
+          date: date || '',
+          description: capPrev.description || '',
+        });
+        if (caption.length > 1024) {
+          // Acortar descripción si hace falta
+          const short = buildComicCaption({
+            fileName: capPrev.fileName || f.name || '',
+            titleEs,
+            originalTitle,
+            series: seriesLabel || '',
+            writer: writers,
+            artist: artists,
+            date,
+          });
+          await updateTelegramCaption(ch, f, short.slice(0, 1024));
+        } else {
+          await updateTelegramCaption(ch, f, caption);
+        }
+        ok++;
+      } catch (e) {
+        console.warn('[series-cv]', f?.name, e);
+        fail++;
+      }
+      setProg(i + 1, targets.length, (f.name || '').slice(0, 48));
+      if (i % 2 === 0) await new Promise((r) => setTimeout(r, 0));
+    }
+
+    progFrame.remove();
+    const parts = [
+      `Actualizados: ${ok}`,
+      noMatch ? `Sin match de número: ${noMatch}` : '',
+      fail ? `Fallos: ${fail}` : '',
+      skip ? `Omitidos: ${skip}` : '',
+    ].filter(Boolean);
+    await appAlert(parts.join('\n'), 'Comic Vine');
+    // Refrescar listado en memoria si hace falta
+    try {
+      const top = stack?.[stack.length - 1];
+      if (top && !document.getElementById('rd')) {
+        top.scrollY = window.scrollY || 0;
+        show?.();
+      }
+    } catch (_) {}
+    showSeriesInfo(ch, seriesLabel, files);
+  } catch (e) {
+    try { progFrame.remove(); } catch (_) {}
+    await appAlert('Error: ' + (e?.message || e), 'Comic Vine');
+    showSeriesInfo(ch, seriesLabel, files);
+  }
+}
+
 
 /** Primera portada de cómic disponible (prueba varios si el 1º falla, p.ej. CBR sin abrir). */
 async function firstAvailableCover(ch, files) {

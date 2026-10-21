@@ -40,6 +40,7 @@ import { createInfoEdit } from './info.js';
 import { exportLibraryData, importLibraryData, downloadJson } from './dataPort.js';
 import {
   comicVineConfigured, searchIssuesSmart, fetchIssueDetail, buildSearchQuery,
+  listIssuesForVolume, listAllIssuesForVolume, parseVolumeIdFromUrl,
 } from './comicvine.js';
 import * as locks from './lock.js';
 import { initBalance } from './balance.js';
@@ -1552,6 +1553,7 @@ infoApi = createInfoEdit({
   setBlobImg,
   appAlert, appConfirm, appPrompt, sheet, bindLongPress, grid, copyInfoFrameText, formatPeople, showDescriptionPanel,
   comicVineConfigured, searchIssuesSmart, fetchIssueDetail, buildSearchQuery,
+  listIssuesForVolume, listAllIssuesForVolume, parseVolumeIdFromUrl,
   go, show, stack, natural,
 });
 } catch (e) {
