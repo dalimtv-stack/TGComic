@@ -643,3 +643,14 @@ textarea.meta-desc-lg.edit-input{
 #rd .spread-fab svg{display:block;pointer-events:none}
 #rd.ui-off .spread-fab{opacity:0;pointer-events:none;transition:opacity .2s}
 #rd .spread-fab{transition:opacity .2s}
+
+#rd .bot-cluster .fit-ico{font-size:1rem;line-height:1;margin-right:.2rem}
+#rd .bot-cluster .fit-txt{font-size:.82rem;font-weight:600}
+@media (max-width: 700px), (pointer: coarse) {
+  #rd .bot-cluster .fit-txt{font-size:.65rem;letter-spacing:-.01em}
+  #rd .bot-cluster .fit-ico{font-size:1rem;margin-right:.15rem}
+  #rd .bot-cluster .btn{gap:0}
+}
+#rd.drag-scroll{cursor:grabbing!important;user-select:none;-webkit-user-select:none}
+#rd.drag-scroll *{cursor:grabbing!important;user-select:none;-webkit-user-select:none}
+#rd.horiz, #rd.vert{cursor:grab}

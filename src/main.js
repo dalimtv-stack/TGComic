@@ -513,13 +513,17 @@ const search = null; // el buscador se crea dentro de cada vista
 const stack = [];
 function modeBtn(after) {
   const b = el('button', 'btn mode');
-  // Muestra el modo AL QUE se cambia
+  // Muestra el modo ACTUAL (más claro para el usuario)
   const nextOf = { page: 'vertical', vertical: 'horizontal', horizontal: 'page' };
-  const labelOf = { page: '☰ Vertical', vertical: '⇔ Horizontal', horizontal: '▯ Página' };
+  const labelOf = {
+    page: '▯ Página',
+    vertical: '☰ Vertical',
+    horizontal: '⇔ Horizontal',
+  };
   b._label = () => {
     let cur = pref('mode', 'page');
     if (!nextOf[cur]) cur = 'page';
-    b.textContent = labelOf[cur];
+    b.textContent = labelOf[cur] || labelOf.page;
   };
   b.onclick = () => {
     let cur = pref('mode', 'page');

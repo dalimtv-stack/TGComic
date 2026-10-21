@@ -392,9 +392,15 @@ export function createReader(state, d) {
       bindGridBtn();
 
       /** Modo página: soltar tras arrastrar cambia de página. Vertical/Horizontal: arrastrar desplaza el scroll. */
-      const bindMousePageDrag = (getAxis, goPrev, goNext, scrollWhileDrag) => {
+      /**
+       * scrollWhileDrag: true = arrastrar desplaza el scroll (vert/horiz).
+       * opts.onDragStart/onDragEnd: p.ej. syncLock para que el scroll handler no luche.
+       */
+      const bindMousePageDrag = (getAxis, goPrev, goNext, scrollWhileDrag, opts = {}) => {
         let start = null;
         let dragging = false;
+        let raf = 0;
+        let pending = null;
         const onDown = (e) => {
           if (e.button !== 0) return;
           if (e.target.closest?.('.bar, .edge, .mosaic, .btn, .spread-fab, input, textarea')) return;
@@ -405,28 +411,49 @@ export function createReader(state, d) {
             st: rd.scrollTop,
           };
           dragging = false;
+          try {
+            rd.classList.add('drag-scroll');
+            rd.style.scrollBehavior = 'auto';
+          } catch (_) {}
         };
-        const onMove = (e) => {
-          if (!start || !scrollWhileDrag) return;
-          const dx = e.clientX - start.x;
-          const dy = e.clientY - start.y;
-          if (!dragging && Math.hypot(dx, dy) < 4) return;
-          dragging = true;
-          try { e.preventDefault(); } catch (_) {}
+        const applyScroll = () => {
+          raf = 0;
+          if (!start || !pending || !scrollWhileDrag) return;
+          const { dx, dy } = pending;
           const axis = getAxis();
           if (axis === 'x') rd.scrollLeft = start.sl - dx;
           else rd.scrollTop = start.st - dy;
-          try { pokeUI(); } catch (_) {}
+        };
+        const onMove = (e) => {
+          if (!start) return;
+          if (!scrollWhileDrag) return;
+          const dx = e.clientX - start.x;
+          const dy = e.clientY - start.y;
+          if (!dragging && Math.hypot(dx, dy) < 3) return;
+          if (!dragging) {
+            dragging = true;
+            try { opts.onDragStart?.(); } catch (_) {}
+          }
+          try { e.preventDefault(); } catch (_) {}
+          pending = { dx, dy };
+          if (!raf) raf = requestAnimationFrame(applyScroll);
         };
         const onUp = (e) => {
           if (!start) return;
           const dx = e.clientX - start.x;
           const dy = e.clientY - start.y;
           const wasDrag = dragging;
+          if (raf) { cancelAnimationFrame(raf); raf = 0; }
+          if (scrollWhileDrag && pending) applyScroll();
           start = null;
           dragging = false;
+          pending = null;
+          try {
+            rd.classList.remove('drag-scroll');
+            rd.style.scrollBehavior = '';
+          } catch (_) {}
           if (scrollWhileDrag) {
-            // El scroll ya se hizo en mousemove; no saltar de página
+            try { opts.onDragEnd?.(wasDrag); } catch (_) {}
             return;
           }
           const axis = getAxis();
@@ -441,13 +468,18 @@ export function createReader(state, d) {
           }
         };
         rd.addEventListener('mousedown', onDown);
-        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mousemove', onMove, { passive: false });
         window.addEventListener('mouseup', onUp);
+        // Evitar drag nativo de imágenes
+        const onDragStart = (e) => { e.preventDefault(); };
+        rd.addEventListener('dragstart', onDragStart);
         if (!rd._dragCleanups) rd._dragCleanups = [];
         rd._dragCleanups.push(() => {
           rd.removeEventListener('mousedown', onDown);
           window.removeEventListener('mousemove', onMove);
           window.removeEventListener('mouseup', onUp);
+          rd.removeEventListener('dragstart', onDragStart);
+          if (raf) cancelAnimationFrame(raf);
         });
       };
 
@@ -460,7 +492,14 @@ export function createReader(state, d) {
         const pageHost = el('div', 'page-host');
         let img = el('img');
         pageHost.append(img);
-        const fitLabel = () => (fit.textContent = pref('fit', 'screen') === 'screen' ? '↔ Ancho' : '⤢ Pantalla');
+        const fitLabel = () => {
+          const w = pref('fit', 'screen') === 'width';
+          fit.replaceChildren();
+          const ico = el('span', 'fit-ico', w ? '↔' : '⤢');
+          const txt = el('span', 'fit-txt', w ? 'Ancho' : 'Pantalla');
+          fit.append(ico, txt);
+          fit.title = w ? 'Ajuste: Ancho' : 'Ajuste: Pantalla';
+        };
         fit.onclick = () => {
           setPref('fit', pref('fit', 'screen') === 'screen' ? 'width' : 'screen');
           rd.className = rd.className.replace(/fit-\w+/, 'fit-' + pref('fit', 'screen'));
@@ -886,7 +925,14 @@ export function createReader(state, d) {
         const fitMode = () => (pref('fit', 'screen') === 'width' ? 'width' : 'screen');
         rd.className = (horiz ? 'horiz' : 'vert') + ' fit-' + fitMode();
         const fit = el('button', 'btn');
-        const fitLabel = () => (fit.textContent = fitMode() === 'screen' ? '↔ Ancho' : '⤢ Pantalla');
+        const fitLabel = () => {
+          const w = fitMode() === 'width';
+          fit.replaceChildren();
+          const ico = el('span', 'fit-ico', w ? '↔' : '⤢');
+          const txt = el('span', 'fit-txt', w ? 'Ancho' : 'Pantalla');
+          fit.append(ico, txt);
+          fit.title = w ? 'Ajuste: Ancho' : 'Ajuste: Pantalla';
+        };
         let onResize = null;
         fit.onclick = () => {
           setPref('fit', fitMode() === 'screen' ? 'width' : 'screen');
@@ -1137,7 +1183,17 @@ export function createReader(state, d) {
           () => (horiz ? 'x' : 'y'),
           () => { goToPage(n - 1); },
           () => { goToPage(n + 1); },
-          true
+          true,
+          {
+            onDragStart: () => { syncLock = true; clearTimeout(scrollT); },
+            onDragEnd: () => {
+              // Liberar y sincronizar página visible
+              requestAnimationFrame(() => {
+                syncLock = false;
+                try { onScroll(); } catch (_) {}
+              });
+            },
+          }
         );
 
         const onScroll = () => {
