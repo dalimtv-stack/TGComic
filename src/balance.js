@@ -58,6 +58,22 @@ export function layout(tokens, avail, measure) {
   return measure(full) <= avail ? [full] : null;
 }
 
+/** ¿Cabe el texto en ≤ maxLines con el salto de línea natural (voraz, como hace el navegador)? */
+export function fitsNatural(text, avail, measure, maxLines = 2) {
+  const words = String(text).trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return true;
+  const limit = avail * LINE_FIT;
+  let lines = 1, cur = '';
+  for (const w of words) {
+    if (measure(w) > limit) return false; // una palabra sola no cabe
+    const t = cur ? cur + ' ' + w : w;
+    if (!cur || measure(t) <= limit) { cur = t; continue; }
+    if (++lines > maxLines) return false;
+    cur = w;
+  }
+  return true;
+}
+
 const AUTO_MIN = 8;
 const AUTO_KINDS = {
   'cover-comic': ['textAutoComic', 'coverTextComic'],
@@ -123,6 +139,9 @@ export function balanceTitles(root = document) {
         ctx.font = fontAt(cs.fontStyle, size, cs.fontFamily, cs.fontWeight);
         try { ctx.letterSpacing = cs.letterSpacing === 'normal' ? '0px' : cs.letterSpacing; } catch (_) {}
         lines = layout(tokens, avail, measure);
+        // Sin corte equilibrado "bonito" (p. ej. por no dejar "de" colgando) pero cabe en 2 líneas
+        // con el salto natural: es válido, NO se reduce la letra por eso.
+        if (!lines && fitsNatural(full, avail, measure)) lines = [full];
         if (lines) break;
       }
       if (!lines) size = AUTO_MIN;
