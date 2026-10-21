@@ -21,7 +21,7 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 .cover img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
 .cover.landscape{background:transparent}
 .cover.landscape img{object-fit:contain;object-position:center;inset:0;width:100%;height:100%;transform:none}
-.cover.square{aspect-ratio:1/1;height:var(--cover-h-channel,140px);width:var(--cover-h-channel,140px);max-width:78%;margin:0 auto;border-radius:18px;font-size:1.8rem;box-shadow:0 4px 14px #0006}
+.cover.square{aspect-ratio:1/1;width:78%;margin:0 auto;border-radius:18px;font-size:1.8rem;box-shadow:0 4px 14px #0006;height:auto}
 .cover.square img{object-fit:contain;background:#121316}
 .grid-pubs{grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:1rem .65rem}
 .badge{position:absolute;right:6px;top:6px;background:rgba(60,62,70,.72);color:var(--fg);border-radius:99px;padding:.15rem .55rem;font-size:.78rem;font-weight:600;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}

@@ -1298,7 +1298,7 @@ async function fetchArtBlob(url, cached) {
 }
 
 function art(kind, name, ch) {
-  const d = el('div', kind === 'groups' ? 'cover square cover-channel' : 'cover cover-channel');
+  const d = el('div', kind === 'groups' ? 'cover square' : 'cover cover-channel');
   const ltr = el('span', '', name.slice(0, 1).toUpperCase());
   d.append(ltr);
   const nfc = name.normalize('NFC').trim();
