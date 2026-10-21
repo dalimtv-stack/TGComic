@@ -8,8 +8,8 @@
 const ctx = document.createElement('canvas').getContext('2d');
 const SEP_ONLY = /^[-–—:&/·|+]+$/;
 // Márgenes para que la decisión sea la misma en todos los dispositivos aunque cambie la tipografía del sistema
-const ONE_LINE_FIT = 0.998; // una línea si ocupa ≤ 99.8 % del ancho útil (ya se resta 1 px)
-const LINE_FIT = 0.998;    // cada línea de un corte ≤ 99.8 % del ancho útil
+const ONE_LINE_FIT = 1; // una línea si ocupa ≤ 99.8 % del ancho útil (ya se resta 1 px)
+const LINE_FIT = 1;    // cada línea de un corte ≤ 99.8 % del ancho útil
 const isShortWord = (w) => /^\p{L}{1,2}$/u.test(w);
 
 export function tokenize(text) {
