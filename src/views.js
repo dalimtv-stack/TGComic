@@ -235,8 +235,16 @@ function groupsView() {
       homeBody.replaceChildren();
       // Seguir leyendo: filtrar cómics que ya no existen en la caché del canal
       const rawContinue = getContinueList();
-      const continueHost = el('div');
+      const continueHost = el('div', 'continue-host');
       homeBody.append(continueHost);
+      // Placeholder estable para no “saltar” al cargar async
+      if (rawContinue.length) {
+        const ph = el('details', 'pubs-fold continue-fold');
+        if (pref('continueOpen', '1') === '1') ph.open = true;
+        ph.append(el('summary', '', 'Seguir leyendo'));
+        ph.append(el('div', 'continue-fold-body continue-placeholder'));
+        continueHost.append(ph);
+      }
       (async () => {
         const continueList = [];
         const seen = new Set();
@@ -284,10 +292,15 @@ function groupsView() {
         const renderContinue = (list) => {
           if (!continueHost.isConnected) return;
           const show = list.slice(0, 5);
+          const fp = show.map((it) => String(it.ch?.id) + ':' + String(it.f?.id)).join('|');
           if (!show.length) {
             continueHost.replaceChildren();
+            continueHost.dataset.fp = '';
             return;
           }
+          // Evitar repintar idéntico (parpadeo / salto)
+          if (continueHost.dataset.fp === fp && continueHost.querySelector('.continue-track')) return;
+          continueHost.dataset.fp = fp;
           const foldCont = el('details', 'pubs-fold continue-fold');
           if (pref('continueOpen', '1') === '1') foldCont.open = true;
           const sumCont = el('summary', '', 'Seguir leyendo');
@@ -319,7 +332,14 @@ function groupsView() {
             getCover(ch, f).then((b) => {
               if (!b || !thumb.isConnected) return;
               const img = new Image();
-              img.onload = () => { try { letter.remove(); } catch (_) {} thumb.prepend(img); };
+              img.onload = () => {
+                try { letter.remove(); } catch (_) {}
+                try {
+                  if (img.naturalWidth > img.naturalHeight) thumb.classList.add('landscape');
+                  else thumb.classList.remove('landscape');
+                } catch (_) {}
+                thumb.prepend(img);
+              };
               setBlobImg(img, b, thumb);
             }).catch(() => {});
             const meta = el('div', 'continue-meta');
@@ -424,7 +444,14 @@ function groupsView() {
             getCover(ch, f).then((b) => {
               if (!b || !thumb.isConnected) return;
               const img = new Image();
-              img.onload = () => { try { letter.remove(); } catch (_) {} thumb.prepend(img); };
+              img.onload = () => {
+                try { letter.remove(); } catch (_) {}
+                try {
+                  if (img.naturalWidth > img.naturalHeight) thumb.classList.add('landscape');
+                  else thumb.classList.remove('landscape');
+                } catch (_) {}
+                thumb.prepend(img);
+              };
               setBlobImg(img, b, thumb);
             }).catch(() => {});
           }

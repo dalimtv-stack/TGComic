@@ -319,11 +319,19 @@ body:has(.sheet) #app{
 /* Cola de tareas: secciones desplegables */
 .job-queue-panel{
   display:flex;flex-direction:column;gap:8px;
-  /* Tamaño inicial como al principio; tope bajo el menú ☰ */
   width:min(360px, calc(100vw - 24px));
   height:min(70vh, 520px);
   max-height:calc(100vh - 64px);
   max-height:calc(100dvh - 64px);
+}
+@media (min-width: 900px) {
+  /* PC: ~doble de alto y +1/4 de ancho */
+  .job-queue-panel{
+    width:min(450px, calc(100vw - 32px));
+    height:min(90vh, 1040px);
+    max-height:calc(100vh - 56px);
+    max-height:calc(100dvh - 56px);
+  }
 }
 .job-queue-panel > .repack-panel-head,
 .job-queue-panel > .repack-panel-bar,
@@ -654,3 +662,12 @@ textarea.meta-desc-lg.edit-input{
 #rd.drag-scroll{cursor:grabbing!important;user-select:none;-webkit-user-select:none}
 #rd.drag-scroll *{cursor:grabbing!important;user-select:none;-webkit-user-select:none}
 #rd.horiz, #rd.vert{cursor:grab}
+
+/* Evitar salto al pintar Seguir leyendo */
+.continue-fold{min-height:0}
+.continue-fold[open] .continue-fold-body{min-height:100px}
+.continue-placeholder{min-height:100px}
+.continue-cover.landscape{background:transparent}
+.continue-cover.landscape img{object-fit:contain;object-position:center;width:100%;height:auto;max-height:100%}
+.cover.square.landscape{background:transparent}
+.cover.square.landscape img{object-fit:contain;object-position:center;background:transparent}

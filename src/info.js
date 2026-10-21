@@ -857,7 +857,14 @@ function seriesCoverNode(ch, seriesLabel, files, badge) {
     const b = await getSeriesCoverBlob(ch, seriesLabel, files);
     if (!b) return;
     const img = new Image();
-    img.onload = () => { try { ltr.remove(); } catch (_) {} d.prepend(img); };
+    img.onload = () => {
+      try { ltr.remove(); } catch (_) {}
+      try {
+        if (img.naturalWidth > img.naturalHeight) d.classList.add('landscape');
+        else d.classList.remove('landscape');
+      } catch (_) {}
+      d.prepend(img);
+    };
     setBlobImg(img, b, d);
   };
   io.observe(d);
@@ -1104,6 +1111,10 @@ function channelCoverNode(ch, files) {
     const img = new Image();
     img.onload = () => {
       if (!host.isConnected) return;
+      try {
+        if (img.naturalWidth > img.naturalHeight) host.classList.add('landscape');
+        else host.classList.remove('landscape');
+      } catch (_) {}
       host.replaceChildren(img);
       if (prog) applyCoverProgress(host, prog);
     };
@@ -1272,7 +1283,13 @@ function groupCoverNode(originalName) {
       const custom = await kv.get(groupCoverKey(originalName));
       if (custom instanceof Blob) {
         const img = new Image();
-        img.onload = () => { host.replaceChildren(img); };
+        img.onload = () => {
+          try {
+            if (img.naturalWidth > img.naturalHeight) host.classList.add('landscape');
+            else host.classList.remove('landscape');
+          } catch (_) {}
+          host.replaceChildren(img);
+        };
         setBlobImg(img, custom, host);
         return;
       }

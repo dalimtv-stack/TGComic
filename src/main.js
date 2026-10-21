@@ -1328,6 +1328,10 @@ function art(kind, name, ch) {
     const img = new Image();
     img.onload = () => {
       try { ltr.remove(); } catch (_) {}
+      try {
+        if (img.naturalWidth > img.naturalHeight) d.classList.add('landscape');
+        else d.classList.remove('landscape');
+      } catch (_) {}
       const prev = d.querySelector('img');
       if (prev) prev.remove();
       d.append(img);
