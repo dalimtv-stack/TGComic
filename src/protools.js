@@ -705,7 +705,7 @@ export function createProTools(d) {
       parent.append(row);
     };
 
-    const block = (title, coverKey, textKey, coverDef, textDef) => {
+    const block = (title, coverKey, textKey, coverDef, textDef, autoKey) => {
       const boxB = el('div', 'cfg-block');
       boxB.append(el('div', 'info-sec', title));
 
@@ -730,7 +730,19 @@ export function createProTools(d) {
         applyNow();
       };
       const rowH = el('div', 'cfg-row');
-      rowH.append(el('label', 'sync-label', 'Altura de portada (px)'));
+      const headH = el('div', 'cfg-row-head');
+      headH.append(el('label', 'sync-label', 'Altura de portada (px)'));
+      const autoLab = el('label', 'cfg-auto');
+      const autoChk = el('input');
+      autoChk.type = 'checkbox';
+      autoChk.checked = devPref(autoKey, '0') === '1';
+      autoChk.onchange = () => {
+        setDevPref(autoKey, autoChk.checked ? '1' : '0');
+        applyNow();
+      };
+      autoLab.append(autoChk, document.createTextNode('Ajustar Automáticamente'));
+      headH.append(autoLab);
+      rowH.append(headH);
       rowH.append(hintHEl);
       rowH.append(inpH);
       boxB.append(rowH);
@@ -764,9 +776,9 @@ export function createProTools(d) {
       body.append(boxB);
     };
 
-    block('Cómics', 'coverHComic', 'coverTextComic', 225, 15);
-    block('Series', 'coverHSeries', 'coverTextSeries', 225, 15);
-    block('Canales', 'coverHChannel', 'coverTextChannel', 225, 15);
+    block('Cómics', 'coverHComic', 'coverTextComic', 225, 15, 'textAutoComic');
+    block('Series', 'coverHSeries', 'coverTextSeries', 225, 15, 'textAutoSeries');
+    block('Canales', 'coverHChannel', 'coverTextChannel', 225, 15, 'textAutoChannel');
 
     const actions = el('div', 'edit-actions');
     const reset = el('button', 'btn', 'Restaurar valores');
@@ -777,6 +789,9 @@ export function createProTools(d) {
       setDevPref('coverTextComic', '15');
       setDevPref('coverTextSeries', '15');
       setDevPref('coverTextChannel', '15');
+      setDevPref('textAutoComic', '0');
+      setDevPref('textAutoSeries', '0');
+      setDevPref('textAutoChannel', '0');
       applyNow();
       frame.remove();
       showImageConfig();

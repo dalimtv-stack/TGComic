@@ -802,3 +802,9 @@ textarea.meta-desc-lg.edit-input{
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
 .cfg-block .edit-input{margin:0;height:44px}
+
+/* Ajustar Automáticamente (texto de portadas): check a la derecha, a la altura de "Altura de portada" */
+.cfg-row-head{display:flex;align-items:center;justify-content:space-between;gap:.75rem}
+.cfg-row-head .sync-label{margin:0 0 .2rem}
+.cfg-auto{display:inline-flex;align-items:center;gap:.4rem;margin:0 0 .2rem;font-size:.8rem;font-weight:600;color:var(--fg);cursor:pointer;white-space:nowrap;-webkit-user-select:none;user-select:none}
+.cfg-auto input{width:1.05rem;height:1.05rem;margin:0;accent-color:var(--acc)}
