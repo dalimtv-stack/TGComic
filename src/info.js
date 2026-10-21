@@ -38,7 +38,7 @@ export function createInfoEdit(d) {
     return Array.isArray(L) ? L : [];
   };
 
-function showComicInfo(ch, f, displayTitle, siblings) {
+function showComicInfo(ch, f, displayTitle) {
   try {
     document.querySelector('.info-frame.comic-info')?.remove();
     const cap = parseComicCaption(f?.caption || '');
@@ -49,12 +49,15 @@ function showComicInfo(ch, f, displayTitle, siblings) {
     seriesKey = String(seriesKey || '').trim();
     let series = seriesKey || '—';
     // Título: con serie → solo "#nn - info" (como bajo la portada en la serie).
+    // Se parte del caption (Título España) o del nombre de archivo, nunca "Serie #nn".
     const issueFromFile = parsed ? issueDisplay(parsed) : '';
     let title = '—';
     if (ch && f) {
       if (seriesKey) {
+        // Forzar contexto "serie" con fallback que empieza por #
         const fb = issueFromFile || '#';
         title = comicDisplayName(ch, f, fb.startsWith('#') ? fb : ('#' + fb)) || fb;
+        // Por si quedó "Badlands #007"
         if (title && !/^#/.test(title.trim())) {
           const mh = title.match(/#\s*(.+)$/);
           title = mh ? ('#' + mh[1].replace(/^#\s*/, '').trim()) : (issueFromFile || title);
@@ -110,6 +113,7 @@ function showComicInfo(ch, f, displayTitle, siblings) {
     body.append(row('Tamaño', formatBytes(f?.size)));
     body.append(row('Páginas', pagesLabel));
     body.append(row('Formato pág.', pageFmt));
+    // Ficha "completa" = hay algo más que solo Nombre de archivo
     const hasExtraFicha = !!(cap.titleEs || cap.originalTitle || cap.series || cap.writer || cap.artist || cap.publisher || cap.date || cap.description);
     const hasAnyFicha = !!(cap.fileName || hasExtraFicha);
     body.append(el('div', 'info-sec', 'Ficha en Telegram'));
@@ -122,113 +126,66 @@ function showComicInfo(ch, f, displayTitle, siblings) {
       if (cap.artist) body.append(row('Dibujante', formatPeople(cap.artist)));
       if (cap.publisher) body.append(row('Editorial', cap.publisher));
       if (cap.date) body.append(row('Fecha de publicación', cap.date));
-      if (cap.description) {
-        const descBtn = el('button', 'btn info-desc-btn', 'Ver descripción');
-        descBtn.type = 'button';
-        descBtn.onclick = () => {
-          frame.remove();
-          showDescriptionPanel(cap.description);
-        };
-        body.append(descBtn);
-      }
     } else if (f?.caption && String(f.caption).trim()) {
       body.append(el('p', 'cover-pick-hint', String(f.caption).slice(0, 800)));
     } else {
       body.append(el('p', 'cover-pick-hint', 'Sin datos en Telegram'));
     }
+
+    // Fila inferior: [‹ anterior] [Ver descripción / Rellenar Ficha Telegram] [siguiente ›]
+    const navRow = el('div', 'info-navrow');
+    const mkNav = (txt, label) => {
+      const b = el('button', 'btn info-nav-btn', txt);
+      b.type = 'button';
+      b.title = label;
+      b.setAttribute('aria-label', label);
+      b.disabled = true;
+      return b;
+    };
+    const prevBtn = mkNav('‹', 'Cómic anterior');
+    const nextBtn = mkNav('›', 'Cómic siguiente');
+    const mid = el('div', 'info-nav-mid');
+    if (hasAnyFicha && cap.description) {
+      const descBtn = el('button', 'btn cover-pick-device', 'Ver descripción');
+      descBtn.type = 'button';
+      descBtn.onclick = () => {
+        frame.remove();
+        showDescriptionPanel(cap.description);
+      };
+      mid.append(descBtn);
+    }
+    // Rellenar disponible si no hay ficha completa (p. ej. solo "Nombre de archivo")
     if (!hasExtraFicha) {
       const fillBtn = el('button', 'btn cover-pick-device', 'Rellenar Ficha Telegram');
       fillBtn.type = 'button';
       fillBtn.onclick = () => {
         frame.remove();
-        showCaptionEditor(ch, f, () => showComicInfo(ch, f, displayTitle, siblings));
+        // Al terminar (guardar, cancelar o cerrar) se vuelve a Información
+        const back = () => showComicInfo(ch, f, displayTitle);
+        showCaptionEditor(ch, f, back, { onClose: back });
       };
-      body.append(fillBtn);
+      mid.append(fillBtn);
     }
-    // Navegación lateral anterior / siguiente (lados del frame/caja)
-    const nav = el('div', 'info-nav');
-    const prevBtn = el('button', 'btn info-nav-btn info-nav-prev', '‹');
-    const nextBtn = el('button', 'btn info-nav-btn info-nav-next', '›');
-    prevBtn.type = 'button';
-    nextBtn.type = 'button';
-    prevBtn.setAttribute('aria-label', 'Cómic anterior');
-    nextBtn.setAttribute('aria-label', 'Cómic siguiente');
-    prevBtn.disabled = true;
-    nextBtn.disabled = true;
-    nav.append(prevBtn, nextBtn);
-    nav.hidden = true;
-    box.append(head, body, nav);
+    if (ch && f) {
+      navRow.append(prevBtn, mid, nextBtn);
+      body.append(navRow);
+      comicNeighbors(ch, f).then(({ prev, next }) => {
+        const wire = (btn, target) => {
+          if (!target) return;
+          btn.disabled = false;
+          btn.onclick = () => showComicInfo(ch, target, '');
+        };
+        wire(prevBtn, prev);
+        wire(nextBtn, next);
+        // Sin vecinos: no mostrar las flechas (deja solo los botones de acción)
+        if (!prev && !next) { prevBtn.hidden = true; nextBtn.hidden = true; }
+      }).catch(() => { prevBtn.hidden = true; nextBtn.hidden = true; });
+    } else if (mid.childNodes.length) {
+      body.append(mid);
+    }
+    box.append(head, body);
     frame.append(box);
-
-    const wireNav = (list) => {
-      if (!Array.isArray(list) || list.length < 2 || !f) {
-        nav.hidden = true;
-        return;
-      }
-      const idx = list.findIndex((x) => String(x?.id) === String(f.id));
-      if (idx < 0) {
-        nav.hidden = true;
-        return;
-      }
-      nav.hidden = false;
-      prevBtn.disabled = idx <= 0;
-      nextBtn.disabled = idx >= list.length - 1;
-      prevBtn.onclick = (ev) => {
-        ev.stopPropagation();
-        if (idx <= 0) return;
-        showComicInfo(ch, list[idx - 1], null, list);
-      };
-      nextBtn.onclick = (ev) => {
-        ev.stopPropagation();
-        if (idx >= list.length - 1) return;
-        showComicInfo(ch, list[idx + 1], null, list);
-      };
-    };
-
-    if (Array.isArray(siblings) && siblings.length) {
-      wireNav(siblings);
-    } else if (ch && f) {
-      (async () => {
-        try {
-          let files = (await kv.get('f:' + ch.id)) || [];
-          if (!Array.isArray(files) || !files.length) {
-            nav.hidden = true;
-            return;
-          }
-          const sameSeries = (x) => {
-            try {
-              const ov = getComicSeriesOverride?.(ch, x);
-              if (ov != null && String(ov).trim()) return String(ov).trim();
-            } catch (_) {}
-            try {
-              const p = parseComicName(comicSourceName(x), ch.name);
-              if (p?.series) return p.series;
-              return seriesBase(x?.name || '', ch.name) || '';
-            } catch (_) {
-              return '';
-            }
-          };
-          let list = files;
-          if (seriesKey) {
-            const sk = seriesKey.toLowerCase();
-            const filtered = files.filter((x) => String(sameSeries(x) || '').toLowerCase() === sk);
-            if (filtered.length > 1) list = filtered;
-          }
-          const sortKey = (x) => {
-            try {
-              return comicDisplay(comicSourceName(x), ch.name) || x.name || '';
-            } catch (_) {
-              return x?.name || '';
-            }
-          };
-          list = [...list].sort((a, b) => natural(sortKey(a), sortKey(b)));
-          wireNav(list);
-        } catch (_) {
-          nav.hidden = true;
-        }
-      })();
-    }
-
+  // No cerrar al pulsar fuera: solo × / Cancelar
     document.body.append(frame);
   } catch (err) {
     console.error('showComicInfo', err);
@@ -237,6 +194,27 @@ function showComicInfo(ch, f, displayTitle, siblings) {
 }
 
 
+/** Cómic anterior / siguiente dentro de su serie (o del canal si no tiene serie con más números). */
+async function comicNeighbors(ch, f) {
+  let files = [];
+  try { files = (await kv.get('f:' + ch.id)) || []; } catch (_) {}
+  if (!Array.isArray(files) || !files.length) return { prev: null, next: null };
+  let list = [];
+  try {
+    const groups = groupSeries(files, ch.name, seriesOverrideFor(ch));
+    const g = groups.find((x) => x.files.some((y) => String(y.id) === String(f.id)));
+    if (g) list = g.files;
+  } catch (_) {}
+  if (list.length < 2) {
+    list = files.slice().sort((a, b) => natural(
+      comicDisplay(comicSourceName(a), ch.name),
+      comicDisplay(comicSourceName(b), ch.name)
+    ));
+  }
+  const i = list.findIndex((x) => String(x.id) === String(f.id));
+  if (i < 0) return { prev: null, next: null };
+  return { prev: i > 0 ? list[i - 1] : null, next: i < list.length - 1 ? list[i + 1] : null };
+}
 
 function existingSeriesLabels(ch, files) {
   const labels = new Set();
@@ -287,7 +265,11 @@ function showCaptionEditor(ch, f, after, opts = {}) {
   const head = el('div', 'info-head');
   head.append(el('span', '', 'Ficha Telegram'));
   const close = el('button', 'btn info-close', '×');
-  close.onclick = () => frame.remove();
+  const closeEditor = () => {
+    frame.remove();
+    try { opts.onClose?.(); } catch (_) {}
+  };
+  close.onclick = closeEditor;
   head.append(close);
   const body = el('div', 'info-body');
 
@@ -370,50 +352,26 @@ function showCaptionEditor(ch, f, after, opts = {}) {
 
   // Título local (bbdd / nombre bajo portada) para restaurar al desmarcar CV
   const localTitleEs = (() => {
-    const issueFromFile = parsed ? issueDisplay(parsed) : '';
-    // Caption ya tiene Título España
-    if (cap.titleEs && String(cap.titleEs).trim()) {
-      let t = String(cap.titleEs).trim().replace(/\s*\[[^\]]*\]/g, '').replace(/\s+/g, ' ').trim();
-      // Ya es etiqueta de número (# / Special / …)
-      if (/^#/.test(t) || /^(?:Special|Especial|Extra|Annual|Anual|One[-\s]?Shot|OneShot)\b/i.test(t)) {
-        return t;
-      }
-      // "Serie #006 - info" → "#006 - info"
-      try {
-        const asName = /\.cb[zr]$/i.test(t) ? t : (t + '.cbz');
-        const pCap = parseComicName(asName, ch?.name);
-        if (pCap) return issueDisplay(pCap) || t;
-      } catch (_) {}
-      if (localSeries) {
-        const low = t.toLowerCase();
-        const sk = localSeries.toLowerCase();
-        if (low.startsWith(sk)) {
-          let rest = t.slice(localSeries.length).replace(/^[\s._-]+/, '');
-          if (/^\d/.test(rest)) rest = '#' + rest;
-          if (rest) return rest;
-        }
-      }
-      return t;
-    }
-    if (opts.currentLabel && String(opts.currentLabel).trim()) {
-      const lab = String(opts.currentLabel).trim();
-      if (/^#/.test(lab)) return lab;
-    }
-    // Preferir solo "#nn - info" (como en la rejilla de la serie)
-    if (issueFromFile) return issueFromFile;
+    if (cap.titleEs && String(cap.titleEs).trim()) return String(cap.titleEs).trim();
     try {
-      const fb = issueFromFile || '#';
-      const shown = comicDisplayName(ch, f, fb.startsWith('#') ? fb : ('#' + fb));
-      if (shown && String(shown).trim()) {
-        let t = String(shown).trim();
-        if (!/^#/.test(t)) {
+      // Igual que el título que TGComic muestra bajo la portada en la serie: "#006 - Gothic (1 de 5)"
+      // (sin el nombre de la serie). Un título personalizado por el usuario sigue ganando.
+      if (parsed) {
+        const issue = issueDisplay(parsed);
+        let t = String(comicDisplayName(ch, f, issue) || issue || '').trim();
+        if (t && !/^#/.test(t)) {
           const mh = t.match(/#\s*(.+)$/);
-          if (mh) t = '#' + mh[1].replace(/^#\s*/, '').trim();
+          t = mh ? ('#' + mh[1].replace(/^#\s*/, '').trim()) : issue;
         }
-        return t;
+        if (t) return t;
       }
-    } catch (_) {}
-    return issueFromFile || '';
+      const base = comicDisplay(comicSourceName(f), ch?.name) || '';
+      const shown = comicDisplayName(ch, f, base);
+      return (shown || base || '').trim();
+    } catch (_) {
+      if (opts.currentLabel && String(opts.currentLabel).trim()) return String(opts.currentLabel).trim();
+      return '';
+    }
   })();
   const localTitleOrig = (cap.originalTitle && String(cap.originalTitle).trim())
     ? String(cap.originalTitle).trim()
@@ -453,7 +411,7 @@ function showCaptionEditor(ch, f, after, opts = {}) {
 
   const actions = el('div', 'edit-actions');
   const cancel = el('button', 'btn', 'Cancelar');
-  cancel.onclick = () => frame.remove();
+  cancel.onclick = closeEditor;
   const save = el('button', 'btn edit-save', 'Guardar en Telegram');
   save.onclick = async () => {
     // Guardar lo que hay en los inputs (según checks ya aplicados)
@@ -524,16 +482,12 @@ function showCaptionEditor(ch, f, after, opts = {}) {
       fileNameCtrl.cv = fileNameCtrl.prev; // no cambia por CV
 
       setSelectMode(true);
-      // Por defecto: Título España, Serie y Editorial DESMARCADOS (quedan datos locales/parseo).
-      // El resto se marca si Comic Vine aportó valor.
+      // Por defecto: marcar los que CV aportó dato, salvo Editorial, Serie y Título España,
+      // que vienen desmarcados con el valor local (parseo del nombre / lo ya configurado en TGComic).
+      const keepLocal = new Set([pubCtrl, seriesCtrl, titleEsCtrl]);
       for (const c of fieldCtrls) {
-        if (c === titleEsCtrl || c === seriesCtrl || c === pubCtrl) {
-          c.chk.checked = false;
-        } else if (c === fileNameCtrl) {
-          c.chk.checked = false;
-        } else {
-          c.chk.checked = !!(c.cv && String(c.cv).trim());
-        }
+        const hasCv = (c === fileNameCtrl || keepLocal.has(c)) ? false : !!(c.cv && String(c.cv).trim());
+        c.chk.checked = hasCv;
         c.apply();
       }
     },
@@ -551,6 +505,56 @@ function showComicVinePicker(ch, f, { onPick } = {}) {
   head.append(close);
   const body = el('div', 'info-body');
 
+  // Cargar un número directamente desde su URL de Comic Vine
+  const urlInp = el('input', 'edit-input cv-url-input');
+  urlInp.type = 'text';
+  urlInp.autocomplete = 'off';
+  urlInp.spellcheck = false;
+  urlInp.placeholder = 'https://comicvine.gamespot.com/…/4000-123456/';
+  body.append(urlInp);
+  const urlBtn = el('button', 'btn edit-save cv-url-btn', 'Url de Comic Vine');
+  urlBtn.type = 'button';
+  body.append(urlBtn);
+  const urlStatus = el('p', 'sync-status', '');
+  body.append(urlStatus);
+  const loadFromUrl = async () => {
+    const raw = urlInp.value.trim();
+    urlStatus.className = 'sync-status';
+    if (!raw) { urlStatus.textContent = 'Pega la URL de un número de Comic Vine'; return; }
+    if (!comicVineConfigured()) {
+      urlStatus.textContent = 'Comic Vine no está configurado.';
+      urlStatus.className = 'sync-status sync-err';
+      return;
+    }
+    const mIssue = raw.match(/(?:^|[/-])4000-(\d+)/) || raw.match(/\/api\/issue\/4000-(\d+)/i);
+    const bare = raw.match(/^\d+$/);
+    const id = mIssue ? mIssue[1] : (bare ? bare[0] : '');
+    if (!id) {
+      urlStatus.textContent = /4050-\d+/.test(raw)
+        ? 'Esa URL es de una colección (volumen). Usa la URL de un número concreto (contiene 4000-…).'
+        : 'No reconozco la URL. Debe ser la de un número de Comic Vine (contiene 4000-…).';
+      urlStatus.className = 'sync-status sync-err';
+      return;
+    }
+    urlBtn.disabled = true;
+    urlStatus.textContent = 'Cargando ficha…';
+    try {
+      const detail = await fetchIssueDetail(id);
+      if (!detail) throw new Error('No se encontró ese número en Comic Vine');
+      frame.remove();
+      onPick?.(detail);
+    } catch (e) {
+      urlStatus.textContent = 'Error: ' + (e?.message || e);
+      urlStatus.className = 'sync-status sync-err';
+    } finally {
+      urlBtn.disabled = false;
+    }
+  };
+  urlBtn.onclick = () => loadFromUrl();
+  urlInp.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); loadFromUrl(); }
+  });
+
   const parsed = parseComicName(comicSourceName(f), ch?.name);
   const cap = parseComicCaption(f?.caption || '');
   const qDefault = buildSearchQuery({
@@ -559,17 +563,6 @@ function showComicVinePicker(ch, f, { onPick } = {}) {
     number: parsed?.number || '',
     fileName: f?.name || '',
   });
-
-  // URL directa de Comic Vine (issue)
-  body.append(el('label', 'sync-label', 'Url de Comic Vine'));
-  const urlInp = el('input', 'edit-input');
-  urlInp.type = 'url';
-  urlInp.placeholder = 'https://comicvine.gamespot.com/…/4000-…/';
-  urlInp.autocomplete = 'off';
-  body.append(urlInp);
-  const urlBtn = el('button', 'btn', 'Cargar URL');
-  urlBtn.type = 'button';
-  body.append(urlBtn);
 
   body.append(el('label', 'sync-label', 'Búsqueda'));
   const qInp = el('input', 'edit-input');
@@ -583,39 +576,6 @@ function showComicVinePicker(ch, f, { onPick } = {}) {
   body.append(status);
   const list = el('div', 'cv-results');
   body.append(list);
-
-  urlBtn.onclick = async () => {
-    const u = String(urlInp.value || '').trim();
-    if (!u) {
-      status.textContent = 'Pega una URL de issue de Comic Vine.';
-      status.className = 'sync-status sync-err';
-      return;
-    }
-    if (!comicVineConfigured()) {
-      status.textContent = 'Configura VITE_COMICVINE_API_KEY en Vercel (.env).';
-      status.className = 'sync-status sync-err';
-      return;
-    }
-    urlBtn.disabled = true;
-    searchBtn.disabled = true;
-    status.className = 'sync-status';
-    status.textContent = 'Cargando ficha desde la URL…';
-    try {
-      const detail = await fetchIssueDetail(u);
-      if (!detail) throw new Error('No se encontró el issue');
-      frame.remove();
-      onPick?.(detail);
-    } catch (e) {
-      status.textContent = 'Error: ' + (e?.message || e);
-      status.className = 'sync-status sync-err';
-    } finally {
-      urlBtn.disabled = false;
-      searchBtn.disabled = false;
-    }
-  };
-  urlInp.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Enter') { ev.preventDefault(); urlBtn.click(); }
-  });
 
   const runSearch = async () => {
     list.replaceChildren();
@@ -708,7 +668,7 @@ function showComicVinePicker(ch, f, { onPick } = {}) {
   box.append(head, body);
   frame.append(box);
   document.body.append(frame);
-  // No buscar automáticamente: el usuario revisa la query y pulsa Buscar
+  // Sin búsqueda automática: el usuario revisa la consulta y pulsa «Buscar»
 }
 
 function showEditComicTitle(ch, f, currentLabel, after) {
