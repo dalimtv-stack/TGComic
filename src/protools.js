@@ -911,6 +911,19 @@ export function createProTools(d) {
     };
     body.append(imgCfgBtn);
 
+    const gridCfgBtn = el('button', 'btn cover-pick-device', 'Configuración de rejillas');
+    gridCfgBtn.type = 'button';
+    gridCfgBtn.onclick = () => {
+      try {
+        frame.remove();
+        showGridConfig();
+      } catch (err) {
+        console.error('[grid-cfg]', err);
+        try { appAlert('No se pudo abrir Configuración de rejillas: ' + (err?.message || err)); } catch (_) {}
+      }
+    };
+    body.append(gridCfgBtn);
+
     const reloadCoversBtn = el('button', 'btn protools-accent', 'Recargar portadas');
     reloadCoversBtn.type = 'button';
     reloadCoversBtn.onclick = () => {
