@@ -24,6 +24,7 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 .card{
   border:0;background:none;color:inherit;font:inherit;text-align:center;cursor:default;padding:0;min-width:0;
   display:flex;flex-direction:column;align-items:center;
+  --name-lines:2;
 }
 .hit{
   display:flex;justify-content:center;align-items:stretch;
@@ -47,14 +48,14 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
   margin-left:auto;margin-right:auto;padding:0 2px;text-align:center;
   overflow:hidden;
 }
-.card:has(.cover-comic){--meta-w:var(--cover-w-comic,150px)}
-.card:has(.cover-series){--meta-w:var(--cover-w-series,150px)}
-.card:has(.cover-channel){--meta-w:var(--cover-w-channel,150px)}
-.card .name{margin-top:.45rem}
+.card:has(.cover-comic){--meta-w:var(--cover-w-comic,150px);--meta-fs:var(--text-comic,15px);--small-fs:calc(var(--text-comic,15px) * .88)}
+.card:has(.cover-series){--meta-w:var(--cover-w-series,150px);--meta-fs:var(--text-series,15px);--small-fs:calc(var(--text-series,15px) * .88)}
+.card:has(.cover-channel){--meta-w:var(--cover-w-channel,150px);--meta-fs:var(--text-channel,15px);--small-fs:calc(var(--text-channel,15px) * .88)}
+.card:has(.cover.square){--meta-fs:.92rem;--small-fs:.78rem}
 /* Texto: editoriales usan tamaño fijo; cómic/serie/canal usan sus variables */
 .card b{
   display:-webkit-box;margin:0;font-weight:600;line-height:1.25;
-  -webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+  -webkit-line-clamp:var(--name-lines,2);-webkit-box-orient:vertical;overflow:hidden;
   font-size:.92rem;max-width:100%;
 }
 .card small{
@@ -70,6 +71,55 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 /* Editoriales (cuadradas): nunca heredan texto de cómics */
 .card:has(.cover.square) b{font-size:.92rem!important}
 .card:has(.cover.square) small{font-size:.78rem!important}
+/* ---------- Espaciado uniforme entre portadas ----------
+   Vertical: cada tarjeta reserva SIEMPRE el alto de --name-lines líneas de título
+   (2 por defecto) + 1 línea de subtítulo según el tamaño de texto de su tipo, así
+   el hueco entre filas no depende de cuántas líneas ocupe cada título.
+   (Si prefieres filas más compactas: .card{--name-lines:1}) */
+.card .name{min-height:calc(var(--res-fs,var(--meta-fs,.92rem)) * 1.25 * var(--name-lines,2))}
+.card > small{line-height:1.25;min-height:calc(var(--res-small,var(--small-fs,.78rem)) * 1.25)}
+.card:not(:has(> small))::after{content:"";display:block;height:calc(var(--res-small,var(--small-fs,.78rem)) * 1.25)}
+.card.card-locked::after{content:"";display:block;height:calc(var(--res-fs,var(--meta-fs,.92rem)) * 1.25 * var(--name-lines,2) + .5rem + var(--res-small,var(--small-fs,.78rem)) * 1.25)}
+/* Horizontal: las columnas miden lo que la portada (nada de 1fr que reparte el sobrante
+   entre portadas). El hueco entre portadas es siempre el `gap`; el sobrante va a los lados.
+   Se decide por la clase de la rejilla (grid-comics / grid-series / grid-channels / grid-mixed,
+   la que pone grid(..., kind)) y, si no la tiene, por el tipo de portadas que contiene. */
+.grid.grid-comics,
+.grid:has(.cover-comic):not(:has(.cover-series,.cover-channel)){
+  grid-template-columns:repeat(auto-fill,minmax(min(100%,var(--cover-w-comic,150px)),var(--cover-w-comic,150px)));
+  justify-content:center;
+  --meta-fs:var(--text-comic,15px);--small-fs:calc(var(--text-comic,15px) * .88);
+}
+.grid.grid-series,
+.grid:has(.cover-series):not(:has(.cover-comic,.cover-channel)){
+  grid-template-columns:repeat(auto-fill,minmax(min(100%,var(--cover-w-series,150px)),var(--cover-w-series,150px)));
+  justify-content:center;
+  --meta-fs:var(--text-series,15px);--small-fs:calc(var(--text-series,15px) * .88);
+}
+.grid.grid-channels,
+.grid:has(.cover-channel):not(:has(.cover-comic,.cover-series)){
+  grid-template-columns:repeat(auto-fill,minmax(min(100%,var(--cover-w-channel,150px)),var(--cover-w-channel,150px)));
+  justify-content:center;
+  --meta-fs:var(--text-channel,15px);--small-fs:calc(var(--text-channel,15px) * .88);
+}
+/* Rejillas con portadas de varios tipos (p. ej. series + cómics en un canal): cada tarjeta
+   con su propio ancho en una fila flexible, para que el hueco sea el mismo aunque los
+   tamaños de series y cómics sean distintos. */
+.grid.grid-mixed,
+.grid:has(.cover-comic):has(.cover-series),
+.grid:has(.cover-comic):has(.cover-channel),
+.grid:has(.cover-series):has(.cover-channel){
+  display:flex;flex-wrap:wrap;justify-content:center;align-items:flex-start;
+  /* altura de texto reservada = la del tipo con letra más grande, para que todas las filas midan igual */
+  --res-fs:max(var(--text-comic,15px),var(--text-series,15px));
+  --res-small:calc(max(var(--text-comic,15px),var(--text-series,15px)) * .88);
+}
+.grid.grid-mixed > .card,
+.grid:has(.cover-comic):has(.cover-series) > .card,
+.grid:has(.cover-comic):has(.cover-channel) > .card,
+.grid:has(.cover-series):has(.cover-channel) > .card{
+  flex:0 0 auto;width:var(--meta-w,var(--cover-w-comic,150px));max-width:100%;
+}
 .cover img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
 .cover.landscape{background:transparent}
 .cover.landscape img{object-fit:contain;object-position:center;inset:0;width:100%;height:100%;transform:none}
@@ -81,8 +131,6 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 .prog{position:absolute;left:0;right:0;bottom:0;height:4px;background:#0008;z-index:1}
 .prog-fill{height:100%;background:var(--acc);border-radius:0 2px 0 0;transition:width .2s}
 .prog-badge{position:absolute;left:6px;bottom:10px;background:#000b;color:var(--acc);border-radius:99px;padding:.1rem .5rem;font-size:.72rem;font-weight:650;z-index:1}
-.card b{display:-webkit-box;margin-top:.5rem;font-weight:600;line-height:1.25;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.card small{color:var(--mut);display:block}
 .msg{padding:3rem 1rem;color:var(--mut);text-align:center}
 
 /* Home */
@@ -442,7 +490,7 @@ body:has(.sheet) #app{
     min-width:280px;min-height:280px;
     max-width:calc(100vw - 16px);
     max-height:calc(100vh - 64px);
-  max-height:calc(100dvh - 64px);
+    max-height:calc(100dvh - 64px);
     padding-top:16px;
   }
   .repack-resize-handle{

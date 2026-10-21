@@ -648,8 +648,6 @@ function channelsView(g) {
         const n = files.length;
         const label = channelDisplayName(ch);
         gridItems.push({
-          label,
-          sub: n ? (n === 1 ? '1 cómic' : `${n} cómics`) : '',
           cover: () => locks.isContentRestricted('channel', ch)
             ? locks.lockedCoverNode(ART)
             : channelCoverNode(ch, files),
@@ -908,25 +906,26 @@ function filesView(ch) {
             ['Desagrupar serie (con nombre)', () => setUngroupMode(ch, seriesLabel, 'full', redraw)],
           ];
           const seriesSearch = (seriesShown + ' ' + seriesLabel + ' ' + fs.map((f) => f.name).join(' ')).toLowerCase();
+          const seriesRestricted = locks.isContentRestricted('series', { ch, seriesLabel });
+          const seriesLockOpts = () => lockToggleOpts('series', { ch, seriesLabel }, seriesDisplayName(ch, seriesLabel), redraw);
           items.push({
-            label: seriesShown,
+            label: seriesRestricted ? '' : seriesShown,
             sub: `${fs.length} números`,
             searchText: seriesSearch,
             isUnread: seriesUnread,
             cover: () => locks.isContentRestricted('series', { ch, seriesLabel })
               ? locks.lockedCoverNode(ART)
               : seriesCoverNode(ch, seriesLabel, fs, fs.length),
-            hiddenMeta: locks.isContentRestricted('series', { ch, seriesLabel }),
-            label: locks.isContentRestricted('series', { ch, seriesLabel }) ? '' : seriesShown,
+            hiddenMeta: seriesRestricted,
             go: () => {
               if (!locks.guardRestricted('series', { ch, seriesLabel }, seriesDisplayName(ch, seriesLabel))) return;
               seriesView(ch, seriesLabel, fs);
             },
-            longPress: () => sheet(seriesDisplayName(ch, seriesLabel), [
-              ...lockToggleOpts('series', { ch, seriesLabel }, seriesDisplayName(ch, seriesLabel), redraw),
-            ]),
-            longPress: () => sheet(seriesShown, seriesOpts),
-            menu: () => sheet(seriesShown, seriesOpts),
+            // Serie bloqueada: solo opciones de bloqueo (sin Información/Editar); si no, menú completo + bloqueo
+            longPress: () => seriesRestricted
+              ? sheet(seriesDisplayName(ch, seriesLabel), seriesLockOpts())
+              : sheet(seriesShown, [...seriesOpts, ...seriesLockOpts()]),
+            menu: () => sheet(seriesShown, [...seriesOpts, ...seriesLockOpts()]),
           });
         }
       }
