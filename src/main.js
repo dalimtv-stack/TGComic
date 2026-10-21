@@ -159,14 +159,19 @@ function applyCoverSizePrefs() {
     const wComic = Math.round(comic * 2 / 3);
     const wSeries = Math.round(series * 2 / 3);
     const wChannel = Math.round(channel * 2 / 3);
+    const tComic = Math.max(10, Math.min(28, +(p('coverTextComic', '15') || 15)));
+    const tSeries = Math.max(10, Math.min(28, +(p('coverTextSeries', '15') || 15)));
+    const tChannel = Math.max(10, Math.min(28, +(p('coverTextChannel', '15') || 15)));
     root.style.setProperty('--cover-h-comic', comic + 'px');
     root.style.setProperty('--cover-h-series', series + 'px');
     root.style.setProperty('--cover-h-channel', channel + 'px');
     root.style.setProperty('--cover-w-comic', wComic + 'px');
     root.style.setProperty('--cover-w-series', wSeries + 'px');
     root.style.setProperty('--cover-w-channel', wChannel + 'px');
-    // Por defecto (por si un grid no tiene clase)
     root.style.setProperty('--cover-grid-min', wComic + 'px');
+    root.style.setProperty('--text-comic', tComic + 'px');
+    root.style.setProperty('--text-series', tSeries + 'px');
+    root.style.setProperty('--text-channel', tChannel + 'px');
   } catch (_) {}
 }
 try { applyCoverSizePrefs(); } catch (_) {}
@@ -774,12 +779,10 @@ function showViewerConfig() {
   head.append(close);
   const body = el('div', 'info-body');
 
-
-
   const section = (title) => {
     body.append(el('div', 'info-sec', title));
   };
-  const toggleGroup = (options, getVal, setVal) => {
+  const toggleGroup = (options, getVal, setVal, onChange) => {
     const wrap = el('div', 'cfg-group');
     const btns = [];
     const paint = () => {
@@ -792,16 +795,43 @@ function showViewerConfig() {
       b.onclick = () => {
         setVal(val);
         paint();
+        try { onChange?.(val); } catch (_) {}
       };
       btns.push({ b, val });
       wrap.append(b);
     }
     body.append(wrap);
     paint();
-    return paint;
+    return { wrap, paint };
   };
 
   section('Visualización páginas');
+  // Subopciones solo en Modo Página
+  const spreadWrap = el('div', 'cfg-group cfg-sub');
+  const spreadBtns = [];
+  const paintSpread = () => {
+    const on = pref('spread', '0') === '1';
+    spreadBtns.forEach(({ b, val }) => b.classList.toggle('on', val === (on ? '1' : '0')));
+  };
+  for (const [val, label] of [['0', 'Una Página'], ['1', 'Dos Páginas']]) {
+    const b = el('button', 'cfg-toggle', label);
+    b.type = 'button';
+    b.onclick = () => {
+      setPref('spread', val);
+      paintSpread();
+    };
+    spreadBtns.push({ b, val });
+    spreadWrap.append(b);
+  }
+  paintSpread();
+  const syncSpreadVis = (mode) => {
+    const m = mode || (() => {
+      const x = pref('mode', 'page');
+      return (x === 'vertical' || x === 'horizontal') ? x : 'page';
+    })();
+    spreadWrap.hidden = m !== 'page';
+  };
+
   toggleGroup(
     [
       ['page', 'Modo Página'],
@@ -812,8 +842,11 @@ function showViewerConfig() {
       const m = pref('mode', 'page');
       return (m === 'vertical' || m === 'horizontal') ? m : 'page';
     },
-    (v) => setPref('mode', v)
+    (v) => setPref('mode', v),
+    (v) => syncSpreadVis(v)
   );
+  body.append(spreadWrap);
+  syncSpreadVis();
 
   section('Ajuste Páginas');
   toggleGroup(
@@ -826,8 +859,8 @@ function showViewerConfig() {
   );
 
   section('Menú del visor');
-  const hideWrap = el('div');
-  const hideLab = el('label', 'sync-label', 'Ocultar menús tras (segundos)');
+  const hideWrap = el('div', 'cfg-field');
+  const hideLab = el('label', 'sync-label', 'Ocultar menús tras (segundos). Por defecto 15 segundos.');
   const hideInp = el('input', 'edit-input');
   hideInp.type = 'number';
   hideInp.min = '3';
@@ -839,13 +872,12 @@ function showViewerConfig() {
     hideInp.value = String(v);
     setPref('uiHideSec', String(v));
   };
-  const hideHint = el('p', 'cover-pick-hint', 'Por defecto 15 s sin interacción. Afecta a la barra superior e inferior del lector.');
-  hideWrap.append(hideLab, hideInp, hideHint);
+  hideWrap.append(hideLab, hideInp);
   body.append(hideWrap);
 
   section('Caché de páginas (lectura)');
-  const pcWrap = el('div', 'cfg-group');
-  const pcLab = el('label', 'sync-label', 'Máximo de caché de páginas (MB)');
+  const pcWrap = el('div', 'cfg-field');
+  const pcLab = el('label', 'sync-label', 'Máximo de caché de páginas en este dispositivo. Por defecto 500 MB');
   const pcInp = el('input', 'edit-input');
   pcInp.type = 'number';
   pcInp.min = '50';
@@ -857,13 +889,11 @@ function showViewerConfig() {
     pcInp.value = String(v);
     setPref('pageCacheMaxMB', String(v));
   };
-  const pcHint = el('p', 'cover-pick-hint', 'Por defecto 500 MB. Las páginas vistas se guardan para no re-descargarlas.');
-  pcWrap.append(pcLab, pcInp, pcHint);
+  pcWrap.append(pcLab, pcInp);
   body.append(pcWrap);
 
   box.append(head, body);
   frame.append(box);
-  // No cerrar al pulsar fuera: solo × / Cancelar
   document.body.append(frame);
 }
 menuCfgBtn.onclick = (ev) => { ev.stopPropagation(); showViewerConfig(); };

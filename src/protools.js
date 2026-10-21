@@ -665,54 +665,77 @@ export function createProTools(d) {
     const frame = el('div', 'info-frame img-cfg');
     const box = el('div', 'info-box');
     const head = el('div', 'info-head');
-    head.append(el('span', '', 'Configuración Imágenes'));
+    head.append(el('span', '', 'Configuración Imágenes y Textos'));
     const close = el('button', 'btn info-close', '×');
     close.onclick = () => frame.remove();
     head.append(close);
     const body = el('div', 'info-body');
     body.append(el('p', 'cover-pick-hint',
-      'Altura de las portadas en este dispositivo (no se sincroniza). El texto debajo se adapta al tamaño.'
+      'Solo en este dispositivo (no se sincroniza). Portada = alto en px (ratio 2:3). Texto = tamaño del título bajo la portada.'
     ));
 
-    const mk = (key, label, def) => {
-      const wrap = el('div', 'cfg-group');
-      const lab = el('label', 'sync-label', label + ' (px)');
-      const inp = el('input', 'edit-input');
-      inp.type = 'number';
-      inp.min = '100';
-      inp.max = '400';
-      inp.step = '5';
-      const cur = Math.max(100, Math.min(400, +(pref(key, String(def)) || def)));
-      inp.value = String(cur);
-      const hint = el('p', 'cover-pick-hint', 'Actual: ' + cur + ' px');
-      inp.oninput = () => {
-        const v = Math.max(100, Math.min(400, +inp.value || def));
-        hint.textContent = 'Actual: ' + v + ' px';
-      };
-      inp.onchange = () => {
-        const v = Math.max(100, Math.min(400, +inp.value || def));
-        inp.value = String(v);
-        setPref(key, String(v));
-        hint.textContent = 'Actual: ' + v + ' px';
-        try {
-          if (typeof window.applyCoverSizePrefs === 'function') window.applyCoverSizePrefs();
-          else if (typeof applyCoverSizePrefs === 'function') applyCoverSizePrefs();
-          else {
-            const root = document.documentElement;
-            if (key === 'coverHComic') root.style.setProperty('--cover-h-comic', v + 'px');
-            if (key === 'coverHSeries') root.style.setProperty('--cover-h-series', v + 'px');
-            if (key === 'coverHChannel') root.style.setProperty('--cover-h-channel', v + 'px');
-            if (key === 'coverHComic') root.style.setProperty('--cover-min-comic', Math.round(v * 2 / 3) + 'px');
-          }
-        } catch (_) {}
-        try { onCoversChanged?.(); } catch (_) {}
-      };
-      wrap.append(lab, inp, hint);
-      body.append(wrap);
+    const applyNow = () => {
+      try {
+        if (typeof window.applyCoverSizePrefs === 'function') window.applyCoverSizePrefs();
+        else if (typeof applyCoverSizePrefs === 'function') applyCoverSizePrefs();
+      } catch (_) {}
+      try { onCoversChanged?.(); } catch (_) {}
     };
-    mk('coverHComic', 'Portadas de los cómics', 225);
-    mk('coverHSeries', 'Portadas de las series', 225);
-    mk('coverHChannel', 'Portadas de los canales', 225);
+
+    const block = (title, coverKey, textKey, coverDef, textDef) => {
+      const boxB = el('div', 'cfg-block');
+      boxB.append(el('div', 'info-sec', title));
+
+      const labH = el('label', 'sync-label', 'Altura de portada (px)');
+      const inpH = el('input', 'edit-input');
+      inpH.type = 'number';
+      inpH.min = '100';
+      inpH.max = '400';
+      inpH.step = '5';
+      const curH = Math.max(100, Math.min(400, +(pref(coverKey, String(coverDef)) || coverDef)));
+      inpH.value = String(curH);
+      const hintH = el('p', 'cfg-hint', 'Actual: ' + curH + ' px');
+      inpH.oninput = () => {
+        const v = Math.max(100, Math.min(400, +inpH.value || coverDef));
+        hintH.textContent = 'Actual: ' + v + ' px';
+      };
+      inpH.onchange = () => {
+        const v = Math.max(100, Math.min(400, +inpH.value || coverDef));
+        inpH.value = String(v);
+        setPref(coverKey, String(v));
+        hintH.textContent = 'Actual: ' + v + ' px';
+        applyNow();
+      };
+      boxB.append(labH, inpH, hintH);
+
+      const labT = el('label', 'sync-label', 'Tamaño del texto (px)');
+      const inpT = el('input', 'edit-input');
+      inpT.type = 'number';
+      inpT.min = '10';
+      inpT.max = '28';
+      inpT.step = '1';
+      const curT = Math.max(10, Math.min(28, +(pref(textKey, String(textDef)) || textDef)));
+      inpT.value = String(curT);
+      const hintT = el('p', 'cfg-hint', 'Actual: ' + curT + ' px · subtítulo un poco menor');
+      inpT.oninput = () => {
+        const v = Math.max(10, Math.min(28, +inpT.value || textDef));
+        hintT.textContent = 'Actual: ' + v + ' px · subtítulo un poco menor';
+      };
+      inpT.onchange = () => {
+        const v = Math.max(10, Math.min(28, +inpT.value || textDef));
+        inpT.value = String(v);
+        setPref(textKey, String(v));
+        hintT.textContent = 'Actual: ' + v + ' px · subtítulo un poco menor';
+        applyNow();
+      };
+      boxB.append(labT, inpT, hintT);
+
+      body.append(boxB);
+    };
+
+    block('Cómics', 'coverHComic', 'coverTextComic', 225, 15);
+    block('Series', 'coverHSeries', 'coverTextSeries', 225, 15);
+    block('Canales', 'coverHChannel', 'coverTextChannel', 225, 15);
 
     const actions = el('div', 'edit-actions');
     const reset = el('button', 'btn', 'Restaurar valores');
@@ -720,7 +743,10 @@ export function createProTools(d) {
       setPref('coverHComic', '225');
       setPref('coverHSeries', '225');
       setPref('coverHChannel', '225');
-      try { (window.applyCoverSizePrefs || (typeof applyCoverSizePrefs === 'function' ? applyCoverSizePrefs : null))?.(); } catch (_) {}
+      setPref('coverTextComic', '15');
+      setPref('coverTextSeries', '15');
+      setPref('coverTextChannel', '15');
+      applyNow();
       frame.remove();
       showImageConfig();
     };
@@ -749,7 +775,7 @@ export function createProTools(d) {
       'Herramientas de mantenimiento de la caché local.'
     ));
 
-    const imgCfgBtn = el('button', 'btn cover-pick-device', 'Configuración Imágenes');
+    const imgCfgBtn = el('button', 'btn cover-pick-device', 'Configuración Imágenes y Textos');
     imgCfgBtn.type = 'button';
     imgCfgBtn.onclick = () => {
       try {
