@@ -43,7 +43,7 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 .cover.cover-channel{width:min(100%,var(--cover-w-channel,150px))}
 /* Meta centrada bajo la portada, mismo ancho, sin sobresalir */
 .card .name,
-.card > small{
+.card small{
   box-sizing:border-box;width:min(100%,var(--meta-w,100%));max-width:100%;
   margin-left:auto;margin-right:auto;padding:0 2px;text-align:center;
   overflow:hidden;
@@ -76,9 +76,9 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
    (2 por defecto) + 1 línea de subtítulo según el tamaño de texto de su tipo, así
    el hueco entre filas no depende de cuántas líneas ocupe cada título.
    (Si prefieres filas más compactas: .card{--name-lines:1}) */
-.card .name{min-height:calc(var(--res-fs,var(--meta-fs,.92rem)) * 1.25 * var(--name-lines,2))}
-.card > small{line-height:1.25;min-height:calc(var(--res-small,var(--small-fs,.78rem)) * 1.25)}
-.card:not(:has(> small))::after{content:"";display:block;height:calc(var(--res-small,var(--small-fs,.78rem)) * 1.25)}
+.card .meta{width:100%;display:flex;flex-direction:column;align-items:center;min-height:calc(var(--res-fs,var(--meta-fs,.92rem)) * 1.25 * var(--name-lines,2) + .5rem + var(--res-small,var(--small-fs,.78rem)) * 1.25)}
+.card .name{min-height:0}
+.card small{line-height:1.25;margin-top:.05rem}
 .card.card-locked::after{content:"";display:block;height:calc(var(--res-fs,var(--meta-fs,.92rem)) * 1.25 * var(--name-lines,2) + .5rem + var(--res-small,var(--small-fs,.78rem)) * 1.25)}
 /* Horizontal: las columnas miden lo que la portada (nada de 1fr que reparte el sobrante
    entre portadas). El hueco entre portadas es siempre el `gap`; el sobrante va a los lados.

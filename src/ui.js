@@ -352,8 +352,10 @@ function grid(items, withSearch, searchPlaceholder, gridKind) {
     }
     if (i.longPress) bindLongPress(t, i.longPress);
     name.append(t);
-    c.append(hit, name);
-    if (i.sub) c.append(el('small', '', i.sub));
+    const metaBox = el('div', 'meta');
+    metaBox.append(name);
+    if (i.sub) metaBox.append(el('small', '', i.sub));
+    c.append(hit, metaBox);
     return c;
   }));
   };

@@ -129,8 +129,11 @@ function cardNode(i) {
   } else t.onclick = i.go;
   if (i.longPress) bindLongPress(t, i.longPress);
   name.append(t);
-  c.append(name);
-  if (i.sub) c.append(el('small', '', i.sub));
+  // Título + info juntos en un bloque de alto fijo: la info va pegada al título, las filas siguen uniformes
+  const metaBox = el('div', 'meta');
+  metaBox.append(name);
+  if (i.sub) metaBox.append(el('small', '', i.sub));
+  c.append(metaBox);
   return c;
 }
 

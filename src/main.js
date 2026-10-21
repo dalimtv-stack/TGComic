@@ -42,6 +42,7 @@ import {
   comicVineConfigured, searchIssuesSmart, fetchIssueDetail, buildSearchQuery,
 } from './comicvine.js';
 import * as locks from './lock.js';
+import { initBalance } from './balance.js';
 
 const apiId = Number(import.meta.env.VITE_API_ID);
 const apiHash = import.meta.env.VITE_API_HASH;
@@ -192,6 +193,7 @@ function applyCoverSizePrefs() {
     root.style.setProperty('--text-comic', tComic + 'px');
     root.style.setProperty('--text-series', tSeries + 'px');
     root.style.setProperty('--text-channel', tChannel + 'px');
+    window.dispatchEvent(new Event('covers-resized')); // re-equilibra los títulos con el nuevo tamaño
   } catch (_) {}
 }
 try { applyCoverSizePrefs(); } catch (_) {}
@@ -1895,6 +1897,7 @@ async function migrateCacheImages() {
       sessionStorage.setItem('progMigV2', '1');
     }
   } catch (_) {}
+  try { initBalance(document.querySelector('#app')); } catch (_) {}
   stack.push({ title: 'Cómics', render: groupsView });
   show();
   // Optimizar caché antigua en segundo plano (WebP + menos resolución)
