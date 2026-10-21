@@ -933,9 +933,11 @@ function comicNeedsCvFill(f, ch) {
 }
 
 function normIssueKey(n) {
-  const s = String(n || '').replace(/^#/, '').trim().toLowerCase();
+  let s = String(n || '').replace(/^#/, '').trim().toLowerCase();
   if (!s) return '';
-  const stripped = s.replace(/^0+/, '');
+  // "6.0" / "6.00" → "6"
+  if (/^\d+\.0+$/.test(s)) s = s.replace(/\.0+$/, '');
+  const stripped = s.replace(/^0+(?=\d)/, '');
   return stripped || s;
 }
 
@@ -1054,29 +1056,71 @@ async function runSeriesCvFill(ch, seriesLabel, files, volId, sourceUrl) {
     }
 
     let ok = 0, skip = 0, fail = 0, noMatch = 0;
+    const failSamples = [];
     setProg(0, targets.length, 'Emparejando y guardando…');
+
+    /** Nombre legible: caption "Nombre de archivo" si existe; si no, comicSourceName. */
+    const sourceNameOf = (f) => {
+      try {
+        const capFn = String(parseComicCaption(f?.caption || '').fileName || '').trim();
+        if (capFn) return capFn;
+      } catch (_) {}
+      try { return comicSourceName(f) || f?.name || ''; } catch (_) { return f?.name || ''; }
+    };
+    const numKeyOf = (f) => {
+      const src = sourceNameOf(f);
+      const parsed = parseComicName(src, ch?.name);
+      if (parsed?.number) return { key: normIssueKey(parsed.number), parsed, src };
+      const m = String(src).match(/#\s*([0-9]+(?:\.[0-9]+)?[a-zA-Z]?)/i);
+      if (m) return { key: normIssueKey(m[1]), parsed: parsed || { number: m[1], series: seriesLabel }, src };
+      return { key: '', parsed, src };
+    };
+    const keep = (prev, next) => {
+      const p = String(prev || '').trim();
+      if (p) return p;
+      return String(next || '').trim();
+    };
+    const fitCaption = (fields) => {
+      let caption = buildComicCaption(fields);
+      if (caption.length <= 1024) return caption;
+      // Acortar descripción de forma agresiva
+      let desc = String(fields.description || '');
+      const overhead = caption.length - desc.length;
+      const budget = Math.max(0, 1000 - overhead);
+      fields.description = desc.slice(0, budget);
+      caption = buildComicCaption(fields);
+      if (caption.length <= 1024) return caption;
+      fields.description = '';
+      caption = buildComicCaption(fields);
+      return caption.length > 1024 ? caption.slice(0, 1024) : caption;
+    };
 
     for (let i = 0; i < targets.length; i++) {
       const f = targets[i];
       setProg(i, targets.length, (f.name || '').slice(0, 48));
       try {
-        const parsed = parseComicName(comicSourceName(f), ch?.name);
-        const numKey = normIssueKey(parsed?.number);
+        const { key: numKey, parsed, src } = numKeyOf(f);
         if (!numKey) { noMatch++; continue; }
         const iss = byNum.get(numKey);
         if (!iss) { noMatch++; continue; }
 
-        // Detalle para créditos
+        const capPrev = parseComicCaption(f?.caption || '');
+        const needCredits = !String(capPrev.writer || '').trim() || !String(capPrev.artist || '').trim();
+        const needDesc = !String(capPrev.description || '').trim();
+
+        // Solo pedir detalle si faltan créditos o descripción (evita rate-limit CV)
         let detail = null;
-        try {
-          const ref = iss.apiDetailUrl || iss.id;
-          if (ref && typeof fetchIssueDetail === 'function') {
-            detail = await fetchIssueDetail(ref);
+        if ((needCredits || needDesc) && typeof fetchIssueDetail === 'function') {
+          try {
+            const ref = iss.apiDetailUrl || iss.id;
+            if (ref) detail = await fetchIssueDetail(ref);
+          } catch (e) {
+            console.warn('[series-cv] detail', f?.name, e?.message || e);
           }
-        } catch (_) {}
+        }
 
         const story = String((detail && detail.name) || iss.name || '').trim();
-        const num = String((detail && detail.issueNumber) || iss.issueNumber || parsed.number || '').replace(/^#/, '').trim();
+        const num = String((detail && detail.issueNumber) || iss.issueNumber || parsed?.number || numKey).replace(/^#/, '').trim();
         let cvTitle = '';
         if (num && story) cvTitle = '#' + num + ' - ' + story;
         else if (num) cvTitle = '#' + num;
@@ -1093,48 +1137,47 @@ async function runSeriesCvFill(ch, seriesLabel, files, volId, sourceUrl) {
           const dm = String(iss.coverDate).match(/^(\d{4})-(\d{2})/);
           cvDate = dm ? (dm[2] + '/' + dm[1]) : String(iss.coverDate).slice(0, 4);
         }
-        const cvDesc = String((detail && detail.description) || '').trim();
+        let cvDesc = String((detail && detail.description) || '').trim();
+        if (cvDesc.length > 600) cvDesc = cvDesc.slice(0, 600) + '…';
 
-        // Merge: no sobrescribir lo que ya tenga el caption
-        const capPrev = parseComicCaption(f?.caption || '');
-        const issueLab = parsed ? issueDisplay(parsed) : '';
+        const issueLab = parsed ? issueDisplay(parsed) : (num ? ('#' + num) : '');
         let titleEs = (capPrev.titleEs && String(capPrev.titleEs).trim()) || issueLab || '';
         if (titleEs && !/^#/.test(titleEs.trim()) && issueLab) titleEs = issueLab;
 
-        const keep = (prev, next) => {
-          const p = String(prev || '').trim();
-          if (p) return p;
-          return String(next || '').trim();
-        };
+        // Nombre de archivo legible: caption > sourceName > f.name
+        const niceFile = String(capPrev.fileName || src || f.name || '').trim();
 
         const localPub = localPublisherOf(ch);
         const fields = {
-          fileName: capPrev.fileName || f.name || '',
+          fileName: niceFile,
           titleEs,
           originalTitle: keep(capPrev.originalTitle, cvTitle),
           series: keep(capPrev.series, seriesLabel || parsed?.series || ''),
           writer: keep(capPrev.writer, writers),
           artist: keep(capPrev.artist, artists),
-          // Editorial: BBDD local (canal) si falta
           publisher: keep(capPrev.publisher, localPub),
           date: keep(capPrev.date, cvDate),
           description: keep(capPrev.description, cvDesc),
         };
 
-        let caption = buildComicCaption(fields);
-        if (caption.length > 1024) {
-          fields.description = String(fields.description || '').slice(0, Math.max(0, 1024 - (caption.length - String(fields.description || '').length - 50)));
-          caption = buildComicCaption(fields);
-          if (caption.length > 1024) caption = caption.slice(0, 1024);
+        const caption = fitCaption(fields);
+        // Telegram: pausa breve para no saturar EditMessage
+        try {
+          await updateTelegramCaption(ch, f, caption);
+        } catch (e1) {
+          await new Promise((r) => setTimeout(r, 600));
+          await updateTelegramCaption(ch, f, caption);
         }
-        await updateTelegramCaption(ch, f, caption);
         ok++;
+        await new Promise((r) => setTimeout(r, 250));
       } catch (e) {
         console.warn('[series-cv]', f?.name, e);
         fail++;
+        if (failSamples.length < 5) {
+          failSamples.push((f?.name || '?').slice(0, 40) + ': ' + (e?.message || e));
+        }
       }
       setProg(i + 1, targets.length, (f.name || '').slice(0, 48));
-      if (i % 2 === 0) await new Promise((r) => setTimeout(r, 0));
     }
 
     progFrame.remove();
@@ -1144,6 +1187,7 @@ async function runSeriesCvFill(ch, seriesLabel, files, volId, sourceUrl) {
       fail ? `Fallos: ${fail}` : '',
       skip ? `Omitidos: ${skip}` : '',
     ].filter(Boolean);
+    if (failSamples.length) parts.push('Ejemplos:\n' + failSamples.join('\n'));
     await appAlert(parts.join('\n'), 'Comic Vine');
     // Refrescar listado en memoria si hace falta
     try {
