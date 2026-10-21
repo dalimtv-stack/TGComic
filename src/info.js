@@ -1004,6 +1004,50 @@ function showSeriesCvFillForm(ch, seriesLabel, files) {
   setTimeout(() => { try { urlInp.focus(); } catch (_) {} }, 50);
 }
 
+
+function floodWaitSeconds(err) {
+  const msg = String(err?.message || err || '');
+  const m = msg.match(/wait of (\d+)\s*seconds/i) || msg.match(/FLOOD_WAIT[_:]?\s*(\d+)/i);
+  if (m) return Math.min(600, Math.max(1, parseInt(m[1], 10) || 0));
+  return 0;
+}
+
+async function sleepSec(total, onTick) {
+  const end = Date.now() + total * 1000;
+  while (Date.now() < end) {
+    const left = Math.max(0, Math.ceil((end - Date.now()) / 1000));
+    try { onTick?.(left); } catch (_) {}
+    await new Promise((r) => setTimeout(r, Math.min(1000, end - Date.now())));
+  }
+}
+
+/** EditMessage respetando FLOOD_WAIT de Telegram (espera y reintenta). */
+async function editCaptionWithFloodWait(ch, f, caption, onStatus) {
+  let attempt = 0;
+  while (attempt < 4) {
+    attempt++;
+    try {
+      await updateTelegramCaption(ch, f, caption);
+      return;
+    } catch (e) {
+      const w = floodWaitSeconds(e);
+      if (w > 0) {
+        try { onStatus?.('Telegram FLOOD_WAIT: esperando ' + w + 's…'); } catch (_) {}
+        await sleepSec(w + 1, (left) => {
+          try { onStatus?.('Esperando Telegram… ' + left + 's'); } catch (_) {}
+        });
+        continue;
+      }
+      // Otros errores: un reintento corto
+      if (attempt < 2) {
+        await new Promise((r) => setTimeout(r, 800));
+        continue;
+      }
+      throw e;
+    }
+  }
+}
+
 async function runSeriesCvFill(ch, seriesLabel, files, volId, sourceUrl) {
   const progFrame = el('div', 'info-frame series-cv-prog');
   const progBox = el('div', 'info-box');
@@ -1161,20 +1205,25 @@ async function runSeriesCvFill(ch, seriesLabel, files, volId, sourceUrl) {
         };
 
         const caption = fitCaption(fields);
-        // Telegram: pausa breve para no saturar EditMessage
-        try {
-          await updateTelegramCaption(ch, f, caption);
-        } catch (e1) {
-          await new Promise((r) => setTimeout(r, 600));
-          await updateTelegramCaption(ch, f, caption);
-        }
+        await editCaptionWithFloodWait(ch, f, caption, (msg) => {
+          status.textContent = msg;
+        });
         ok++;
-        await new Promise((r) => setTimeout(r, 250));
+        // Ritmo conservador: ~1 edición / 1.2 s para no reactivar FLOOD_WAIT
+        await new Promise((r) => setTimeout(r, 1200));
       } catch (e) {
         console.warn('[series-cv]', f?.name, e);
         fail++;
         if (failSamples.length < 5) {
           failSamples.push((f?.name || '?').slice(0, 40) + ': ' + (e?.message || e));
+        }
+        // Si el error trae otra espera, respetarla antes de seguir
+        const w = floodWaitSeconds(e);
+        if (w > 0) {
+          status.textContent = 'Telegram pide esperar ' + w + 's…';
+          await sleepSec(w + 1, (left) => {
+            status.textContent = 'Esperando Telegram… ' + left + 's';
+          });
         }
       }
       setProg(i + 1, targets.length, (f.name || '').slice(0, 48));
