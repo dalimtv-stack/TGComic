@@ -881,11 +881,8 @@ function showSeriesInfo(ch, seriesLabel, files) {
     body.append(row('Números', String(n)));
     body.append(row('Tamaño total', formatBytes(bytes)));
 
-    // Cómics sin ficha CV (originalTitle/writer/artist/date)
-    const pending = (files || []).filter((f) => {
-      const cap = parseComicCaption(f?.caption || '');
-      return !(cap.originalTitle || cap.writer || cap.artist || cap.date);
-    });
+    // Cómics con algún campo CV/editorial/descripción vacío
+    const pending = (files || []).filter((f) => comicNeedsCvFill(f, ch));
     if (pending.length && typeof comicVineConfigured === 'function' && comicVineConfigured()) {
       const fillBtn = el('button', 'btn cover-pick-device', 'Rellenar fichas (Comic Vine)');
       fillBtn.type = 'button';
@@ -896,7 +893,7 @@ function showSeriesInfo(ch, seriesLabel, files) {
       };
       body.append(fillBtn);
       body.append(el('p', 'cover-pick-hint',
-        pending.length + ' número(s) sin título original / créditos / fecha. El resto no se toca.'
+        pending.length + ' número(s) con campos vacíos (título original, créditos, fecha, descripción o editorial). Solo se rellenan los que falten.'
       ));
     } else if (pending.length && typeof comicVineConfigured === 'function' && !comicVineConfigured()) {
       body.append(el('p', 'cover-pick-hint', 'Comic Vine no configurado (falta API key).'));
@@ -912,10 +909,27 @@ function showSeriesInfo(ch, seriesLabel, files) {
   }
 }
 
-/** ¿Ya tiene datos de Comic Vine en el caption? */
-function comicHasCvFields(f) {
+/** Editorial local (BBDD / canal), no Comic Vine. */
+function localPublisherOf(ch) {
+  try {
+    const g = ch?.group;
+    if (!g || g === 'Sin editorial') return '';
+    return (typeof groupDisplayName === 'function' ? groupDisplayName(g) : g) || g;
+  } catch (_) {
+    return ch?.group && ch.group !== 'Sin editorial' ? ch.group : '';
+  }
+}
+
+/** True si falta algún campo que podemos rellenar (CV + editorial local). */
+function comicNeedsCvFill(f, ch) {
   const cap = parseComicCaption(f?.caption || '');
-  return !!(cap.originalTitle || cap.writer || cap.artist || cap.date);
+  if (!String(cap.originalTitle || '').trim()) return true;
+  if (!String(cap.writer || '').trim()) return true;
+  if (!String(cap.artist || '').trim()) return true;
+  if (!String(cap.date || '').trim()) return true;
+  if (!String(cap.description || '').trim()) return true;
+  if (!String(cap.publisher || '').trim() && localPublisherOf(ch)) return true;
+  return false;
 }
 
 function normIssueKey(n) {
@@ -942,7 +956,7 @@ function showSeriesCvFillForm(ch, seriesLabel, files) {
   head.append(close);
   const body = el('div', 'info-body');
   body.append(el('p', 'cover-pick-hint',
-    'Serie: ' + display + '. Pega la URL del volumen en Comic Vine. Solo se rellenan Título original, Guionista, Dibujante y Fecha; el resto sale del archivo. Los que ya tengan esos datos no se tocan.'
+    'Serie: ' + display + '. Pega la URL del volumen en Comic Vine. Se rellenan solo los campos vacíos: Título original, Guionista, Dibujante, Fecha y Descripción (Comic Vine); Editorial desde la editorial del canal en TGComic. Nombre de archivo, Título España y Serie salen del archivo / serie local. Lo que ya esté relleno no se sobrescribe.'
   ));
   body.append(el('label', 'sync-label', 'URL de la serie (Comic Vine)'));
   const urlInp = el('input', 'edit-input');
@@ -1031,10 +1045,10 @@ async function runSeriesCvFill(ch, seriesLabel, files, volId, sourceUrl) {
       if (!byNum.has(k)) byNum.set(k, iss);
     }
 
-    const targets = (files || []).filter((f) => !comicHasCvFields(f));
+    const targets = (files || []).filter((f) => comicNeedsCvFill(f, ch));
     if (!targets.length) {
       progFrame.remove();
-      await appAlert('Ningún cómic de la serie necesita relleno (todos tienen datos CV o no hay archivos).');
+      await appAlert('Ningún cómic de la serie necesita relleno (todos los campos cubiertos).');
       showSeriesInfo(ch, seriesLabel, files);
       return;
     }
@@ -1063,10 +1077,10 @@ async function runSeriesCvFill(ch, seriesLabel, files, volId, sourceUrl) {
 
         const story = String((detail && detail.name) || iss.name || '').trim();
         const num = String((detail && detail.issueNumber) || iss.issueNumber || parsed.number || '').replace(/^#/, '').trim();
-        let originalTitle = '';
-        if (num && story) originalTitle = '#' + num + ' - ' + story;
-        else if (num) originalTitle = '#' + num;
-        else originalTitle = story;
+        let cvTitle = '';
+        if (num && story) cvTitle = '#' + num + ' - ' + story;
+        else if (num) cvTitle = '#' + num;
+        else cvTitle = story;
 
         const writers = (detail && detail.writers && detail.writers.length)
           ? detail.writers.join(' | ')
@@ -1074,44 +1088,46 @@ async function runSeriesCvFill(ch, seriesLabel, files, volId, sourceUrl) {
         const artists = (detail && detail.artists && detail.artists.length)
           ? detail.artists.join(' | ')
           : '';
-        let date = (detail && detail.coverDate) || '';
-        if (!date && iss.coverDate) {
+        let cvDate = (detail && detail.coverDate) || '';
+        if (!cvDate && iss.coverDate) {
           const dm = String(iss.coverDate).match(/^(\d{4})-(\d{2})/);
-          date = dm ? (dm[2] + '/' + dm[1]) : String(iss.coverDate).slice(0, 4);
+          cvDate = dm ? (dm[2] + '/' + dm[1]) : String(iss.coverDate).slice(0, 4);
         }
+        const cvDesc = String((detail && detail.description) || '').trim();
 
-        // Resto desde archivo / serie local
+        // Merge: no sobrescribir lo que ya tenga el caption
         const capPrev = parseComicCaption(f?.caption || '');
         const issueLab = parsed ? issueDisplay(parsed) : '';
         let titleEs = (capPrev.titleEs && String(capPrev.titleEs).trim()) || issueLab || '';
         if (titleEs && !/^#/.test(titleEs.trim()) && issueLab) titleEs = issueLab;
 
-        const caption = buildComicCaption({
+        const keep = (prev, next) => {
+          const p = String(prev || '').trim();
+          if (p) return p;
+          return String(next || '').trim();
+        };
+
+        const localPub = localPublisherOf(ch);
+        const fields = {
           fileName: capPrev.fileName || f.name || '',
           titleEs,
-          originalTitle: originalTitle || capPrev.originalTitle || '',
-          series: seriesLabel || capPrev.series || parsed?.series || '',
-          writer: writers || '',
-          artist: artists || '',
-          publisher: capPrev.publisher || '',
-          date: date || '',
-          description: capPrev.description || '',
-        });
+          originalTitle: keep(capPrev.originalTitle, cvTitle),
+          series: keep(capPrev.series, seriesLabel || parsed?.series || ''),
+          writer: keep(capPrev.writer, writers),
+          artist: keep(capPrev.artist, artists),
+          // Editorial: BBDD local (canal) si falta
+          publisher: keep(capPrev.publisher, localPub),
+          date: keep(capPrev.date, cvDate),
+          description: keep(capPrev.description, cvDesc),
+        };
+
+        let caption = buildComicCaption(fields);
         if (caption.length > 1024) {
-          // Acortar descripción si hace falta
-          const short = buildComicCaption({
-            fileName: capPrev.fileName || f.name || '',
-            titleEs,
-            originalTitle,
-            series: seriesLabel || '',
-            writer: writers,
-            artist: artists,
-            date,
-          });
-          await updateTelegramCaption(ch, f, short.slice(0, 1024));
-        } else {
-          await updateTelegramCaption(ch, f, caption);
+          fields.description = String(fields.description || '').slice(0, Math.max(0, 1024 - (caption.length - String(fields.description || '').length - 50)));
+          caption = buildComicCaption(fields);
+          if (caption.length > 1024) caption = caption.slice(0, 1024);
         }
+        await updateTelegramCaption(ch, f, caption);
         ok++;
       } catch (e) {
         console.warn('[series-cv]', f?.name, e);
