@@ -3,7 +3,7 @@
  * Móvil: poca RAM, un archivo a la vez, liberar buffers.
  */
 import * as zip from '@zip.js/zip.js';
-import { withQualityTags } from './quality.js';
+import { withQualityTags, existingCopy, flattenVersions, sourceNameOf, parseQuality, QUALITY_LABEL } from './quality.js';
 
 export function createRepackTool(d) {
   const {
@@ -30,6 +30,21 @@ export function createRepackTool(d) {
   const isCbrName = (name) => /\.cbr$/i.test(name || '');
   const toCbzName = (name) => String(name || 'comic.cbr').replace(/\.cbr$/i, '.cbz');
   const yieldTick = () => new Promise((r) => setTimeout(r, 0));
+  const askConfirm = (m) => (typeof window.appConfirm === 'function'
+    ? window.appConfirm(String(m || ''))
+    : Promise.resolve(confirm(String(m || ''))));
+  /** Copias que ya existen con la misma calidad que el nombre de salida (avisar antes de duplicar). */
+  const findDuplicates = (entries) => {
+    const out = [];
+    for (const { f, outName } of entries) {
+      const hit = existingCopy(flattenVersions([f]), outName);
+      if (hit) out.push({ outName, q: parseQuality(outName).q, hit });
+    }
+    return out;
+  };
+  const dupMessage = (dups) => 'Ya existe una copia con esa calidad:\n\n'
+    + dups.map((x) => `· ${x.outName}  (${QUALITY_LABEL[x.q]})`).join('\n')
+    + '\n\n¿Subir de todas formas?';
 
   async function blobToWebp(blob, opts = {}) {
     if (!blob || !blob.size) return blob;
@@ -650,7 +665,7 @@ export function createRepackTool(d) {
       // Si no hay outName explícito y es WebP: conservar nombre del original + [WebP]
       // (evita "Canal - #01" que crea una serie distinta "Canal -")
       if (useWebp && !item.outName) {
-        outName = String(f.name || 'comic.cbr')
+        outName = String(sourceNameOf(f) || 'comic.cbr')
           .replace(/_/g, ' ')
           .replace(/\s+/g, ' ')
           .trim()
@@ -837,8 +852,9 @@ export function createRepackTool(d) {
     body.append(el('p', 'cover-pick-hint',
       'Edita el nombre final de cada archivo (.cbz). Se proponen espacios en lugar de _ cuando se puede.'
     ));
+    const rz = !!(webpOpts && webpOpts.resize !== false);
     if (asWebp) {
-      body.append(el('p', 'cover-pick-hint', 'WebP activado: se añadirá [WebP] al nombre y las páginas se convertirán.'));
+      body.append(el('p', 'cover-pick-hint', `WebP activado: se añadirá ${rz ? '[2400px][WebP]' : '[WebP]'} al nombre y las páginas se convertirán.`));
     }
 
     const includeChChk = el('input');
@@ -854,9 +870,7 @@ export function createRepackTool(d) {
       for (const inp of inputs) {
         if (inp._manual) continue;
         let name = suggestUploadName(inp._item.ch, inp._item.f, withCh);
-        if (asWebp && !/\[WebP\]/i.test(name)) {
-          name = name.replace(/\.cbz$/i, ' [WebP].cbz');
-        }
+        if (asWebp) name = withQualityTags(name, { webp: true, resize: rz });
         inp.value = name;
       }
     };
@@ -867,9 +881,7 @@ export function createRepackTool(d) {
       row.append(el('div', 'repack-name-from', item.f.name || ''));
       const inp = el('input', 'edit-input repack-name-input');
       inp.type = 'text';
-      inp.value = asWebp && !/\[WebP\]/i.test(suggested)
-        ? suggested.replace(/\.cbz$/i, ' [WebP].cbz')
-        : suggested;
+      inp.value = asWebp ? withQualityTags(suggested, { webp: true, resize: rz }) : suggested;
       inp.autocomplete = 'off';
       inp._item = item;
       inp._manual = false;
@@ -885,7 +897,7 @@ export function createRepackTool(d) {
     const cancel = el('button', 'btn', 'Cancelar');
     cancel.onclick = () => frame.remove();
     const goBtn = el('button', 'btn edit-save', 'Subir');
-    goBtn.onclick = () => {
+    goBtn.onclick = async () => {
       const withCh = !!includeChChk.checked;
       const ready = inputs.map((inp) => {
         let name = String(inp.value || '').trim();
@@ -893,11 +905,11 @@ export function createRepackTool(d) {
         name = name.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
         if (!/\.cbz$/i.test(name)) name = name.replace(/\.cb[zr]$/i, '') + '.cbz';
         if (!/\.cbz$/i.test(name)) name += '.cbz';
-        if (asWebp && !/\[WebP\]/i.test(name)) {
-          name = name.replace(/\.cbz$/i, ' [WebP].cbz');
-        }
+        if (asWebp) name = withQualityTags(name, { webp: true, resize: rz });
         return { ...inp._item, outName: name, asWebp, webpOpts };
       });
+      const dups = findDuplicates(ready.map((x) => ({ f: x.f, outName: x.outName })));
+      if (dups.length && !(await askConfirm(dupMessage(dups)))) return;
       frame.remove();
       runQueue(ready, deleteOriginal, asWebp, webpOpts);
     };
@@ -1205,14 +1217,13 @@ export function createRepackTool(d) {
 
     // Nombre por defecto = original + [WebP] (misma serie al agrupar)
     const originalName = () => {
-      let n = String(f.name || 'comic.cbz')
+      let n = String(sourceNameOf(f) || 'comic.cbz')
         .replace(/_/g, ' ')
         .replace(/\s+/g, ' ')
         .trim()
         .replace(/\.cb[zr]$/i, '.cbz');
       if (!/\.cbz$/i.test(n)) n += '.cbz';
-      if (!/\[WebP\]/i.test(n)) n = n.replace(/\.cbz$/i, ' [WebP].cbz');
-      return n;
+      return withQualityTags(n, { webp: true, resize: !!resizeCb.checked });
     };
 
     const includeChChk = el('input');
@@ -1228,13 +1239,16 @@ export function createRepackTool(d) {
     nameInp.autocomplete = 'off';
     nameInp.value = originalName();
     body.append(nameInp);
+    // Marcar/desmarcar "Redimensionar" actualiza [2400px] en la propuesta (respeta lo que hayas editado)
+    resizeCb.onchange = () => {
+      nameInp.value = withQualityTags(nameInp.value || originalName(), { webp: true, resize: !!resizeCb.checked });
+    };
 
     includeChChk.onchange = () => {
       if (includeChChk.checked) {
         let n = suggestUploadName(ch, f, false); // sin forzar "Canal -"
         if (!/\.cbz$/i.test(n)) n = n.replace(/\.cb[zr]$/i, '') + '.cbz';
-        if (!/\[WebP\]/i.test(n)) n = n.replace(/\.cbz$/i, ' [WebP].cbz');
-        nameInp.value = n;
+        nameInp.value = withQualityTags(n, { webp: true, resize: !!resizeCb.checked });
       } else {
         nameInp.value = originalName();
       }
@@ -1251,12 +1265,14 @@ export function createRepackTool(d) {
     const cancel = el('button', 'btn', 'Cancelar');
     cancel.onclick = () => frame.remove();
     const goBtn = el('button', 'btn edit-save', 'Subir versión WebP');
-    goBtn.onclick = () => {
+    goBtn.onclick = async () => {
       let name = String(nameInp.value || '').trim().replace(/_/g, ' ').replace(/\s+/g, ' ');
       if (!name) name = originalName();
       if (!/\.cbz$/i.test(name)) name = name.replace(/\.cb[zr]$/i, '') + '.cbz';
       if (!/\.cbz$/i.test(name)) name += '.cbz';
-      if (!/\[WebP\]/i.test(name)) name = name.replace(/\.cbz$/i, ' [WebP].cbz');
+      name = withQualityTags(name, { webp: true, resize: !!resizeCb.checked });
+      const dups = findDuplicates([{ f, outName: name }]);
+      if (dups.length && !(await askConfirm(dupMessage(dups)))) return;
       const webpOpts = {
         quality: parseFloat(String(qualityInp.value).replace(',', '.')) || 0.40,
         resize: !!resizeCb.checked,

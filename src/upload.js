@@ -8,7 +8,7 @@ import * as zip from '@zip.js/zip.js';
 import { createExtractorFromData } from 'node-unrar-js';
 import rarWasm from 'node-unrar-js/esm/js/unrar.wasm?url';
 import { buildComicCaption } from './parse.js';
-import { withQualityTags } from './quality.js';
+import { withQualityTags, stripQualityTags, existingCopy, flattenVersions, parseQuality, QUALITY_LABEL } from './quality.js';
 
 const SEP = '::';
 const TSEP = ':';
@@ -204,21 +204,22 @@ export function createUploadTool(d) {
   }
 
   /** Quita extensiones (.cbr/.cbz/.zip/.rar/…) y deja un solo .cbz (opcional [WebP]). */
-  function ensureCbzName(name, wantWebp) {
+  function ensureCbzName(name, wantWebp, resize) {
     let s = String(name || '').replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
-    s = s.replace(/\s*\[WebP\]\s*$/ig, '').trim();
+    s = s.replace(/\.(cb[zr]|zip|rar|7z|tar|gz|cb7)+$/ig, '').trim();
+    s = stripQualityTags(s);
     // Quitar cualquier cola de extensiones conocidas (también repetidas)
     let prev;
     do {
       prev = s;
       s = s.replace(/\.(cb[zr]|zip|rar|7z|tar|gz|cb7)+$/ig, '').trim();
     } while (s !== prev);
-    if (wantWebp) s = s + ' [WebP]';
+    if (wantWebp) s = s + (resize ? ' [2400px][WebP]' : ' [WebP]');
     return s.trim() + '.cbz';
   }
 
   // Como antes: Serie #Número - Info
-  function composeFileName({ channel, series, number, info, asWebp }) {
+  function composeFileName({ channel, series, number, info, asWebp, resize }) {
     const ch = String(channel || '').trim();
     const ser = String(series || '').trim();
     const num = String(number || '').trim();
@@ -230,7 +231,7 @@ export function createUploadTool(d) {
     else body = 'comic';
     if (inf) body += ` - ${inf}`;
     const base = (ch && ser) ? `${ch} - ${body}` : body;
-    return ensureCbzName(base, !!asWebp);
+    return ensureCbzName(base, !!asWebp, !!resize);
   }
 
   /**
@@ -971,6 +972,7 @@ export function createUploadTool(d) {
           number: row.numberInp.value,
           info: row.infoInp.value,
           asWebp: !!asWebpChk.checked,
+          resize: !!resizeCb.checked,
         });
       };
 
@@ -1231,6 +1233,7 @@ export function createUploadTool(d) {
         webpOptsBox.hidden = !asWebpChk.checked;
         updateAllPreviews();
       };
+      resizeCb.onchange = () => updateAllPreviews(); // [2400px] visible en la propuesta si está marcado
 
       const status = el('p', 'sync-status', '');
       const actions = el('div', 'edit-actions');
@@ -1268,9 +1271,10 @@ export function createUploadTool(d) {
               number: row.numberInp.value,
               info: row.infoInp.value,
               asWebp: wantWebp,
+              resize: !!webpOpts.resize,
             });
           } else {
-            outName = ensureCbzName(outName, wantWebp);
+            outName = ensureCbzName(outName, wantWebp, !!webpOpts.resize);
           }
           // Etiquetas de calidad: [2400px] (si se redimensiona) y después [WebP]
           if (wantWebp) outName = withQualityTags(outName, { webp: true, resize: !!webpOpts.resize });
@@ -1293,6 +1297,23 @@ export function createUploadTool(d) {
           return { file: row.file, outName, caption };
         });
 
+        // Aviso si el canal ya tiene una copia con la misma calidad (mismo nombre base y etiquetas)
+        try {
+          const chOpt = [...channelSel.options].find((o) => o.value === channelSel.value);
+          const chObj = chOpt?._ch;
+          if (chObj?.id != null) {
+            const existing = flattenVersions((await kv.get('f:' + chObj.id)) || []);
+            const dups = jobs
+              .map((j) => ({ j, hit: existingCopy(existing, j.outName) }))
+              .filter((x) => x.hit);
+            if (dups.length) {
+              const msgDup = 'Ya existe en el canal una copia con esa calidad:\n\n'
+                + dups.map((x) => `· ${x.j.outName}  (${QUALITY_LABEL[parseQuality(x.j.outName).q]})`).join('\n')
+                + '\n\n¿Subir de todas formas?';
+              if (!(await uiConfirm(msgDup))) return;
+            }
+          }
+        } catch (e) { console.warn('[upload] comprobación de duplicados', e); }
         const summary = jobs.length === 1
           ? `¿Subir como «${jobs[0].outName}» al canal «${chName}» (${ed})?`
           : `¿Subir ${jobs.length} cómics al canal «${chName}» (${ed})?\n\n` + jobs.map((j) => '· ' + j.outName).join('\n');

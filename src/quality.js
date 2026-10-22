@@ -13,7 +13,11 @@ const FALLBACK = {
   mid: ['mid', 'high', 'low'],
   low: ['low', 'mid', 'high'],
 };
-const TAGS_END = /(?:\s*\[(?:\d{3,5}\s*px|webp)\])+\s*$/i;
+// Etiquetas finales: [2400px], [WebP] y el factor de calidad [0.40] (p. ej. "… [0.40][WebP]", "… [2400px][WebP]")
+const TAG = '\\[(?:\\d{3,5}\\s*px|webp|[01]?[.,]\\d{1,2})\\]';
+const TAGS_END = new RegExp('(?:\\s*' + TAG + ')+\\s*$', 'i');
+// Nombre de documento "saneado" por Telegram (sin corchetes): …_USA_0_40WebP / …_USA_2400pxWebP
+const SANITIZED_END = /(?:_\d{1,2}_\d{1,2})?(?:_?\d{3,5}px)?_?webp\s*$/i;
 
 /** "Nombre de archivo: X" del caption de Telegram (el nombre real; el del documento puede venir recortado con "_"). */
 export function captionFileName(caption) {
@@ -25,28 +29,59 @@ export function sourceNameOf(f) {
   return captionFileName(f?.caption) || String(f?.name || '');
 }
 
+const stemOf = (name) => String(name || '').replace(/\.(cb[zr]|zip|rar|7z|cb7)+$/i, '');
+
+/** Quita las etiquetas de calidad finales ([0.40] [2400px] [WebP]) de un nombre (con o sin extensión). */
+export function stripQualityTags(name) {
+  const s = stemOf(String(name || '').replace(/_/g, ' ')).trim();
+  const m = s.match(TAGS_END);
+  return (m && /webp|px/i.test(m[0]) ? s.slice(0, m.index) : s).replace(/\s+/g, ' ').trim();
+}
+
 export function parseQuality(name) {
-  // Telegram a veces cambia espacios por "_": se tratan igual
-  const clean = String(name || '').replace(/_/g, ' ');
-  const stem = clean.replace(/\.[^.\\/]+$/, '');
-  const m = stem.match(TAGS_END);
-  const tags = m ? m[0].toLowerCase() : '';
-  const base = (m ? stem.slice(0, m.index) : stem).replace(/\s+/g, ' ').trim();
-  const q = /px\s*\]/.test(tags) ? 'low' : (/\[webp\]/.test(tags) ? 'mid' : 'high');
-  // Clave sin espacios ni "_": también agrupa nombres a los que Telegram quitó los espacios
-  return { base, key: base.toLowerCase().replace(/[\s_]+/g, ''), q };
+  const raw = String(name || '');
+  const hadUnderscores = raw.includes('_') && !/\s/.test(raw.trim());
+  const stem = stemOf(raw.replace(/_/g, ' ')).trim();
+  let m = stem.match(TAGS_END);
+  let tags = m && /webp|px/i.test(m[0]) ? m[0].toLowerCase() : '';
+  let base;
+  if (tags) base = stem.slice(0, m.index);
+  else if (hadUnderscores && SANITIZED_END.test(stemOf(raw))) {
+    // Solo nombre de documento de Telegram (sin caption): tags sin corchetes
+    const sm = stemOf(raw).match(SANITIZED_END);
+    tags = sm[0].toLowerCase();
+    base = stemOf(raw).slice(0, sm.index).replace(/_/g, ' ');
+  } else base = stem;
+  base = base.replace(/\s+/g, ' ').trim();
+  const q = /px/.test(tags) ? 'low' : (/webp/.test(tags) ? 'mid' : 'high');
+  // Clave: solo letras y números (sin acentos). Comparable entre caption y nombre de documento recortado
+  const key = base.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  return { base, key, q };
 }
 
 /**
  * Normaliza el nombre de salida al subir/recargar con WebP:
- *   base [2400px] [WebP].cbz   (si se redimensiona)  |  base [WebP].cbz
+ *   base [2400px][WebP].cbz   (si se redimensiona)  |  base [WebP].cbz
+ * Conserva un factor de calidad [0.40] si el nombre ya lo traía.
  */
 export function withQualityTags(name, { webp = true, resize = false } = {}) {
   if (!webp) return String(name || '');
-  let s = String(name || '').replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
-  s = s.replace(/\.(cb[zr]|zip|rar|7z|cb7)+$/i, '').trim();
-  s = s.replace(TAGS_END, '').trim();
-  return `${s}${resize ? ' [2400px]' : ' '}[WebP].cbz`;
+  const s0 = stemOf(String(name || '').replace(/_/g, ' ')).trim();
+  const mq = s0.match(/\[([01]?[.,]\d{1,2})\]\s*(?:\[[^\]]*\]\s*)*$/);
+  const qf = mq && /webp|px/i.test(s0.slice(mq.index)) ? `[${mq[1]}]` : '';
+  const base = stripQualityTags(name);
+  return `${base} ${qf}${resize ? '[2400px]' : ''}[WebP].cbz`;
+}
+
+/** Copia ya existente (misma serie/número y misma calidad) de `outName` en una lista de archivos. */
+export function existingCopy(list, outName) {
+  const p = parseQuality(outName);
+  if (!p.key) return null;
+  for (const x of list || []) {
+    const px = parseQuality(sourceNameOf(x));
+    if (px.key === p.key && px.q === p.q) return x;
+  }
+  return null;
 }
 
 /** Elige la versión a abrir: la pedida, o la más cercana disponible. */
