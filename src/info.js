@@ -2281,7 +2281,111 @@ function showChannelCoverPicker(ch, files, after) {
 }
 
 
-/** Adaptar portada apaisada: izquierda / centro / derecha / completa */
+
+/** Carga la 1ª página del cómic a calidad completa (no la miniatura de caché). */
+async function loadFirstPageBlob(ch, f, statusFn) {
+  if (typeof openPages !== 'function' || typeof getMsg !== 'function') {
+    throw new Error('No se puede abrir el archivo');
+  }
+  const msg = await getMsg(ch, f, { force: true });
+  let size = Number(f?.size) || 0;
+  try {
+    if (msg?.document?.size != null) size = Number(msg.document.size.toString()) || size;
+  } catch (_) {}
+  const ac = { cancelled: false };
+  const st = statusFn || (() => {});
+  const pagesApi = await openPages(msg, size, st, ac);
+  try {
+    const pages = pagesApi?.pages || [];
+    if (!pages.length) throw new Error('Sin páginas');
+    const first = pages[0];
+    let blob = null;
+    if (typeof pageBlob === 'function') blob = await pageBlob(first);
+    else if (first?.blob) blob = first.blob;
+    if (!blob) throw new Error('No se pudo leer la primera página');
+    return blob;
+  } finally {
+    try { pagesApi?.close?.(); } catch (_) {}
+  }
+}
+
+/**
+ * Recorta portada apaisada a ratio 2:3 según modo y comprime como el resto de portadas.
+ * left | center | right → crop; full → imagen completa sin crop lateral.
+ */
+async function cropAndCompressCover(blob, mode) {
+  if (!blob) return null;
+  let bmp = null;
+  try {
+    bmp = await createImageBitmap(blob);
+  } catch {
+    try {
+      const url = URL.createObjectURL(blob);
+      bmp = await new Promise((resolve, reject) => {
+        const im = new Image();
+        im.onload = () => resolve(im);
+        im.onerror = reject;
+        im.src = url;
+      });
+      try { URL.revokeObjectURL(url); } catch (_) {}
+    } catch {
+      return null;
+    }
+  }
+  const sw = bmp.width || bmp.naturalWidth || 0;
+  const sh = bmp.height || bmp.naturalHeight || 0;
+  if (!sw || !sh) {
+    try { bmp.close?.(); } catch (_) {}
+    return null;
+  }
+  const isLandscape = sw > sh;
+  const m = String(mode || 'full');
+  let sx = 0, sy = 0, cw = sw, ch = sh;
+  if (isLandscape && (m === 'left' || m === 'center' || m === 'right')) {
+    // Marco 2:3 (ancho/alto)
+    const targetRatio = 2 / 3;
+    ch = sh;
+    cw = Math.round(ch * targetRatio);
+    if (cw > sw) {
+      cw = sw;
+      ch = Math.round(cw / targetRatio);
+      sy = Math.round((sh - ch) / 2);
+    }
+    if (m === 'center') sx = Math.round((sw - cw) / 2);
+    else if (m === 'right') sx = Math.max(0, sw - cw);
+    else sx = 0;
+  }
+  // Límite de lado mayor como portadas normales (~280 en grid, usamos un poco más de origen)
+  const maxEdge = 560;
+  const scale = Math.min(1, maxEdge / Math.max(cw, ch));
+  const dw = Math.max(1, Math.round(cw * scale));
+  const dh = Math.max(1, Math.round(ch * scale));
+  const cv = el('canvas');
+  cv.width = dw;
+  cv.height = dh;
+  const ctx = cv.getContext('2d');
+  ctx.drawImage(bmp, sx, sy, cw, ch, 0, 0, dw, dh);
+  try { bmp.close?.(); } catch (_) {}
+  const canvasToBlob = (type, q) => new Promise((res) => {
+    try { cv.toBlob((b) => res(b || null), type, q); } catch { res(null); }
+  });
+  let out = null;
+  try {
+    out = await canvasToBlob('image/webp', 0.78);
+    if (!(out && out.size && (out.type || '').includes('webp'))) out = null;
+  } catch (_) {}
+  if (!out) out = await canvasToBlob('image/jpeg', 0.72);
+  if (!out) out = await canvasToBlob('image/jpeg', 0.55);
+  cv.width = 0;
+  cv.height = 0;
+  // Si falló canvas, comprimir con optimizeImageBlob el original
+  if (!(out && out.size) && typeof optimizeImageBlob === 'function') {
+    try { out = await optimizeImageBlob(blob, 280, 0.72); } catch (_) {}
+  }
+  return out && out.size ? out : blob;
+}
+
+/** Adaptar portada: usa página real del cómic, recorta y guarda comprimida */
 function showCoverFitEditor(ch, f, after) {
   document.querySelector('.info-frame.cover-fit')?.remove();
   const frame = el('div', 'info-frame cover-fit');
@@ -2292,20 +2396,21 @@ function showCoverFitEditor(ch, f, after) {
   close.onclick = () => frame.remove();
   head.append(close);
   const body = el('div', 'info-body');
-  body.append(el('p', 'cover-pick-hint', 'Solo se nota si la portada es más ancha que alta. Completa = imagen entera visible.'));
+  body.append(el('p', 'cover-pick-hint', 'Se usa la primera página del cómic (calidad completa). Izquierda / Centro / Derecha recortan al marco 2:3 y guardan la portada comprimida.'));
 
   const preview = el('div', 'cover-fit-preview');
   body.append(preview);
   let current = 'full';
   try { current = (typeof getCoverFit === 'function' ? getCoverFit(ch, f) : 'full') || 'full'; } catch (_) {}
   preview.dataset.coverFit = current;
+  let sourceBlob = null;
 
   const optsWrap = el('div', 'cover-fit-opts');
   const modes = [
-    ['left', 'Izquierda', 'Ajusta al alto; muestra desde la izquierda'],
-    ['center', 'Centro', 'Ajusta al alto; muestra el centro'],
-    ['right', 'Derecha', 'Ajusta al alto; muestra desde la derecha'],
-    ['full', 'Completa', 'Imagen completa (como hasta ahora)'],
+    ['left', 'Izquierda', 'Recorte al alto desde la izquierda'],
+    ['center', 'Centro', 'Recorte al alto desde el centro'],
+    ['right', 'Derecha', 'Recorte al alto desde la derecha'],
+    ['full', 'Completa', 'Imagen completa sin recorte lateral'],
   ];
   const buttons = [];
   const select = (mode) => {
@@ -2331,15 +2436,27 @@ function showCoverFitEditor(ch, f, after) {
   const cancel = el('button', 'btn', 'Cancelar');
   cancel.onclick = () => frame.remove();
   const save = el('button', 'btn edit-save', 'Guardar');
-  save.onclick = () => {
-    try {
-      if (typeof setCoverFit === 'function') setCoverFit(ch, f, current);
-    } catch (e) {
-      appAlert('No se pudo guardar: ' + (e?.message || e));
+  save.onclick = async () => {
+    if (!sourceBlob) {
+      appAlert('Aún no se ha cargado la página del cómic.');
       return;
     }
-    frame.remove();
-    after?.();
+    try {
+      save.disabled = true;
+      save.textContent = 'Guardando…';
+      const out = await cropAndCompressCover(sourceBlob, current);
+      if (!out) throw new Error('No se pudo procesar la imagen');
+      await saveCoverBlob(ch, f, out);
+      // La portada ya está recortada: resetear fit visual a full
+      try { if (typeof setCoverFit === 'function') setCoverFit(ch, f, 'full'); } catch (_) {}
+      frame.remove();
+      try { after?.(); } catch (_) {}
+    } catch (e) {
+      appAlert('No se pudo guardar: ' + (e?.message || e));
+    } finally {
+      save.disabled = false;
+      save.textContent = 'Guardar';
+    }
   };
   actions.append(cancel, save);
   body.append(actions);
@@ -2349,11 +2466,12 @@ function showCoverFitEditor(ch, f, after) {
 
   (async () => {
     try {
-      const b = await getCover(ch, f);
-      if (!b || !preview.isConnected) {
-        preview.append(el('div', 'info-loading', 'Sin portada en caché. Ábrelo una vez.'));
-        return;
-      }
+      const loading = el('div', 'info-loading', 'Cargando página del cómic…');
+      preview.append(loading);
+      sourceBlob = await loadFirstPageBlob(ch, f, (t) => {
+        try { loading.textContent = t || 'Cargando…'; } catch (_) {}
+      });
+      if (!preview.isConnected) return;
       const img = new Image();
       img.onload = () => {
         if (!preview.isConnected) return;
@@ -2362,19 +2480,20 @@ function showCoverFitEditor(ch, f, after) {
         preview.replaceChildren(img);
         if (!(img.naturalWidth > img.naturalHeight)) {
           body.insertBefore(
-            el('p', 'cover-pick-hint', 'Esta portada no es apaisada; el ajuste solo se nota en portadas más anchas que altas.'),
+            el('p', 'cover-pick-hint', 'La primera página no es apaisada; Completa guarda la imagen entera. Izquierda/Centro/Derecha solo recortan si es más ancha que alta.'),
             optsWrap
           );
         }
       };
-      setBlobImg(img, b, preview);
-    } catch (_) {
-      preview.append(el('div', 'info-loading', 'Error al cargar portada'));
+      setBlobImg(img, sourceBlob, preview);
+    } catch (e) {
+      preview.replaceChildren();
+      preview.append(el('div', 'info-loading', 'Error: ' + (e?.message || e)));
     }
   })();
 }
 
-/** Elegir una página del cómic como portada */
+/** Elegir una página del cómic como portada; al terminar vuelve al callback (submenú Editar). */
 async function showPickCoverFromComic(ch, f, after) {
   document.querySelector('.info-frame.cover-pages')?.remove();
   const frame = el('div', 'info-frame cover-pages');
@@ -2384,12 +2503,15 @@ async function showPickCoverFromComic(ch, f, after) {
   const close = el('button', 'btn info-close', '×');
   let pagesApi = null;
   const acRef = { cancelled: false };
-  const doClose = () => {
+  const doClose = (reopenEdit) => {
     acRef.cancelled = true;
     try { pagesApi?.close?.(); } catch (_) {}
     frame.remove();
+    if (reopenEdit) {
+      try { after?.(); } catch (_) {}
+    }
   };
-  close.onclick = doClose;
+  close.onclick = () => doClose(true);
   head.append(close);
   const body = el('div', 'info-body');
   body.append(el('p', 'cover-pick-hint', 'Pulsa una página para usarla como portada del cómic.'));
@@ -2400,7 +2522,7 @@ async function showPickCoverFromComic(ch, f, after) {
   body.append(gridEl);
   const actions = el('div', 'edit-actions');
   const cancel = el('button', 'btn', 'Cancelar');
-  cancel.onclick = doClose;
+  cancel.onclick = () => doClose(true);
   actions.append(cancel);
   body.append(actions);
   box.append(head, body);
@@ -2433,7 +2555,6 @@ async function showPickCoverFromComic(ch, f, after) {
         if (typeof pageBlob === 'function') blob = await pageBlob(entry);
         else if (entry?.blob) blob = entry.blob;
         if (!blob || !cell.isConnected) return;
-        // Miniatura ligera
         let thumb = blob;
         try {
           if (typeof optimizeImageBlob === 'function') {
@@ -2453,9 +2574,9 @@ async function showPickCoverFromComic(ch, f, after) {
           try {
             cell.disabled = true;
             status.textContent = 'Guardando portada…';
+            // Guardar página completa (saveCoverBlob comprime como el resto)
             await saveCoverBlob(ch, f, blob);
-            doClose();
-            try { after?.(); } catch (_) {}
+            doClose(true);
           } catch (e) {
             cell.disabled = false;
             appAlert('No se pudo guardar: ' + (e?.message || e));
@@ -2464,10 +2585,9 @@ async function showPickCoverFromComic(ch, f, after) {
       } catch (_) {}
     };
 
-    // Cargar en tandas para no saturar memoria
     const BATCH = 6;
     for (let i = 0; i < pages.length; i += BATCH) {
-      if (!frame.isConnected) break;
+      if (!frame.isConnected || acRef.cancelled) break;
       await Promise.all(pages.slice(i, i + BATCH).map((p, j) => loadOne(p, i + j)));
       status.textContent = 'Miniaturas ' + Math.min(i + BATCH, pages.length) + ' / ' + pages.length;
     }
@@ -2476,6 +2596,7 @@ async function showPickCoverFromComic(ch, f, after) {
     status.textContent = 'Error: ' + (e?.message || e);
   }
 }
+
 
   return {
     showComicInfo,

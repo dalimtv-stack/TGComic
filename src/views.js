@@ -231,21 +231,26 @@ export function createViews(d) {
     const opts = [
       ['Información', () => showComicInfo(ch, f, label)],
       ['Editar', () => {
-        const editOpts = [
-          ['Editar datos del cómic', () => showEditComicTitle(ch, f, label, redraw)],
-        ];
-        if (seriesLabel) {
-          editOpts.push(['Editar TODA la serie', () => showEditSeries(ch, seriesLabel, seriesFiles || [f], redraw)]);
-        }
-        editOpts.push(['Adaptar portada', () => {
-          if (typeof showCoverFitEditor === 'function') showCoverFitEditor(ch, f, redraw);
-          else appAlert('Adaptar portada no disponible');
-        }]);
-        editOpts.push(['Elegir portada dentro del cómic', () => {
-          if (typeof showPickCoverFromComic === 'function') showPickCoverFromComic(ch, f, redraw);
-          else appAlert('Elegir portada no disponible');
-        }]);
-        sheet('Editar', editOpts);
+        const openEditMenu = () => {
+          const editOpts = [
+            ['Editar datos del cómic', () => showEditComicTitle(ch, f, label, redraw)],
+          ];
+          if (seriesLabel) {
+            editOpts.push(['Editar TODA la serie', () => showEditSeries(ch, seriesLabel, seriesFiles || [f], redraw)]);
+          }
+          editOpts.push(['Adaptar portada', () => {
+            if (typeof showCoverFitEditor === 'function') {
+              showCoverFitEditor(ch, f, () => { try { redraw?.(); } catch (_) {} openEditMenu(); });
+            } else appAlert('Adaptar portada no disponible');
+          }]);
+          editOpts.push(['Elegir portada dentro del cómic', () => {
+            if (typeof showPickCoverFromComic === 'function') {
+              showPickCoverFromComic(ch, f, () => { try { redraw?.(); } catch (_) {} openEditMenu(); });
+            } else appAlert('Elegir portada no disponible');
+          }]);
+          sheet('Editar', editOpts);
+        };
+        openEditMenu();
       }],
       ['Marcar', () => {
         const unread = !isComicRead(ch.id, f.id);

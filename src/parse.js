@@ -27,15 +27,15 @@ export function cleanDisplayTitle(s) {
 }
 /**
  * Formatos preferidos:
- * 1.  [channel] - [serie] #[n|Special|Especial|Extra] [- info]
- * 2.  [serie] #[n|Special|Especial|Extra] [- info]
+ * 1.  [channel] - [serie] #[n|Special|Especial|Extra|Extras|Omnibus|Integral|…] [- info]
+ * 2.  [serie] #[n|Special|Especial|Extra|…] [- info]
  * 3.  [serie] [n|nX|n de m] [- info]   (sin #, p.ej. "Fabulas 07b - título", "Coleccionable 01 de 40")
  * No se muestra [channel]. [corchetes] ocultos.
  */
 // Número de número: 12, 07b, 1.5, 01 de 40, 3 of 12
 const ISSUE_NUM = '(?:\\d+(?:\\.\\d+)?[a-zA-Z]?(?:\\s*(?:de|of)\\s*\\d+)?)';
 // Marcador completo: número o Special / Especial / Extra
-const ISSUE_TAG = `(?:${ISSUE_NUM}|Special|Especial|Extra|Annual|Anual|One[-\s]?Shot|OneShot)`;
+const ISSUE_TAG = `(?:${ISSUE_NUM}|Special|Especial|Extra|Extras|Annual|Anual|[OÓ]mnibus|Integral|One[-\s]?Shot|OneShot)`;
 /**
  * Nombre a usar para parsear/agrupar.
  * Si el archivo de Telegram tiene "_" y no tiene espacios, preferir
@@ -64,12 +64,15 @@ export function parseComicName(name, channelName) {
   const ch = (channelName || '').trim();
   const normTag = (tag) => {
     let number = String(tag || '').trim();
-    const low = number.toLowerCase();
+    const low = number.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '');
     if (low === 'special') return 'Special';
     if (low === 'especial') return 'Especial';
     if (low === 'extra') return 'Extra';
+    if (low === 'extras') return 'Extras';
     if (low === 'annual') return 'Annual';
     if (low === 'anual') return 'Anual';
+    if (low === 'omnibus') return 'Omnibus';
+    if (low === 'integral') return 'Integral';
     return number;
   };
   const finish = (series, tag, info, rangeEnd) => {
