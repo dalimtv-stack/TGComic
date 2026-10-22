@@ -1288,21 +1288,17 @@ async function probeGithubArtVariants(kind, name) {
   // variantes de nombre
   const loose = nfc.replace(/_/g, ' ');
   if (loose !== nfc) stems.push(loose);
-  const files = [];
-  for (const stem of stems) {
-    // Orden de búsqueda: por extensión, y dentro de cada una base → alt → alt1 → alt2…
-    for (const ext of ['webp', 'png', 'jpg', 'jpeg', 'gif', 'avif']) {
-      files.push({ file: `${stem}.${ext}`, altTag: '', ext });
-      for (const alt of ['alt', 'alt1', 'alt2', 'alt3']) {
-        files.push({ file: `${stem}.${alt}.${ext}`, altTag: alt, ext });
-      }
-    }
-  }
   const out = [];
   const seen = new Set();
-  for (const f of files) {
-    if (seen.has(f.file.toLowerCase())) continue;
-    seen.add(f.file.toLowerCase());
+  const MAX_ALT = 30;      // tope de seguridad: alt, alt1 … alt30
+  const MAX_MISSES = 3;    // se tolera un hueco (p. ej. falta alt1 pero hay alt2); 3 fallos seguidos = fin
+  const MAX_TOTAL = 40;
+
+  // Intenta cargar un archivo concreto; añade la variante a `out` y devuelve true si existe
+  const tryFile = async (f) => {
+    const key = f.file.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
     const urls = [
       `/${folder}/${encodeURIComponent(f.file)}`,
       `/${folder}/${f.file}`,
@@ -1313,10 +1309,10 @@ async function probeGithubArtVariants(kind, name) {
         if (!res.ok) continue;
         const blob = await res.blob();
         if (!blob || blob.size < 50) continue;
-        // tipo imagen
+        // El SPA de Vercel devuelve index.html con 200 si no existe: exigir tipo imagen
         const ct = (res.headers.get('content-type') || blob.type || '').toLowerCase();
         if (ct && !ct.includes('image') && !ct.includes('octet')) continue;
-        let label = f.altTag
+        const label = f.altTag
           ? (f.altTag === 'alt' ? 'Alternativa 1' : 'Alternativa ' + f.altTag.replace(/^alt/i, ''))
           : (out.some((x) => !x.altTag) ? `Alternativa (${f.ext})` : 'Predeterminada');
         out.push({
@@ -1329,10 +1325,25 @@ async function probeGithubArtVariants(kind, name) {
           base: nfc,
           blob, // cache probe
         });
-        break;
+        return true;
       } catch (_) {}
     }
-    if (out.length >= 12) break;
+    return false;
+  };
+
+  const tags = ['', 'alt', ...Array.from({ length: MAX_ALT }, (_, i) => 'alt' + (i + 1))];
+  for (const stem of stems) {
+    for (const ext of ['webp', 'png', 'jpg', 'jpeg', 'gif', 'avif']) {
+      let misses = 0;
+      for (const tag of tags) {
+        if (out.length >= MAX_TOTAL) break;
+        const file = tag ? `${stem}.${tag}.${ext}` : `${stem}.${ext}`;
+        const ok = await tryFile({ file, altTag: tag, ext });
+        if (!tag) continue; // que falte la base no corta la búsqueda de alternativas
+        if (ok) misses = 0;
+        else if (++misses >= MAX_MISSES) break;
+      }
+    }
   }
   // Marcar primary la primera sin alt
   const first = out.find((x) => !x.altTag);
