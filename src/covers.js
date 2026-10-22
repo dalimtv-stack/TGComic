@@ -8,6 +8,7 @@ export function createCovers(state, d) {
     el, kv, zip,
     TgReader, getMsg, pageBlob, sniff, pagesOf,
     readProgress: readProgressDep, isComicRead: isComicReadDep, stripExt,
+    getCoverFit,
   } = d;
   const isComicRead = isComicReadDep || isComicReadImport;
   const readProgress = readProgressDep || readProgressImport;
@@ -258,8 +259,13 @@ export function createCovers(state, d) {
         try {
           if (img.naturalWidth > 0 && img.naturalHeight > 0 && img.naturalWidth > img.naturalHeight) {
             d.classList.add('landscape');
+            try {
+              const fit = (typeof getCoverFit === 'function' ? getCoverFit(ch, f) : 'full') || 'full';
+              d.dataset.coverFit = fit;
+            } catch (_) { d.dataset.coverFit = 'full'; }
           } else {
             d.classList.remove('landscape');
+            try { delete d.dataset.coverFit; } catch (_) {}
           }
         } catch (_) {}
         d.prepend(img);

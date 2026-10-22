@@ -123,6 +123,39 @@ html[data-grid-layout="fixed"] .grid:has(.cover-series):has(.cover-channel) > .c
 .cover img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
 .cover.landscape{background:transparent}
 .cover.landscape img{object-fit:contain;object-position:center;inset:0;width:100%;height:100%;transform:none}
+
+/* Ajuste portada apaisada (Adaptar portada) */
+.cover.landscape[data-cover-fit="left"] img,
+.continue-cover.landscape[data-cover-fit="left"] img{object-fit:cover;object-position:left center}
+.cover.landscape[data-cover-fit="center"] img,
+.continue-cover.landscape[data-cover-fit="center"] img{object-fit:cover;object-position:center center}
+.cover.landscape[data-cover-fit="right"] img,
+.continue-cover.landscape[data-cover-fit="right"] img{object-fit:cover;object-position:right center}
+.cover.landscape[data-cover-fit="full"] img,
+.cover.landscape:not([data-cover-fit]) img,
+.continue-cover.landscape[data-cover-fit="full"] img,
+.continue-cover.landscape:not([data-cover-fit]) img{object-fit:contain;object-position:center center}
+
+.cover-fit-preview{width:min(180px,42vw);margin:0 auto .85rem;aspect-ratio:2/3;border-radius:10px;overflow:hidden;position:relative;background:var(--card);box-shadow:0 4px 16px #0007}
+.cover-fit-preview img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;object-position:center;pointer-events:none}
+.cover-fit-preview.landscape[data-cover-fit="left"] img{object-fit:cover;object-position:left center}
+.cover-fit-preview.landscape[data-cover-fit="center"] img{object-fit:cover;object-position:center center}
+.cover-fit-preview.landscape[data-cover-fit="right"] img{object-fit:cover;object-position:right center}
+.cover-fit-preview.landscape[data-cover-fit="full"] img,
+.cover-fit-preview.landscape:not([data-cover-fit]) img{object-fit:contain;object-position:center}
+.cover-fit-opts{display:flex;flex-direction:column;gap:8px;margin:.5rem 0 1rem}
+.cover-fit-opt{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:12px;background:#ffffff0a;border:1px solid #ffffff12;cursor:pointer;font:inherit;color:inherit;width:100%;text-align:left}
+.cover-fit-opt.on{border-color:var(--acc);background:#f2b63218}
+.cover-fit-opt .dot{width:14px;height:14px;border-radius:50%;border:2px solid #ffffff44;flex-shrink:0}
+.cover-fit-opt.on .dot{border-color:var(--acc);background:var(--acc);box-shadow:0 0 0 3px #f2b63233}
+
+/* Elegir portada dentro del cómic */
+.cover-pages-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:8px;margin:.5rem 0 1rem;max-height:min(55vh,420px);overflow:auto;-webkit-overflow-scrolling:touch}
+.cover-pages-cell{position:relative;aspect-ratio:2/3;border:0;border-radius:8px;background:#141518;overflow:hidden;cursor:pointer;padding:0}
+.cover-pages-cell img,.cover-pages-cell canvas{width:100%;height:100%;object-fit:cover;display:block}
+.cover-pages-cell .pg-n{position:absolute;left:4px;bottom:4px;background:#000b;color:#fff;font-size:.65rem;font-weight:650;padding:1px 5px;border-radius:99px}
+.cover-pages-cell:active{opacity:.85}
+
 .cover.square{aspect-ratio:1/1;width:78%;margin:0 auto;border-radius:18px;font-size:1.8rem;box-shadow:0 4px 14px #0006;height:auto}
 .cover.square img{object-fit:contain;background:#121316}
 .grid-pubs{grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:1rem .65rem}

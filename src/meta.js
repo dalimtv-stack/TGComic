@@ -181,6 +181,29 @@ export function seriesOverrideFor(ch) {
   };
 }
 
+
+// ----- Ajuste de portada apaisada (izquierda / centro / derecha / completa) -----
+const coverFitKey = (ch) => 'coverFit:' + ch.id;
+/** @returns {'left'|'center'|'right'|'full'} */
+export function getCoverFit(ch, f) {
+  if (!ch || !f?.id) return 'full';
+  const m = readMap(coverFitKey(ch));
+  const v = m[String(f.id)];
+  if (v === 'left' || v === 'center' || v === 'right' || v === 'full') return v;
+  return 'full';
+}
+export function setCoverFit(ch, f, mode, after) {
+  if (!ch || !f?.id) return after?.();
+  const m = readMap(coverFitKey(ch));
+  const k = String(f.id);
+  const v = String(mode || 'full');
+  if (v === 'full' || !v) delete m[k];
+  else if (v === 'left' || v === 'center' || v === 'right') m[k] = v;
+  else delete m[k];
+  writeMap(coverFitKey(ch), m);
+  after?.();
+}
+
 // ----- Canal / editorial -----
 export function channelRenameMap() {
   return readMap(cnKey);

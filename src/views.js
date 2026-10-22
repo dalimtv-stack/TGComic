@@ -27,6 +27,7 @@ export function createViews(d) {
     sheet, bindLongPress, grid,
     showGroupInfo, showEditGroup, showChannelInfo, showEditChannel,
     showSeriesInfo, showEditSeries, showComicInfo, showEditComicTitle,
+    showCoverFitEditor, showPickCoverFromComic, getCoverFit,
     ungroupMap, setUngroupMode, getComicSeriesOverride,
     firstAvailableCover, kv, natural,
     pref, setPref,
@@ -236,6 +237,14 @@ export function createViews(d) {
         if (seriesLabel) {
           editOpts.push(['Editar TODA la serie', () => showEditSeries(ch, seriesLabel, seriesFiles || [f], redraw)]);
         }
+        editOpts.push(['Adaptar portada', () => {
+          if (typeof showCoverFitEditor === 'function') showCoverFitEditor(ch, f, redraw);
+          else appAlert('Adaptar portada no disponible');
+        }]);
+        editOpts.push(['Elegir portada dentro del cómic', () => {
+          if (typeof showPickCoverFromComic === 'function') showPickCoverFromComic(ch, f, redraw);
+          else appAlert('Elegir portada no disponible');
+        }]);
         sheet('Editar', editOpts);
       }],
       ['Marcar', () => {
@@ -531,8 +540,16 @@ function groupsView() {
               img.onload = () => {
                 try { letter.remove(); } catch (_) {}
                 try {
-                  if (img.naturalWidth > img.naturalHeight) thumb.classList.add('landscape');
-                  else thumb.classList.remove('landscape');
+                  if (img.naturalWidth > img.naturalHeight) {
+                    thumb.classList.add('landscape');
+                    try {
+                      const fit = (typeof getCoverFit === 'function' ? getCoverFit(ch, f) : 'full') || 'full';
+                      thumb.dataset.coverFit = fit;
+                    } catch (_) { thumb.dataset.coverFit = 'full'; }
+                  } else {
+                    thumb.classList.remove('landscape');
+                    try { delete thumb.dataset.coverFit; } catch (_) {}
+                  }
                 } catch (_) {}
                 thumb.prepend(img);
               };
@@ -629,8 +646,16 @@ function groupsView() {
               img.onload = () => {
                 try { letter.remove(); } catch (_) {}
                 try {
-                  if (img.naturalWidth > img.naturalHeight) thumb.classList.add('landscape');
-                  else thumb.classList.remove('landscape');
+                  if (img.naturalWidth > img.naturalHeight) {
+                    thumb.classList.add('landscape');
+                    try {
+                      const fit = (typeof getCoverFit === 'function' ? getCoverFit(ch, f) : 'full') || 'full';
+                      thumb.dataset.coverFit = fit;
+                    } catch (_) { thumb.dataset.coverFit = 'full'; }
+                  } else {
+                    thumb.classList.remove('landscape');
+                    try { delete thumb.dataset.coverFit; } catch (_) {}
+                  }
                 } catch (_) {}
                 thumb.prepend(img);
               };

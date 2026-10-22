@@ -11,6 +11,8 @@ export function createInfoEdit(d) {
     parseComicCaption, buildComicCaption,
     groupSeries, seriesOverrideFor, seriesBase, issueLabel,
     comicDisplayName, setComicDisplayName,
+    getCoverFit, setCoverFit,
+    getMsg, openPages, pageBlob,
     seriesDisplayName, setSeriesDisplayName,
     channelDisplayName, setChannelDisplayName,
     groupDisplayName, setGroupDisplayName,
@@ -2278,8 +2280,207 @@ function showChannelCoverPicker(ch, files, after) {
   document.body.append(frame);
 }
 
+
+/** Adaptar portada apaisada: izquierda / centro / derecha / completa */
+function showCoverFitEditor(ch, f, after) {
+  document.querySelector('.info-frame.cover-fit')?.remove();
+  const frame = el('div', 'info-frame cover-fit');
+  const box = el('div', 'info-box');
+  const head = el('div', 'info-head');
+  head.append(el('span', '', 'Adaptar portada'));
+  const close = el('button', 'btn info-close', '×');
+  close.onclick = () => frame.remove();
+  head.append(close);
+  const body = el('div', 'info-body');
+  body.append(el('p', 'cover-pick-hint', 'Solo se nota si la portada es más ancha que alta. Completa = imagen entera visible.'));
+
+  const preview = el('div', 'cover-fit-preview');
+  body.append(preview);
+  let current = 'full';
+  try { current = (typeof getCoverFit === 'function' ? getCoverFit(ch, f) : 'full') || 'full'; } catch (_) {}
+  preview.dataset.coverFit = current;
+
+  const optsWrap = el('div', 'cover-fit-opts');
+  const modes = [
+    ['left', 'Izquierda', 'Ajusta al alto; muestra desde la izquierda'],
+    ['center', 'Centro', 'Ajusta al alto; muestra el centro'],
+    ['right', 'Derecha', 'Ajusta al alto; muestra desde la derecha'],
+    ['full', 'Completa', 'Imagen completa (como hasta ahora)'],
+  ];
+  const buttons = [];
+  const select = (mode) => {
+    current = mode;
+    preview.dataset.coverFit = mode;
+    for (const [b, m] of buttons) b.classList.toggle('on', m === mode);
+  };
+  for (const [mode, lab, hint] of modes) {
+    const b = el('button', 'cover-fit-opt' + (mode === current ? ' on' : ''));
+    b.type = 'button';
+    const dot = el('span', 'dot');
+    const txt = el('span', '');
+    txt.append(el('b', '', lab));
+    txt.append(document.createTextNode(' — ' + hint));
+    b.append(dot, txt);
+    b.onclick = () => select(mode);
+    buttons.push([b, mode]);
+    optsWrap.append(b);
+  }
+  body.append(optsWrap);
+
+  const actions = el('div', 'edit-actions');
+  const cancel = el('button', 'btn', 'Cancelar');
+  cancel.onclick = () => frame.remove();
+  const save = el('button', 'btn edit-save', 'Guardar');
+  save.onclick = () => {
+    try {
+      if (typeof setCoverFit === 'function') setCoverFit(ch, f, current);
+    } catch (e) {
+      appAlert('No se pudo guardar: ' + (e?.message || e));
+      return;
+    }
+    frame.remove();
+    after?.();
+  };
+  actions.append(cancel, save);
+  body.append(actions);
+  box.append(head, body);
+  frame.append(box);
+  document.body.append(frame);
+
+  (async () => {
+    try {
+      const b = await getCover(ch, f);
+      if (!b || !preview.isConnected) {
+        preview.append(el('div', 'info-loading', 'Sin portada en caché. Ábrelo una vez.'));
+        return;
+      }
+      const img = new Image();
+      img.onload = () => {
+        if (!preview.isConnected) return;
+        if (img.naturalWidth > img.naturalHeight) preview.classList.add('landscape');
+        else preview.classList.remove('landscape');
+        preview.replaceChildren(img);
+        if (!(img.naturalWidth > img.naturalHeight)) {
+          body.insertBefore(
+            el('p', 'cover-pick-hint', 'Esta portada no es apaisada; el ajuste solo se nota en portadas más anchas que altas.'),
+            optsWrap
+          );
+        }
+      };
+      setBlobImg(img, b, preview);
+    } catch (_) {
+      preview.append(el('div', 'info-loading', 'Error al cargar portada'));
+    }
+  })();
+}
+
+/** Elegir una página del cómic como portada */
+async function showPickCoverFromComic(ch, f, after) {
+  document.querySelector('.info-frame.cover-pages')?.remove();
+  const frame = el('div', 'info-frame cover-pages');
+  const box = el('div', 'info-box cover-pick-box');
+  const head = el('div', 'info-head');
+  head.append(el('span', '', 'Elegir portada'));
+  const close = el('button', 'btn info-close', '×');
+  let pagesApi = null;
+  const acRef = { cancelled: false };
+  const doClose = () => {
+    acRef.cancelled = true;
+    try { pagesApi?.close?.(); } catch (_) {}
+    frame.remove();
+  };
+  close.onclick = doClose;
+  head.append(close);
+  const body = el('div', 'info-body');
+  body.append(el('p', 'cover-pick-hint', 'Pulsa una página para usarla como portada del cómic.'));
+  const status = el('div', 'info-loading', 'Abriendo cómic…');
+  body.append(status);
+  const gridEl = el('div', 'cover-pages-grid');
+  gridEl.hidden = true;
+  body.append(gridEl);
+  const actions = el('div', 'edit-actions');
+  const cancel = el('button', 'btn', 'Cancelar');
+  cancel.onclick = doClose;
+  actions.append(cancel);
+  body.append(actions);
+  box.append(head, body);
+  frame.append(box);
+  document.body.append(frame);
+
+  try {
+    if (typeof openPages !== 'function' || typeof getMsg !== 'function') {
+      throw new Error('No se puede abrir el archivo en este contexto');
+    }
+    const msg = await getMsg(ch, f, { force: true });
+    let size = Number(f?.size) || 0;
+    try {
+      if (msg?.document?.size != null) size = Number(msg.document.size.toString()) || size;
+    } catch (_) {}
+    const st = (t) => { try { status.textContent = t; } catch (_) {} };
+    pagesApi = await openPages(msg, size, st, acRef);
+    const pages = pagesApi?.pages || [];
+    if (!pages.length) throw new Error('Sin páginas de imagen');
+    status.textContent = pages.length + ' páginas — cargando miniaturas…';
+    gridEl.hidden = false;
+
+    const loadOne = async (entry, idx) => {
+      const cell = el('button', 'cover-pages-cell');
+      cell.type = 'button';
+      cell.append(el('span', 'pg-n', String(idx + 1)));
+      gridEl.append(cell);
+      try {
+        let blob = null;
+        if (typeof pageBlob === 'function') blob = await pageBlob(entry);
+        else if (entry?.blob) blob = entry.blob;
+        if (!blob || !cell.isConnected) return;
+        // Miniatura ligera
+        let thumb = blob;
+        try {
+          if (typeof optimizeImageBlob === 'function') {
+            const t = await optimizeImageBlob(blob, 200, 0.7);
+            if (t && t.size) thumb = t;
+          }
+        } catch (_) {}
+        const img = new Image();
+        img.onload = () => {
+          if (!cell.isConnected) return;
+          const n = cell.querySelector('.pg-n');
+          cell.replaceChildren(img);
+          if (n) cell.append(n);
+        };
+        setBlobImg(img, thumb, cell);
+        cell.onclick = async () => {
+          try {
+            cell.disabled = true;
+            status.textContent = 'Guardando portada…';
+            await saveCoverBlob(ch, f, blob);
+            doClose();
+            try { after?.(); } catch (_) {}
+          } catch (e) {
+            cell.disabled = false;
+            appAlert('No se pudo guardar: ' + (e?.message || e));
+          }
+        };
+      } catch (_) {}
+    };
+
+    // Cargar en tandas para no saturar memoria
+    const BATCH = 6;
+    for (let i = 0; i < pages.length; i += BATCH) {
+      if (!frame.isConnected) break;
+      await Promise.all(pages.slice(i, i + BATCH).map((p, j) => loadOne(p, i + j)));
+      status.textContent = 'Miniaturas ' + Math.min(i + BATCH, pages.length) + ' / ' + pages.length;
+    }
+    if (frame.isConnected) status.textContent = 'Elige una página';
+  } catch (e) {
+    status.textContent = 'Error: ' + (e?.message || e);
+  }
+}
+
   return {
     showComicInfo,
+    showCoverFitEditor,
+    showPickCoverFromComic,
     showDescriptionPanel: typeof showDescriptionPanel === 'function' ? showDescriptionPanel : undefined,
     showCaptionEditor,
     showComicVinePicker,

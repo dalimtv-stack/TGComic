@@ -23,6 +23,7 @@ import {
   ungroupMap, setUngroupMode,
   seriesDisplayName, setSeriesDisplayName,
   comicDisplayName, setComicDisplayName,
+  getCoverFit, setCoverFit,
   getComicSeriesOverride, setComicSeries, seriesOverrideFor,
   channelDisplayName, setChannelDisplayName,
   groupDisplayName, setGroupDisplayName,
@@ -573,6 +574,7 @@ const coverApi = createCovers(
     el, kv, zip,
     TgReader, getMsg, pageBlob, sniff, pagesOf,
     readProgress, isComicRead, stripExt,
+    getCoverFit,
   }
 );
 const { getCover, saveCoverBlob, optimizeImageBlob, comicCover, pump, io } = coverApi;
@@ -1542,6 +1544,8 @@ infoApi = createInfoEdit({
   parseComicCaption, buildComicCaption,
   groupSeries, seriesOverrideFor, seriesBase, issueLabel,
   comicDisplayName, setComicDisplayName,
+  getCoverFit, setCoverFit,
+  getMsg, openPages, pageBlob,
   seriesDisplayName, setSeriesDisplayName,
   channelDisplayName, setChannelDisplayName,
   groupDisplayName, setGroupDisplayName,
@@ -1564,6 +1568,8 @@ const showComicInfo = infoApi.showComicInfo || (() => {});
 const showCaptionEditor = infoApi.showCaptionEditor || (() => {});
 const showComicVinePicker = infoApi.showComicVinePicker || (() => {});
 const showEditComicTitle = infoApi.showEditComicTitle || (() => {});
+const showCoverFitEditor = infoApi.showCoverFitEditor || (() => {});
+const showPickCoverFromComic = infoApi.showPickCoverFromComic || (() => {});
 const showSeriesInfo = infoApi.showSeriesInfo || (() => {});
 const showEditSeries = infoApi.showEditSeries || (() => {});
 const showEditSeriesName = infoApi.showEditSeriesName || (() => {});
@@ -1657,6 +1663,7 @@ const viewsApi = createViews({
   sheet, bindLongPress, grid,
   showGroupInfo, showEditGroup, showChannelInfo, showEditChannel,
   showSeriesInfo, showEditSeries, showComicInfo, showEditComicTitle,
+  showCoverFitEditor, showPickCoverFromComic, getCoverFit,
   getContinueList, readProgress, isComicRead, markComicRead, markComicUnread,
   markSeriesRead, markSeriesUnread, getPageIndex, getPagesTotal,
   ungroupMap, setUngroupMode, getComicSeriesOverride,
