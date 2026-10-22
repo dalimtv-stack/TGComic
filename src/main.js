@@ -1635,6 +1635,9 @@ const viewsApi = createViews({
   fetchFiles,
   mapLimit,
   alive,
+  getMsg,
+  get client() { return client; },
+  get ready() { return ready; },
 
   get LIB() { return LIB; },
   get synced() { return synced; },

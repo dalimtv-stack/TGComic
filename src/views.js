@@ -100,6 +100,162 @@ export function createViews(d) {
     },
   });
 
+
+  function comicDownloadName(f) {
+    let name = '';
+    try {
+      const cap = String(f?.caption || '');
+      const m = cap.match(/^\s*Nombre de archivo\s*:\s*(.+)$/im);
+      if (m) name = m[1].trim();
+    } catch (_) {}
+    if (!name) name = String(f?.name || 'comic.cbz');
+    name = name.replace(/[\/\\?%*:|"<>]/g, '_').trim() || 'comic.cbz';
+    if (!/\.cb[zr]$/i.test(name)) {
+      const ext = /\.cbr$/i.test(f?.name || '') ? '.cbr' : '.cbz';
+      name += ext;
+    }
+    return name;
+  }
+
+  async function downloadComicFile(ch, f) {
+    if (typeof d.downloadComic === 'function') {
+      return d.downloadComic(ch, f);
+    }
+    const getMsg = d.getMsg;
+    const client = typeof d.client === 'function' ? d.client() : d.client;
+    const readyP = typeof d.ready === 'function' ? d.ready() : d.ready;
+    if (!getMsg || !client) {
+      await appAlert('Descarga no disponible en este contexto.');
+      return;
+    }
+    const outName = comicDownloadName(f);
+    let statusFrame = null;
+    const closeStatus = () => { try { statusFrame?.remove(); } catch (_) {} statusFrame = null; };
+    const setStatus = (t) => {
+      try {
+        if (!statusFrame) {
+          statusFrame = el('div', 'info-frame');
+          const box = el('div', 'info-box');
+          const head = el('div', 'info-head');
+          head.append(el('span', '', 'Descarga'));
+          const body = el('div', 'info-body');
+          body.append(el('p', 'cover-pick-hint dl-status', t));
+          box.append(head, body);
+          statusFrame.append(box);
+          document.body.append(statusFrame);
+        } else {
+          const p = statusFrame.querySelector('.dl-status');
+          if (p) p.textContent = t;
+        }
+      } catch (_) {}
+    };
+    try {
+      if (readyP && typeof readyP.then === 'function') await readyP;
+      setStatus('Obteniendo archivo de Telegram…');
+      const m = await getMsg(ch, f);
+      if (!m?.media && !m?.document) throw new Error('Mensaje sin archivo');
+      const size = Number(f?.size || (m.document?.size != null ? m.document.size.toString() : 0) || 0);
+      setStatus(size ? 'Descargando… 0%' : 'Descargando…');
+      const buf = await client.downloadMedia(m.media || m, {
+        workers: 4,
+        progressCallback: (got) => {
+          const n = Number(got?.toString?.() ?? got);
+          if (size > 0 && n >= 0) setStatus('Descargando… ' + Math.min(100, Math.round((n / size) * 100)) + '%');
+        },
+      });
+      if (!buf) throw new Error('Descarga vacía');
+      const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+      const blob = new Blob([u8], { type: 'application/octet-stream' });
+
+      if (typeof window.showDirectoryPicker === 'function') {
+        try {
+          setStatus('Elige carpeta…');
+          const dir = await window.showDirectoryPicker({ mode: 'readwrite' });
+          const fh = await dir.getFileHandle(outName, { create: true });
+          const w = await fh.createWritable();
+          await w.write(blob);
+          await w.close();
+          closeStatus();
+          await appAlert('Guardado:\\n' + outName);
+          return;
+        } catch (e) {
+          if (e?.name === 'AbortError') { closeStatus(); return; }
+          console.warn('[download] directory picker', e);
+        }
+      }
+      setStatus('Guardando…');
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = outName;
+      a.rel = 'noopener';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { try { a.remove(); URL.revokeObjectURL(url); } catch (_) {} }, 2000);
+      closeStatus();
+    } catch (e) {
+      closeStatus();
+      await appAlert('No se pudo descargar: ' + (e?.message || e));
+    }
+  }
+
+  function comicSheetOpts(ch, f, label, redraw, ctx = {}) {
+    const seriesLabel = ctx.seriesLabel || null;
+    const seriesFiles = ctx.seriesFiles || null;
+    const groupState = ctx.groupState || null;
+    const afterBack = ctx.afterDesagrupar;
+
+    const opts = [
+      ['Información', () => showComicInfo(ch, f, label)],
+      ['Editar', () => {
+        const editOpts = [
+          ['Editar datos del cómic', () => showEditComicTitle(ch, f, label, redraw)],
+        ];
+        if (seriesLabel) {
+          editOpts.push(['Editar TODA la serie', () => showEditSeries(ch, seriesLabel, seriesFiles || [f], redraw)]);
+        }
+        sheet('Editar', editOpts);
+      }],
+      ['Marcar', () => {
+        const unread = !isComicRead(ch.id, f.id);
+        const markOpts = [
+          unread
+            ? ['Marcar CÓMIC como leído', () => markComicRead(ch, f, redraw)]
+            : ['Marcar CÓMIC como no leído', () => markComicUnread(ch, f, redraw)],
+        ];
+        if (seriesFiles && seriesFiles.length > 1) {
+          const anyUnread = seriesFiles.some((x) => !isComicRead(ch.id, x.id));
+          markOpts.push(anyUnread
+            ? ['Marcar SERIE como leída', () => markSeriesRead(ch, seriesFiles, redraw)]
+            : ['Marcar SERIE como no leída', () => markSeriesUnread(ch, seriesFiles, redraw)]);
+        }
+        sheet('Marcar', markOpts);
+      }],
+    ];
+
+    if (groupState === 'grouped' && seriesFiles && seriesFiles.length > 1) {
+      opts.push(['Desagrupar', () => {
+        sheet('Desagrupar', [
+          ['Desagrupar serie', () => setUngroupMode(ch, seriesLabel, 'short', afterBack || redraw)],
+          ['Desagrupar serie (con nombre)', () => setUngroupMode(ch, seriesLabel, 'full', afterBack || redraw)],
+        ]);
+      }]);
+    } else if (groupState === 'short' || groupState === 'full') {
+      opts.push(['Desagrupar', () => {
+        sheet('Desagrupar', [
+          ['Volver a agrupar la serie', () => setUngroupMode(ch, seriesLabel, null, afterBack || redraw)],
+        ]);
+      }]);
+    }
+
+    opts.push(['Añadir versión WebP', () => {
+      try { repackTool?.offerWebpVersion?.(ch, f); }
+      catch (e) { appAlert(e?.message || e); }
+    }]);
+    opts.push(['Descargar cómic', () => { downloadComicFile(ch, f); }]);
+    return opts;
+  }
+
 function cardNode(i) {
   const c = el('div', 'card');
   if (i.hiddenMeta) c.classList.add('card-locked');
@@ -324,17 +480,26 @@ function groupsView() {
             row.onclick = () => openComic(ch, f);
             const contLabel = comicDisplayName(ch, f, comicDisplay(comicSourceName(f), ch.name) || clean(f.name));
             const contUnread = !isComicRead(ch.id, f.id);
-            const contOpts = [
-              ['Información', () => showComicInfo(ch, f, contLabel)],
-              ['Editar datos del comic', () => showEditComicTitle(ch, f, contLabel, () => {
-                try { if (stack.length === 1) groupsView(); } catch (_) {}
-              })],
-              contUnread
-                ? ['Marcar comic como leído', () => markComicRead(ch, f, () => renderContinue(continueList))]
-                : ['Marcar comic como no leído', () => markComicUnread(ch, f, () => renderContinue(continueList))],
-              ['Añadir versión WebP', () => { try { repackTool?.offerWebpVersion?.(ch, f); } catch (e) { appAlert(e?.message || e); } }],
-            ];
-            bindLongPress(row, () => sheet(contLabel, contOpts));
+            const contRedraw = () => renderContinue(continueList);
+            const channelLab = channelDisplayName(ch) || ch.name || '';
+            let seriesLab = '';
+            let titleLab = '';
+            try {
+              const ov = getComicSeriesOverride(ch, f);
+              const p = parseComicName(comicSourceName(f), ch.name);
+              const sk = (ov != null && String(ov).trim()) ? String(ov).trim() : (p?.series || seriesBase(f.name, ch.name) || '');
+              seriesLab = sk ? (seriesDisplayName(ch, sk) || sk) : '';
+              // Mismo formato que el listado dentro de una serie (#nn - info)
+              const baseLabel = p ? issueDisplay(p) : (issueLabel(sk || seriesLab, f, ch.name) || comicDisplay(comicSourceName(f), ch.name) || clean(f.name));
+              titleLab = comicDisplayName(ch, f, baseLabel);
+            } catch (_) {
+              titleLab = comicDisplayName(ch, f, comicDisplay(comicSourceName(f), ch.name) || clean(f.name));
+            }
+            bindLongPress(row, () => sheet(contLabel, comicSheetOpts(ch, f, contLabel, contRedraw, {
+              seriesLabel: seriesLab || null,
+              seriesFiles: null,
+              groupState: seriesLab ? 'grouped' : null,
+            }).concat(lockToggleOpts('comic', { ch, f }, contLabel, contRedraw))));
             const thumb = el('div', 'continue-cover');
             const letter = el('span', '', stripExt(f.name).slice(0, 1).toUpperCase());
             thumb.append(letter);
@@ -352,20 +517,6 @@ function groupsView() {
               setBlobImg(img, b, thumb);
             }).catch(() => {});
             const meta = el('div', 'continue-meta');
-            const channelLab = channelDisplayName(ch) || ch.name || '';
-            let seriesLab = '';
-            let titleLab = '';
-            try {
-              const ov = getComicSeriesOverride(ch, f);
-              const p = parseComicName(comicSourceName(f), ch.name);
-              const sk = (ov != null && String(ov).trim()) ? String(ov).trim() : (p?.series || seriesBase(f.name, ch.name) || '');
-              seriesLab = sk ? (seriesDisplayName(ch, sk) || sk) : '';
-              // Mismo formato que el listado dentro de una serie (#nn - info)
-              const baseLabel = p ? issueDisplay(p) : (issueLabel(sk || seriesLab, f, ch.name) || comicDisplay(comicSourceName(f), ch.name) || clean(f.name));
-              titleLab = comicDisplayName(ch, f, baseLabel);
-            } catch (_) {
-              titleLab = comicDisplayName(ch, f, comicDisplay(comicSourceName(f), ch.name) || clean(f.name));
-            }
             if (channelLab) meta.append(el('span', 'continue-channel', channelLab));
             if (seriesLab) meta.append(el('span', 'continue-series', seriesLab));
             meta.append(el('span', 'continue-title', titleLab));
@@ -809,34 +960,12 @@ function filesView(ch) {
         // groupState: null = sin serie, 'grouped' | 'short' | 'full'
         const label = comicDisplayName(ch, f, displayLabel);
         const unread = !isComicRead(ch.id, f.id);
-        const opts = [
-          ['Información', () => showComicInfo(ch, f, label)],
-          ['Editar datos del comic', () => showEditComicTitle(ch, f, label, redraw)],
-        ];
-        if (seriesLabel && groupState) {
-          opts.push(['Editar TODA la serie', () => showEditSeries(ch, seriesLabel, seriesFiles || [], redraw)]);
-        }
-        opts.push(unread
-          ? ['Marcar comic como leído', () => markComicRead(ch, f, redraw)]
-          : ['Marcar comic como no leído', () => markComicUnread(ch, f, redraw)]);
-        // Solo la acción que proceda para la serie completa
-        if (seriesLabel && seriesFiles && seriesFiles.length > 1) {
-          const anyUnread = seriesFiles.some((x) => !isComicRead(ch.id, x.id));
-          opts.push(anyUnread
-            ? ['Marcar serie como leída', () => markSeriesRead(ch, seriesFiles, redraw)]
-            : ['Marcar serie como no leída', () => markSeriesUnread(ch, seriesFiles, redraw)]);
-        }
-        if (groupState === 'short' || groupState === 'full') {
-          opts.push(['Volver a agrupar la serie', () => setUngroupMode(ch, seriesLabel, null, redraw)]);
-        } else if (groupState === 'grouped' && seriesFiles && seriesFiles.length > 1) {
-          opts.push(['Desagrupar serie', () => setUngroupMode(ch, seriesLabel, 'short', redraw)]);
-          opts.push(['Desagrupar serie (con nombre)', () => setUngroupMode(ch, seriesLabel, 'full', redraw)]);
-        }
-        opts.push(['Añadir versión WebP', () => {
-          try { repackTool?.offerWebpVersion?.(ch, f); }
-          catch (e) { appAlert(e?.message || e); }
-        }]);
         const comicRestricted = locks.isContentRestricted('comic', { ch, f });
+        const sheetCtx = {
+          seriesLabel: seriesLabel || null,
+          seriesFiles: seriesFiles || null,
+          groupState: groupState || null,
+        };
         return {
           // En la vista de series/canal, los cómics sueltos usan los ajustes de SERIES (misma portada y texto que el resto)
           kind: 'series',
@@ -850,7 +979,9 @@ function filesView(ch) {
             if (!locks.guardRestricted('comic', { ch, f }, label)) return;
             openComic(ch, f, cur);
           },
-          longPress: () => sheet(label, opts.concat(lockToggleOpts('comic', { ch, f }, label, redraw))),
+          longPress: () => sheet(label, comicSheetOpts(ch, f, label, redraw, sheetCtx).concat(
+            lockToggleOpts('comic', { ch, f }, label, redraw)
+          )),
           menu: (groupState && seriesLabel) ? () => sheet(seriesDisplayName(ch, seriesLabel), [
             ['Editar TODA la serie', () => showEditSeries(ch, seriesLabel, seriesFiles || [], redraw)],
             ...lockToggleOpts('series', { ch, seriesLabel }, seriesDisplayName(ch, seriesLabel), redraw),
@@ -887,15 +1018,11 @@ function filesView(ch) {
           // Un solo número: no desagrupar; si hasSeriesName Editar título + Editar serie + Info
           if (hasSeriesName) {
             const it = items[items.length - 1];
-            it.longPress = () => sheet(it.label, [
-              ['Información', () => showComicInfo(ch, f, it.label)],
-              ['Editar datos del comic', () => showEditComicTitle(ch, f, it.label, redraw)],
-              ['Editar TODA la serie', () => showEditSeries(ch, soloSeries, fs, redraw)],
-              !isComicRead(ch.id, f.id)
-                ? ['Marcar comic como leído', () => markComicRead(ch, f, redraw)]
-                : ['Marcar comic como no leído', () => markComicUnread(ch, f, redraw)],
-              ['Añadir versión WebP', () => { try { repackTool?.offerWebpVersion?.(ch, f); } catch (e) { appAlert(e?.message || e); } }],
-            ]);
+            it.longPress = () => sheet(it.label, comicSheetOpts(ch, f, it.label, redraw, {
+              seriesLabel: soloSeries,
+              seriesFiles: fs,
+              groupState: 'grouped',
+            }).concat(lockToggleOpts('comic', { ch, f }, it.label, redraw)));
             it.menu = undefined;
           }
         } else if (un[seriesLabel.toLowerCase()]) {
@@ -1005,23 +1132,10 @@ function seriesView(ch, s, files) {
           : issueLabel(s, f, ch.name);
         const displayLabel = comicDisplayName(ch, f, baseLabel);
         const unread = !isComicRead(ch.id, f.id);
-        const opts = [
-          ['Información', () => showComicInfo(ch, f, displayLabel)],
-          ['Editar datos del comic', () => showEditComicTitle(ch, f, displayLabel, redraw)],
-          ['Editar TODA la serie', () => showEditSeries(ch, s, fs, () => {
-            try { titleEl.textContent = seriesDisplayName(ch, s); } catch (_) {}
-            redraw();
-          })],
-          unread
-            ? ['Marcar comic como leído', () => markComicRead(ch, f, redraw)]
-            : ['Marcar comic como no leído', () => markComicUnread(ch, f, redraw)],
-          seriesUnread
-            ? ['Marcar serie como leída', () => markSeriesRead(ch, fs, redraw)]
-            : ['Marcar serie como no leída', () => markSeriesUnread(ch, fs, redraw)],
-          ['Desagrupar serie', () => setUngroupMode(ch, s, 'short', () => history.back())],
-          ['Desagrupar serie (con nombre)', () => setUngroupMode(ch, s, 'full', () => history.back())],
-          ['Añadir versión WebP', () => { try { repackTool?.offerWebpVersion?.(ch, f); } catch (err) { appAlert(err?.message || err); } }],
-        ];
+        const seriesRedraw = () => {
+          try { if (titleEl) titleEl.textContent = seriesDisplayName(ch, s); } catch (_) {}
+          redraw();
+        };
         return {
           kind: 'comic',
           label: displayLabel,
@@ -1031,7 +1145,12 @@ function seriesView(ch, s, files) {
           cover: () => locks.isContentRestricted('comic', { ch, f }) ? locks.lockedCoverNode(ART) : comicCover(ch, f),
           hiddenMeta: locks.isContentRestricted('comic', { ch, f }),
           go: () => openComic(ch, f, fs),
-          longPress: () => sheet(displayLabel, opts.concat(lockToggleOpts('comic', { ch, f }, displayLabel, redraw))),
+          longPress: () => sheet(displayLabel, comicSheetOpts(ch, f, displayLabel, seriesRedraw, {
+            seriesLabel: s,
+            seriesFiles: fs,
+            groupState: 'grouped',
+            afterDesagrupar: () => history.back(),
+          }).concat(lockToggleOpts('comic', { ch, f }, displayLabel, seriesRedraw))),
         };
       });
       grid(items, true, 'Buscar en esta serie…', 'comics');
