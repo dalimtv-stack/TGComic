@@ -2283,7 +2283,10 @@ function showChannelCoverPicker(ch, files, after) {
 
 
 /** Carga la 1ª página del cómic a calidad completa (no la miniatura de caché). */
-async function loadFirstPageBlob(ch, f, statusFn) {
+async function loadFirstPageBlob(ch, f, statusFn) { return loadPageBlob(ch, f, 0, statusFn); }
+
+/** Carga la página idx (0 = primera) del cómic a calidad completa. Si no existe, usa la última. */
+async function loadPageBlob(ch, f, idx, statusFn) {
   if (typeof openPages !== 'function' || typeof getMsg !== 'function') {
     throw new Error('No se puede abrir el archivo');
   }
@@ -2298,11 +2301,11 @@ async function loadFirstPageBlob(ch, f, statusFn) {
   try {
     const pages = pagesApi?.pages || [];
     if (!pages.length) throw new Error('Sin páginas');
-    const first = pages[0];
+    const first = pages[Math.max(0, Math.min(pages.length - 1, Number(idx) || 0))];
     let blob = null;
     if (typeof pageBlob === 'function') blob = await pageBlob(first);
     else if (first?.blob) blob = first.blob;
-    if (!blob) throw new Error('No se pudo leer la primera página');
+    if (!blob) throw new Error('No se pudo leer la página del cómic');
     return blob;
   } finally {
     try { pagesApi?.close?.(); } catch (_) {}
@@ -2347,52 +2350,33 @@ function coverCropRect(sw, sh, mode, exactHalf = false) {
   return { sx, sy, cw, ch };
 }
 
-/** Selección de Adaptar portada recordada por cómic (modo + recorte exacto a la mitad). */
+/**
+ * Portada personalizada recordada por cómic: SOLO datos pequeños (nº de página elegida,
+ * modo y recorte a la mitad). La imagen se vuelve a leer del cómic cada vez; no se guarda ninguna.
+ */
 const coverAdaptKey = (ch, f) => `coverAdapt:${ch.id}:${f.id}`;
 function getCoverAdapt(ch, f) {
   try {
     const v = JSON.parse(localStorage.getItem(coverAdaptKey(ch, f)) || 'null');
-    if (v && ['left', 'center', 'right', 'full'].includes(v.mode)) return { mode: v.mode, half: v.half !== false };
+    if (v && typeof v === 'object') {
+      return {
+        page: Math.max(0, Math.floor(Number(v.page) || 0)),
+        mode: ['left', 'center', 'right', 'full'].includes(v.mode) ? v.mode : 'full',
+        half: v.half !== false,
+      };
+    }
   } catch (_) {}
   return null;
 }
 function setCoverAdapt(ch, f, v) {
   try {
-    if (v) localStorage.setItem(coverAdaptKey(ch, f), JSON.stringify({ mode: v.mode, half: !!v.half }));
+    if (v) localStorage.setItem(coverAdaptKey(ch, f), JSON.stringify({
+      page: Math.max(0, Math.floor(Number(v.page) || 0)),
+      mode: v.mode || 'full',
+      half: v.half !== false,
+    }));
     else localStorage.removeItem(coverAdaptKey(ch, f));
   } catch (_) {}
-}
-
-/** Imagen de origen de la portada personalizada (página elegida), para poder re-adaptarla. */
-const coverSrcKey = (ch, f) => `csrc:${ch.id}:${f.id}`;
-async function getCoverSource(ch, f) {
-  try {
-    const b = await kv.get(coverSrcKey(ch, f));
-    return (b instanceof Blob && b.size) ? b : null;
-  } catch (_) { return null; }
-}
-/** Guarda la página de origen (reducida a ~1800 px para no ocupar de más). */
-async function rememberCoverSource(ch, f, blob) {
-  if (!blob) return;
-  let out = blob;
-  try {
-    const bmp = await createImageBitmap(blob);
-    const sw = bmp.width, sh = bmp.height;
-    const scale = Math.min(1, 1800 / Math.max(sw, sh));
-    if (scale < 1 || blob.size > 600 * 1024) {
-      const cv = el('canvas');
-      cv.width = Math.max(1, Math.round(sw * scale));
-      cv.height = Math.max(1, Math.round(sh * scale));
-      cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
-      const enc = (type, q) => new Promise((res) => { try { cv.toBlob((b) => res(b || null), type, q); } catch { res(null); } });
-      let enc1 = await enc('image/webp', 0.85);
-      if (!(enc1 && enc1.size && (enc1.type || '').includes('webp'))) enc1 = await enc('image/jpeg', 0.85);
-      if (enc1 && enc1.size && enc1.size < blob.size) out = enc1;
-      cv.width = 0; cv.height = 0;
-    }
-    try { bmp.close?.(); } catch (_) {}
-  } catch (_) {}
-  try { await kv.set(coverSrcKey(ch, f), out); } catch (e) { console.warn('cover source', e); }
 }
 
 async function cropAndCompressCover(blob, mode, exactHalf = false) {
@@ -2469,7 +2453,7 @@ function showCoverFitEditor(ch, f, after) {
   const mem = getCoverAdapt(ch, f);
   let current = mem?.mode || 'full';
   let sourceBlob = null;
-  let sourceIsRemembered = false;
+  const srcPage = mem?.page || 0; // página del cómic elegida como portada (0 = primera)
   let srcBmp = null;
   let previewCv = null;
   // Preview real: dibuja exactamente el recorte que se guardará
@@ -2557,8 +2541,7 @@ function showCoverFitEditor(ch, f, after) {
       if (!out) throw new Error('No se pudo procesar la imagen');
       await saveCoverBlob(ch, f, out, { custom: true });
       // Recordar la selección y la imagen de origen (para volver a adaptar desde el original)
-      setCoverAdapt(ch, f, { mode: current, half: halfChk.checked });
-      if (!sourceIsRemembered) await rememberCoverSource(ch, f, sourceBlob);
+      setCoverAdapt(ch, f, { page: srcPage, mode: current, half: halfChk.checked });
       // La portada ya está recortada: resetear fit visual a full
       try { if (typeof setCoverFit === 'function') setCoverFit(ch, f, 'full'); } catch (_) {}
       closeFit();
@@ -2580,16 +2563,13 @@ function showCoverFitEditor(ch, f, after) {
     try {
       const loading = el('div', 'info-loading', 'Cargando página del cómic…');
       preview.append(loading);
-      // Si hay una imagen de origen recordada (portada personalizada), se adapta esa, no la caché ni la 1ª página
-      sourceBlob = await getCoverSource(ch, f);
-      sourceIsRemembered = !!sourceBlob;
-      if (sourceIsRemembered) {
-        hintEl.textContent = 'Se usa la imagen de origen que elegiste para esta portada (calidad completa). Izquierda / Centro / Derecha recortan al marco 2:3 y guardan la portada comprimida.';
-      } else {
-        sourceBlob = await loadFirstPageBlob(ch, f, (t) => {
-          try { loading.textContent = t || 'Cargando…'; } catch (_) {}
-        });
+      // Siempre se lee del propio cómic la página recordada (no la miniatura de caché)
+      if (srcPage > 0) {
+        hintEl.textContent = 'Se usa la página ' + (srcPage + 1) + ' del cómic, la que elegiste para esta portada (calidad completa). Izquierda / Centro / Derecha recortan al marco 2:3 y guardan la portada comprimida.';
       }
+      sourceBlob = await loadPageBlob(ch, f, srcPage, (t) => {
+        try { loading.textContent = t || 'Cargando…'; } catch (_) {}
+      });
       if (!preview.isConnected) return;
       try {
         srcBmp = await createImageBitmap(sourceBlob);
@@ -2702,9 +2682,8 @@ async function showPickCoverFromComic(ch, f, after) {
             status.textContent = 'Guardando portada…';
             // Guardar página completa (saveCoverBlob comprime como el resto)
             await saveCoverBlob(ch, f, blob, { custom: true });
-            // Recordar esta página como imagen de origen (Adaptar partirá de ella) y reiniciar el recorte
-            await rememberCoverSource(ch, f, blob);
-            setCoverAdapt(ch, f, null);
+            // Recordar solo el número de página (Adaptar la volverá a leer del cómic); recorte reiniciado
+            setCoverAdapt(ch, f, { page: idx, mode: 'full', half: true });
             doClose(true);
           } catch (e) {
             cell.disabled = false;

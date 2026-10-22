@@ -144,6 +144,10 @@ export function createProTools(d) {
     const total = targets.length;
     for (const t of targets) {
       try { await kv.del(t.key); } catch (_) {}
+      // Una portada personalizada se descarta: se vuelve a la portada por defecto
+      try { await kv.del(`ccustom:${t.ch.id}:${t.f.id}`); } catch (_) {}
+      try { await kv.del(`csrc:${t.ch.id}:${t.f.id}`); } catch (_) {}
+      try { localStorage.removeItem(`coverAdapt:${t.ch.id}:${t.f.id}`); } catch (_) {}
       done++;
       if (done % 5 === 0 || done === total) onProgress?.(done, total);
       if (done % 20 === 0) await new Promise((r) => setTimeout(r, 0));
@@ -316,8 +320,14 @@ export function createProTools(d) {
         await appAlert('No hay cómics en el alcance seleccionado.', 'Portadas');
         return;
       }
+      let customN = 0;
+      for (const t of targets) {
+        try { if (await kv.get(`ccustom:${t.ch.id}:${t.f.id}`)) customN++; } catch (_) {}
+      }
       const ok = await appConfirm(
-        `Se borrarán y regenerarán ${targets.length} portada(s).\nEsto puede tardar varios minutos y usar datos. ¿Continuar?`,
+        `Se borrarán y regenerarán ${targets.length} portada(s).`
+        + (customN ? `\n${customN} tiene(n) portada personalizada: se perderá y volverá la portada por defecto.` : '')
+        + `\nEsto puede tardar varios minutos y usar datos. ¿Continuar?`,
         'Recargar portadas'
       );
       if (!ok) return;
