@@ -3,6 +3,7 @@
  * Móvil: poca RAM, un archivo a la vez, liberar buffers.
  */
 import * as zip from '@zip.js/zip.js';
+import { withQualityTags } from './quality.js';
 
 export function createRepackTool(d) {
   const {
@@ -659,9 +660,8 @@ export function createRepackTool(d) {
         outName = String(outName).trim().replace(/_/g, ' ').replace(/\s+/g, ' ');
         if (!/\.cbz$/i.test(outName)) outName = outName.replace(/\.cb[zr]$/i, '') + '.cbz';
       }
-      if (useWebp && !/\[WebP\]/i.test(outName)) {
-        outName = outName.replace(/\.cbz$/i, ' [WebP].cbz');
-      }
+      // Etiquetas de calidad: [2400px] (si se redimensiona) y después [WebP]
+      if (useWebp) outName = withQualityTags(outName, { webp: true, resize: wOpts.resize !== false });
       status(`Nombre de subida: ${outName}`);
       prog(65);
       // Caption del original + Nombre de archivo = nombre final (WebP u otro)

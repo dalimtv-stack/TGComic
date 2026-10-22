@@ -8,6 +8,7 @@ import * as zip from '@zip.js/zip.js';
 import { createExtractorFromData } from 'node-unrar-js';
 import rarWasm from 'node-unrar-js/esm/js/unrar.wasm?url';
 import { buildComicCaption } from './parse.js';
+import { withQualityTags } from './quality.js';
 
 const SEP = '::';
 const TSEP = ':';
@@ -1271,6 +1272,8 @@ export function createUploadTool(d) {
           } else {
             outName = ensureCbzName(outName, wantWebp);
           }
+          // Etiquetas de calidad: [2400px] (si se redimensiona) y después [WebP]
+          if (wantWebp) outName = withQualityTags(outName, { webp: true, resize: !!webpOpts.resize });
           // Siempre: "Nombre de archivo"; ficha completa si el check del archivo está activo
           let caption = row.fichaChk?.checked
             ? buildComicCaption({
