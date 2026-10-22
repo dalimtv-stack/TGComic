@@ -3,6 +3,8 @@
  * - Recargar portadas con filtro Editorial / Canal / Serie
  * - Progreso de borrado y de regeneración
  */
+import * as sync from './sync.js';
+
 export function createProTools(d) {
   const {
     el,
@@ -141,17 +143,24 @@ export function createProTools(d) {
 
   async function deleteCoverKeys(targets, onProgress) {
     let done = 0;
+    let resetAdapt = false;
     const total = targets.length;
     for (const t of targets) {
       try { await kv.del(t.key); } catch (_) {}
       // Una portada personalizada se descarta: se vuelve a la portada por defecto
       try { await kv.del(`ccustom:${t.ch.id}:${t.f.id}`); } catch (_) {}
       try { await kv.del(`csrc:${t.ch.id}:${t.f.id}`); } catch (_) {}
-      try { localStorage.removeItem(`coverAdapt:${t.ch.id}:${t.f.id}`); } catch (_) {}
+      try {
+        // Marca '0' (no borrar la clave) para que la sincronización también descarte la personalización
+        const ak = `coverAdapt:${t.ch.id}:${t.f.id}`;
+        const cur = localStorage.getItem(ak);
+        if (cur != null && cur !== '0') { localStorage.setItem(ak, '0'); resetAdapt = true; }
+      } catch (_) {}
       done++;
       if (done % 5 === 0 || done === total) onProgress?.(done, total);
       if (done % 20 === 0) await new Promise((r) => setTimeout(r, 0));
     }
+    if (resetAdapt) { try { sync.schedulePush(); } catch (_) {} }
     return done;
   }
 

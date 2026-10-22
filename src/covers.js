@@ -34,8 +34,115 @@ export function createCovers(state, d) {
     }
     let b = opts.force ? null : await kv.get(key);
     if (b === 'none') b = undefined;
+
+    // Portada personalizada sincronizada entre dispositivos (solo página + modo; la imagen se lee del cómic)
+    try {
+      const cfg = readCoverAdapt(ch, f);
+      const ckey = coverCustomKey(ch, f);
+      if (cfg === 'reset') {
+        // Otro dispositivo (o Recargar portadas) restableció la portada: volver a la de por defecto
+        if (await kv.get(ckey)) {
+          try { await kv.del(key); } catch (_) {}
+          try { await kv.del(ckey); } catch (_) {}
+          b = undefined;
+        }
+      } else if (cfg) {
+        const sig = adaptSig(cfg);
+        const applied = await kv.get(ckey);
+        if ((applied !== sig || !b) && !customFailed.has(ch.id + ':' + f.id + ':' + sig)) {
+          const nb = await enqueue(() => makeCustomCover(ch, f, key, cfg));
+          if (nb) {
+            try { await kv.set(ckey, sig); } catch (_) {}
+            return nb;
+          }
+          // Sin red / CBR / error: no reintentar en bucle durante esta sesión
+          customFailed.add(ch.id + ':' + f.id + ':' + sig);
+        }
+      }
+    } catch (_) {}
+
     if (!b) b = await enqueue(() => makeCover(ch, f, key));
     return b && b !== 'none' ? b : null;
+  }
+
+  // ----- Portada personalizada: configuración sincronizada (localStorage coverAdapt:ch:f) -----
+  const customFailed = new Set();
+  const adaptKey = (ch, f) => `coverAdapt:${ch.id}:${f.id}`;
+  /** { page, mode, half } | 'reset' (marca de borrado sincronizada) | null (sin configuración) */
+  function readCoverAdapt(ch, f) {
+    try {
+      const raw = localStorage.getItem(adaptKey(ch, f));
+      if (raw == null) return null;
+      if (raw === '0') return 'reset';
+      const v = JSON.parse(raw);
+      if (!v || typeof v !== 'object') return 'reset';
+      return {
+        page: Math.max(0, Math.floor(Number(v.page) || 0)),
+        mode: ['left', 'center', 'right', 'full'].includes(v.mode) ? v.mode : 'full',
+        half: v.half !== false,
+      };
+    } catch (_) { return null; }
+  }
+  const adaptSig = (c) => `${c.page}|${c.mode}|${c.half ? 1 : 0}`;
+  function currentSig(ch, f) {
+    const c = readCoverAdapt(ch, f);
+    return c && c !== 'reset' ? adaptSig(c) : null;
+  }
+
+  /** Recorta una página apaisada según modo (mismo criterio que «Adaptar portada»). */
+  async function cropForCover(blob, mode, exactHalf) {
+    let bmp;
+    try { bmp = await createImageBitmap(blob); } catch { return null; }
+    const sw = bmp.width, sh = bmp.height;
+    let sx = 0, sy = 0, cw = sw, chh = sh;
+    if (sw > sh && (mode === 'left' || mode === 'center' || mode === 'right')) {
+      if (exactHalf && (mode === 'left' || mode === 'right')) {
+        cw = Math.max(1, Math.floor(sw / 2));
+        sx = mode === 'right' ? sw - cw : 0;
+      } else {
+        chh = sh;
+        cw = Math.round(chh * (2 / 3));
+        if (cw > sw) { cw = sw; chh = Math.round(cw / (2 / 3)); sy = Math.round((sh - chh) / 2); }
+        if (mode === 'center') sx = Math.round((sw - cw) / 2);
+        else if (mode === 'right') sx = Math.max(0, sw - cw);
+      }
+    }
+    const scale = Math.min(1, 560 / Math.max(cw, chh));
+    const cv = el('canvas');
+    cv.width = Math.max(1, Math.round(cw * scale));
+    cv.height = Math.max(1, Math.round(chh * scale));
+    cv.getContext('2d').drawImage(bmp, sx, sy, cw, chh, 0, 0, cv.width, cv.height);
+    try { bmp.close?.(); } catch (_) {}
+    let out = await canvasToBlob(cv, 'image/webp', 0.78);
+    if (!(out && out.size && (out.type || '').includes('webp'))) out = await canvasToBlob(cv, 'image/jpeg', 0.72);
+    cv.width = 0; cv.height = 0;
+    return out && out.size ? out : null;
+  }
+
+  /** Genera la portada personalizada leyendo la página elegida del cómic (no se guarda la imagen de origen). */
+  async function makeCustomCover(ch, f, key, cfg) {
+    const msg = await getMsg(ch, f, { force: true });
+    let size = Number(f?.size) || 0;
+    try {
+      if (msg?.document?.size != null) size = Number(msg.document.size.toString()) || size;
+    } catch (_) {}
+    if (!size) return null;
+    const r = new TgReader(msg, size);
+    if ((await sniff(r)) !== 'zip') return null;
+    const zr = new zip.ZipReader(r);
+    try {
+      const pgs = pagesOf(await zr.getEntries());
+      if (!pgs.length) return null;
+      const src = await pageBlob(pgs[Math.min(cfg.page, pgs.length - 1)]);
+      if (!src) return null;
+      const cropped = await cropForCover(src, cfg.mode, cfg.half);
+      const out = await thumbFromBlob(cropped || src);
+      if (out) await kv.set(key, out);
+      return out;
+    } catch (e) {
+      console.warn('portada personalizada', e);
+      return null;
+    } finally { zr.close().catch(() => {}); }
   }
 
   let _webpOk = null;
@@ -169,12 +276,15 @@ export function createCovers(state, d) {
   const coverCustomKey = (ch, f) => `ccustom:${ch.id}:${f.id}`;
   async function isCustomCover(ch, f) {
     if (!ch?.id || f?.id == null) return false;
+    // También cuenta si otro dispositivo ya definió una portada personalizada (aún sin aplicar aquí)
+    if (currentSig(ch, f)) return true;
     try { return !!(await kv.get(coverCustomKey(ch, f))); } catch { return false; }
   }
   async function markCustomCover(ch, f, on = true) {
     if (!ch?.id || f?.id == null) return;
     try {
-      if (on) await kv.set(coverCustomKey(ch, f), 1);
+      // Se guarda la firma de la configuración aplicada; si cambia (otro dispositivo), se regenera
+      if (on) await kv.set(coverCustomKey(ch, f), currentSig(ch, f) || 1);
       else await kv.del(coverCustomKey(ch, f));
     } catch (_) {}
   }

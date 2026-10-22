@@ -1,4 +1,5 @@
 import { isComicRead, getPageIndex, getPagesTotal, readProgress } from './progress.js';
+import * as sync from './sync.js';
 
 /**
  * Información y edición: cómic, serie, canal, editorial; selectores de portada.
@@ -2375,8 +2376,10 @@ function setCoverAdapt(ch, f, v) {
       mode: v.mode || 'full',
       half: v.half !== false,
     }));
-    else localStorage.removeItem(coverAdaptKey(ch, f));
+    // Borrar = marca '0' (no quitar la clave): si no, la sincronización recuperaría el valor remoto
+    else if (localStorage.getItem(coverAdaptKey(ch, f)) != null) localStorage.setItem(coverAdaptKey(ch, f), '0');
   } catch (_) {}
+  try { sync.schedulePush(); } catch (_) {}
 }
 
 async function cropAndCompressCover(blob, mode, exactHalf = false) {
@@ -2539,9 +2542,9 @@ function showCoverFitEditor(ch, f, after) {
       const exactHalf = !!(halfChk.checked && (current === 'left' || current === 'right'));
       const out = await cropAndCompressCover(sourceBlob, current, exactHalf);
       if (!out) throw new Error('No se pudo procesar la imagen');
-      await saveCoverBlob(ch, f, out, { custom: true });
-      // Recordar la selección y la imagen de origen (para volver a adaptar desde el original)
+      // Primero la configuración (página/modo, se sincroniza) y luego la portada: así queda marcada como ya aplicada aquí
       setCoverAdapt(ch, f, { page: srcPage, mode: current, half: halfChk.checked });
+      await saveCoverBlob(ch, f, out, { custom: true });
       // La portada ya está recortada: resetear fit visual a full
       try { if (typeof setCoverFit === 'function') setCoverFit(ch, f, 'full'); } catch (_) {}
       closeFit();
@@ -2681,9 +2684,9 @@ async function showPickCoverFromComic(ch, f, after) {
             cell.disabled = true;
             status.textContent = 'Guardando portada…';
             // Guardar página completa (saveCoverBlob comprime como el resto)
-            await saveCoverBlob(ch, f, blob, { custom: true });
-            // Recordar solo el número de página (Adaptar la volverá a leer del cómic); recorte reiniciado
+            // Primero se recuerda solo el nº de página (se sincroniza; Adaptar la vuelve a leer del cómic), recorte reiniciado
             setCoverAdapt(ch, f, { page: idx, mode: 'full', half: true });
+            await saveCoverBlob(ch, f, blob, { custom: true });
             doClose(true);
           } catch (e) {
             cell.disabled = false;

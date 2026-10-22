@@ -41,6 +41,7 @@ const SYNC_PREFIXES = [
   'comicSeries:',
   'ungroup:',
   'read:',
+  'coverAdapt:', // portada personalizada: nº de página elegida + modo de recorte (sin imágenes)
 ];
 const SYNC_KEYS = ['channelNames', 'groupNames', 'lastRead', 'recentReads', 'contentLocks'];
 
