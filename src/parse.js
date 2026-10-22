@@ -16,6 +16,9 @@ const cleanInfo = (s) => (s || '')
   .replace(/\s*\[[^\]]*\]/g, '')
   .replace(/\s+por\s+\S.*$/i, '')
   .replace(/\s+/g, ' ')
+  .trim()
+  // " - " / "-" / "–" sueltos tras quitar [Traducido]
+  .replace(/^[\s\-–—]+|[\s\-–—]+$/g, '')
   .trim();
 /**
  * Formatos preferidos:
@@ -50,6 +53,7 @@ export function parseComicName(name, channelName) {
     .replace(/\s*\[[^\]]*\]/g, '')
     .replace(/\s*@\S+/g, '')
     .replace(/\s+/g, ' ')
+    .replace(/\s*[-–—]+\s*$/g, '') // "Serie #01 -" tras quitar [Traducido]
     .trim();
   if (!raw) return null;
   const ch = (channelName || '').trim();
@@ -161,7 +165,10 @@ export function issueDisplay(parsed) {
   if (!parsed) return '';
   if (parsed.rangeEnd) return `#${parsed.number} - #${parsed.rangeEnd}`;
   const base = '#' + parsed.number;
-  return parsed.info ? `${base} - ${parsed.info}` : base;
+  const info = String(parsed.info || '').trim();
+  // Evitar "#01 - -" o "#01 -" cuando info es solo guiones/vacío
+  if (!info || /^[\-–—]+$/.test(info)) return base;
+  return `${base} - ${info}`;
 }
 
 export function comicDisplay(name, channelName) {

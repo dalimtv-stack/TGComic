@@ -1030,6 +1030,9 @@ async function editCaptionWithFloodWait(ch, f, caption, onStatus) {
       await updateTelegramCaption(ch, f, caption);
       return;
     } catch (e) {
+      const msg = String(e?.message || e || '');
+      // Mismo texto que ya tenía → OK (no es fallo)
+      if (/MESSAGE_NOT_MODIFIED/i.test(msg)) return;
       const w = floodWaitSeconds(e);
       if (w > 0) {
         try { onStatus?.('Telegram FLOOD_WAIT: esperando ' + w + 's…'); } catch (_) {}
@@ -1210,7 +1213,7 @@ async function runSeriesCvFill(ch, seriesLabel, files, volId, sourceUrl) {
         });
         ok++;
         // Ritmo conservador: ~1 edición / 1.2 s para no reactivar FLOOD_WAIT
-        await new Promise((r) => setTimeout(r, 1200));
+        await new Promise((r) => setTimeout(r, 2000));
       } catch (e) {
         console.warn('[series-cv]', f?.name, e);
         fail++;
