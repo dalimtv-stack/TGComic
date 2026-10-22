@@ -2316,7 +2316,7 @@ async function loadFirstPageBlob(ch, f, statusFn) {
 /**
  * Recorta portada apaisada y comprime como el resto de portadas.
  * mode: left | center | right | full
- * exactHalf: solo left/right — mitad exacta del ancho original, luego se ajusta al marco 2:3.
+ * exactHalf: solo left/right — corta el ancho exactamente a la mitad (izq. o der.), alto completo.
  */
 async function cropAndCompressCover(blob, mode, exactHalf = false) {
   if (!blob) return null;
@@ -2348,25 +2348,11 @@ async function cropAndCompressCover(blob, mode, exactHalf = false) {
   let sx = 0, sy = 0, cw = sw, ch = sh;
   if (isLandscape && (m === 'left' || m === 'center' || m === 'right')) {
     if (exactHalf && (m === 'left' || m === 'right')) {
-      // Mitad exacta del ancho; alto completo
+      // Mitad EXACTA del ancho (p.ej. 2560 → 1280), alto completo. Sin más recorte.
       cw = Math.max(1, Math.floor(sw / 2));
       ch = sh;
       sx = m === 'right' ? (sw - cw) : 0;
       sy = 0;
-      // Ajuste al marco 2:3 (cover): recorte adicional centrado si hace falta
-      const targetRatio = 2 / 3;
-      const srcRatio = cw / ch;
-      if (srcRatio > targetRatio) {
-        // más ancha que 2:3 → recortar lados del half
-        const newCw = Math.round(ch * targetRatio);
-        sx = sx + Math.round((cw - newCw) / 2);
-        cw = newCw;
-      } else if (srcRatio < targetRatio) {
-        // más alta que 2:3 → recortar arriba/abajo
-        const newCh = Math.round(cw / targetRatio);
-        sy = Math.round((ch - newCh) / 2);
-        ch = newCh;
-      }
     } else {
       // Comportamiento habitual: ventana 2:3 anclada a izq/centro/der
       const targetRatio = 2 / 3;
@@ -2461,10 +2447,8 @@ function showCoverFitEditor(ch, f, after) {
     buttons.push([b, mode]);
     optsWrap.append(b);
   }
-  body.append(optsWrap);
-
-  // Check solo para Izquierda / Derecha
-  const halfRow = el('label', 'cfg-auto cover-fit-half');
+  // Check encima de Izquierda; solo afecta Izquierda / Derecha
+  const halfRow = el('label', 'cover-fit-half');
   const halfChk = el('input');
   halfChk.type = 'checkbox';
   halfChk.checked = true;
@@ -2476,6 +2460,8 @@ function showCoverFitEditor(ch, f, after) {
     halfChk.disabled = !lr;
     halfRow.classList.toggle('dim', !lr);
   }
+
+  body.append(optsWrap);
 
   const actions = el('div', 'edit-actions');
   const cancel = el('button', 'btn', 'Cancelar');
