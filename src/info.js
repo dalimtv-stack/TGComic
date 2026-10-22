@@ -1961,33 +1961,59 @@ async function showGroupCoverPicker(originalName, after) {
   const grid0 = el('div', 'cover-pick-grid');
   body.append(el('div', 'info-sec', 'Opciones'));
   body.append(grid0);
-  const ghGroupVars = listGithubArtVariants('groups', originalName);
-  if (!ghGroupVars.length) {
-    addCell(grid0, 'GitHub / predeterminada', () => getGithubGroupArtBlob(originalName), async () => {
+  const addGroupVariant = (v) => {
+    const lab = v.primary
+      ? (`Predeterminada: ${v.file}`)
+      : (v.altTag ? (`${v.label}: ${v.file}`) : (`Alternativa (${v.ext}): ${v.file}`));
+    addCell(grid0, lab, async () => v.blob || getGithubGroupArtBlob(originalName, v.url), async () => {
       await clearGroupCover(originalName);
       try {
-        const b = await getGithubGroupArtBlob(originalName);
+        let b = await getGithubGroupArtBlob(originalName, v.url);
+        if (!b && v.blob) b = v.blob;
         if (b) await setGroupCoverBlob(originalName, b);
       } catch (_) {}
       frame.remove();
       after?.();
     });
-  } else {
-    for (const v of ghGroupVars) {
-      const lab = v.primary
-        ? (`Predeterminada: ${v.file}`)
-        : (v.altTag ? (`${v.label}: ${v.file}`) : (`Alternativa (${v.ext}): ${v.file}`));
-      addCell(grid0, lab, () => getGithubGroupArtBlob(originalName, v.url), async () => {
+  };
+  // Igual que en canales: primero lo que indexó Vite (glob); si hay 0-1, se sondean las rutas
+  // estáticas /groups/<nombre>[.alt|.alt1|.alt2…].<ext> (el glob no siempre indexa public/).
+  const loadingHint = el('div', 'info-loading', 'Buscando portadas en GitHub…');
+  grid0.append(loadingHint);
+  (async () => {
+    let ghGroupVars = [];
+    try { ghGroupVars = listGithubArtVariants('groups', originalName) || []; } catch (_) {}
+    if (ghGroupVars.length < 2 && typeof probeGithubArtVariants === 'function') {
+      try {
+        const probed = (await probeGithubArtVariants('groups', originalName)) || [];
+        const seen = new Set(ghGroupVars.map((v) => String(v.file || '').toLowerCase()));
+        for (const v of probed) {
+          const k = String(v.file || '').toLowerCase();
+          if (!seen.has(k)) { seen.add(k); ghGroupVars.push(v); }
+        }
+        // Predeterminada (sin .alt) primero
+        ghGroupVars.sort((a, b) => (a.altTag ? 1 : 0) - (b.altTag ? 1 : 0));
+        if (!ghGroupVars.some((v) => v.primary)) {
+          const first = ghGroupVars.find((v) => !v.altTag);
+          if (first) first.primary = true;
+        }
+      } catch (_) {}
+    }
+    try { loadingHint.remove(); } catch (_) {}
+    if (!ghGroupVars.length) {
+      addCell(grid0, 'GitHub / predeterminada', () => getGithubGroupArtBlob(originalName), async () => {
         await clearGroupCover(originalName);
         try {
-          const b = await getGithubGroupArtBlob(originalName, v.url);
+          const b = await getGithubGroupArtBlob(originalName);
           if (b) await setGroupCoverBlob(originalName, b);
         } catch (_) {}
         frame.remove();
         after?.();
       });
+    } else {
+      for (const v of ghGroupVars) addGroupVariant(v);
     }
-  }
+  })();
 
   const chs = getLIB().filter((c) => c.group === originalName);
   if (chs.length) {
