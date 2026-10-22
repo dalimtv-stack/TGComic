@@ -1,4 +1,4 @@
-import { parseComicCaption, parseComicName, comicDisplay, issueDisplay } from './parse.js';
+import { parseComicCaption, parseComicName, comicDisplay, issueDisplay, cleanDisplayTitle } from './parse.js';
 /**
  * Metadatos locales: renombres de serie/cómic, serie asignada a un cómic,
  * desagrupar, nombres de canal/editorial.
@@ -85,8 +85,8 @@ export function comicDisplayName(ch, f, fallback) {
       const cap = parseComicCaption(f.caption || '');
       let titleEs = cap.titleEs && String(cap.titleEs).trim();
       if (titleEs) {
-        // No mostrar [corchetes]
-        titleEs = titleEs.replace(/\s*\[[^\]]*\]/g, '').replace(/\s+/g, ' ').trim();
+        // No mostrar [corchetes] ni residual "#01 -" tras quitar [Traducido]
+        titleEs = cleanDisplayTitle(titleEs);
         // Título España que ya empieza por # (o Special/…) = etiqueta de número lista
         // No re-parsear como nombre de archivo (rompe "(Especial 4 de 5)" → "#4 - de 5)")
         const isIssueLabel = /^#/.test(titleEs)

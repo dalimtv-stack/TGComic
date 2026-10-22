@@ -20,6 +20,11 @@ const cleanInfo = (s) => (s || '')
   // " - " / "-" / "–" sueltos tras quitar [Traducido]
   .replace(/^[\s\-–—]+|[\s\-–—]+$/g, '')
   .trim();
+
+/** Título visible: sin [corchetes] ni guiones sobrantes ("#01 - [Traducido]" → "#01"). */
+export function cleanDisplayTitle(s) {
+  return cleanInfo(String(s || ''));
+}
 /**
  * Formatos preferidos:
  * 1.  [channel] - [serie] #[n|Special|Especial|Extra] [- info]

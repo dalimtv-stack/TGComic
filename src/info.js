@@ -63,6 +63,13 @@ function showComicInfo(ch, f, displayTitle) {
           const mh = title.match(/#\s*(.+)$/);
           title = mh ? ('#' + mh[1].replace(/^#\s*/, '').trim()) : (issueFromFile || title);
         }
+        // "#01 -" / "#01 - [Traducido]" residual
+        title = String(title || '')
+          .replace(/\s*\[[^\]]*\]/g, '')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .replace(/^[\s\-–—]+|[\s\-–—]+$/g, '')
+          .trim() || issueFromFile || title;
       } else {
         title = comicDisplayName(ch, f, comicDisplay(comicSourceName(f), ch.name) || clean(f.name))
           || comicDisplay(comicSourceName(f), ch.name)
@@ -353,7 +360,16 @@ function showCaptionEditor(ch, f, after, opts = {}) {
 
   // Título local (bbdd / nombre bajo portada) para restaurar al desmarcar CV
   const localTitleEs = (() => {
-    if (cap.titleEs && String(cap.titleEs).trim()) return String(cap.titleEs).trim();
+    if (cap.titleEs && String(cap.titleEs).trim()) {
+      // Limpiar [Traducido] etc. para no dejar "#01 -"
+      let t = String(cap.titleEs).trim()
+        .replace(/\s*\[[^\]]*\]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/^[\s\-–—]+|[\s\-–—]+$/g, '')
+        .trim();
+      if (t) return t;
+    }
     try {
       // Igual que el título que TGComic muestra bajo la portada en la serie: "#006 - Gothic (1 de 5)"
       // (sin el nombre de la serie). Un título personalizado por el usuario sigue ganando.
