@@ -19,6 +19,17 @@ export function createReader(state, d) {
     modeBtn,
     pageCache,
   } = d;
+  const QSET = ['high', 'mid', 'low'];
+  const FALLBACK = { high: ['high', 'mid', 'low'], mid: ['mid', 'high', 'low'], low: ['low', 'mid', 'high'] };
+  const QNAME = { high: 'Alta', mid: 'Media', low: 'Baja' };
+  const pickQuality = (f, want) => { const v = f?.variants; if (!v) return null; for (const q of FALLBACK[want] || FALLBACK.high) if (v[q]) return q; return null; };
+  const variantFile = (f, q) => (q && f?.variants?.[q] ? { ...f, ...f.variants[q], id: f.variants[q].id } : f);
+  // Iconos Material Design Icons: quality-high / quality-medium / quality-low
+  const QICON = {
+    high: 'M14.5,13.5H16.5V10.5H14.5M18,14A1,1 0 0,1 17,15H16.25V16.5H14.75V15H14A1,1 0 0,1 13,14V10A1,1 0 0,1 14,9H17A1,1 0 0,1 18,10M11,15H9.5V13H7.5V15H6V9H7.5V11.5H9.5V9H11M19,4H5C3.89,4 3,4.89 3,6V18A2,2 0 0,0 5,20H19A2,2 0 0,0 21,18V6C21,4.89 20.1,4 19,4Z',
+    mid: 'M21,6V18A2,2 0 0,1 19,20H5A2,2 0 0,1 3,18V6A2,2 0 0,1 5,4H19A2,2 0 0,1 21,6M12,10C12,9.5 11.5,9 11,9H6.5C6,9 5.5,9.5 5.5,10V15H7V10.5H8V14H9.5V10.5H10.5V15H12V10M14.5,9A1,1 0 0,0 13.5,10V14A1,1 0 0,0 14.5,15H15.5V16.5H16.75V15H17.5A1,1 0 0,0 18.5,14V10A1,1 0 0,0 17.5,9H14.5M15,10.5H17V13.5H15V10.5Z',
+    low: 'M14.5,13.5H16.5V10.5H14.5M18,14C18,14.6 17.6,15 17,15H16.25V16.5H14.75V15H14C13.4,15 13,14.6 13,14V10C13,9.4 13.4,9 14,9H17C17.6,9 18,9.4 18,10M19,4H5A2,2 0 0,0 3,6V18A2,2 0 0,0 5,20H19A2,2 0 0,0 21,18V6A2,2 0 0,0 19,4M11,13.5V15H6V9H7.5V13.5H11Z',
+  };
 
   // Android: CSS + Fullscreen API (única forma de ocultar barra de sistema y del navegador).
   // El aviso del navegador al entrar es inevitable en Chrome Android; sin API las barras no se ocultan.
@@ -94,18 +105,31 @@ export function createReader(state, d) {
       state.cleanup = () => { ac.cancelled = true; state.reading = false; state.pump(); rdClean?.(); };
       msg('Abriendo…');
       try {
-        setLastRead(ch, f);
         const status = (t) => { if (!cancelled(ac) && alive(e)) msg(t); };
         const list = queue && queue.length ? queue : await resolveQueue(ch, f);
+        // Si f es una versión oculta (p. ej. desde "Seguir leyendo"), usar la entrada principal que la agrupa
+        try {
+          const holder = list.find((x) => x?.variants && Object.values(x.variants).some((v) => String(v?.id) === String(f.id)));
+          if (holder && String(holder.id) !== String(f.id)) f = { ...holder };
+          else {
+            const same = list.find((x) => String(x.id) === String(f.id));
+            if (same?.variants && !f.variants) f = { ...f, variants: same.variants };
+          }
+        } catch (_) {}
+        setLastRead(ch, f);
         const idx = Math.max(0, list.findIndex((x) => x.id === f.id));
         // Preferir entrada fresca del listado (tamaño puede haber cambiado al resubir en Telegram)
         try {
           const fresh = list.find((x) => String(x.id) === String(f.id));
           if (fresh?.size) f = { ...f, size: fresh.size, name: fresh.name || f.name, caption: fresh.caption ?? f.caption };
         } catch (_) {}
+        // Calidad: la pedida al cambiar en el visor, o la preferida; progreso siempre por la entrada principal (f)
+        const wantQ = opts.quality || pref('quality', 'high');
+        let curQ = pickQuality(f, wantQ);
+        let src = variantFile(f, curQ);
         const openArc = async () => {
-          const m0 = await getMsg(ch, f, { force: true });
-          let size = Number(f.size) || 0;
+          const m0 = await getMsg(ch, src, { force: true });
+          let size = Number(src.size) || 0;
           try {
             if (m0?.document?.size != null) size = Number(m0.document.size.toString()) || size;
           } catch (_) {}
@@ -118,19 +142,28 @@ export function createReader(state, d) {
           const em = String(errOpen?.message || errOpen || '');
           if (!/central directory|end of central|invalid zip|corrupt|bad zip/i.test(em)) throw errOpen;
           // Caché de mensaje/páginas obsoleta tras re-subida: limpiar y reintentar
-          try { await pageCache?.clearComic?.(ch.id, f.id); } catch (_) {}
+          try { await pageCache?.clearComic?.(ch.id, src.id); } catch (_) {}
           try {
             const files = await fetchFiles(ch);
             const fresh2 = files.find((x) => String(x.id) === String(f.id));
-            if (fresh2) f = { ...f, size: fresh2.size, name: fresh2.name || f.name, caption: fresh2.caption ?? f.caption };
+            if (fresh2) {
+              f = { ...f, size: fresh2.size, name: fresh2.name || f.name, caption: fresh2.caption ?? f.caption, variants: fresh2.variants };
+              curQ = pickQuality(f, wantQ);
+              src = variantFile(f, curQ);
+            }
           } catch (_) {}
           status('Reintentando apertura…');
           arc = await openArc();
         }
         if (cancelled(ac) || !alive(e)) { try { arc.close(); } catch (_) {} return; }
         if (!arc.pages.length) return msg('No se encontraron imágenes.');
+        // Cambio de calidad: si la otra versión tiene distinto nº de páginas, mantener la posición proporcional
+        if (opts.fromTotal && opts.fromTotal !== arc.pages.length && arc.pages.length > 1) {
+          const ratio = opts.fromTotal > 1 ? (opts.fromIdx || 0) / (opts.fromTotal - 1) : 0;
+          setPageIndex(ch.id, f.id, Math.max(0, Math.min(arc.pages.length - 1, Math.round(ratio * (arc.pages.length - 1)))));
+        }
         pageBlob(arc.pages[0]).then((b) => saveCoverBlob(ch, f, b, { auto: true })).catch(() => {});
-        rdClean = reader(f, arc.pages, arc, { ch, list, idx });
+        rdClean = reader(f, arc.pages, arc, { ch, list, idx, src, q: curQ });
       } catch (err) {
         if (err?.cancelled || cancelled(ac)) return;
         if (alive(e)) msg('Error: ' + err.message);
@@ -150,7 +183,9 @@ export function createReader(state, d) {
 
   function reader(f, pages, zr, ctx) {
     const chId = ctx?.ch?.id;
-    const savePage = (i) => { if (chId != null) { setPageIndex(chId, f.id, i); try { setLastRead(ch, f); } catch (_) {} } };
+    const srcId = ctx?.src?.id ?? f.id; // caché de páginas: por versión (las imágenes difieren)
+    const savePage = (i) => { if (chId != null) { setPageIndex(chId, f.id, i); try { setLastRead(ctx.ch, f); } catch (_) {} } }; // progreso: unificado por la entrada principal
+    const qVariants = f.variants && Object.keys(f.variants).length > 1 ? f.variants : null;
     if (chId != null) {
       setPagesTotal(chId, f.id, pages.length);
       const fmt = detectPageFormats(pages);
@@ -163,13 +198,13 @@ export function createReader(state, d) {
       // Caché persistente
       if (pageCache && chId != null) {
         try {
-          const hit = await pageCache.get(chId, f.id, i);
+          const hit = await pageCache.get(chId, srcId, i);
           if (hit) return hit;
         } catch (_) {}
       }
       const b = await pageBlob(pages[i]);
       if (b && pageCache && chId != null) {
-        pageCache.set(chId, f.id, i, b).catch(() => {});
+        pageCache.set(chId, srcId, i, b).catch(() => {});
       }
       return b;
     };
@@ -276,6 +311,29 @@ export function createReader(state, d) {
       cluster.append(botLeft, botCenter, botRight);
       bot.append(cluster);
       document.body.append(rd);
+      // Botones de calidad (Alta / Media / Baja) a la derecha del de doble página
+      if (qVariants) {
+        const qGroup = el('div', 'q-group' + (continuous ? '' : ' with-spread'));
+        for (const q of QSET) {
+          const b = el('button', 'btn q-btn' + (ctx?.q === q ? ' on' : ''));
+          b.type = 'button';
+          b.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="${QICON[q]}"/></svg>`;
+          const exists = !!qVariants[q];
+          b.title = exists ? ('Calidad ' + QNAME[q]) : ('Calidad ' + QNAME[q] + ' (no disponible)');
+          b.setAttribute('aria-label', b.title);
+          b.setAttribute('aria-pressed', ctx?.q === q ? 'true' : 'false');
+          b.disabled = !exists;
+          b.onclick = (ev) => {
+            try { ev.stopPropagation(); } catch (_) {}
+            if (!exists || ctx?.q === q) return;
+            setPref('quality', q);
+            savePage(n);
+            openComic(ctx.ch, f, ctx.list, { replace: true, quality: q, fromTotal: pages.length, fromIdx: n });
+          };
+          qGroup.append(b);
+        }
+        rd.append(qGroup);
+      }
       document.body.style.overflow = 'hidden';
       try { enterReaderFullscreen(); } catch (_) {}
       try { sizeReaderEl(rd); } catch (_) {}
@@ -422,7 +480,7 @@ export function createReader(state, d) {
         let pending = null;
         const onDown = (e) => {
           if (e.button !== 0) return;
-          if (e.target.closest?.('.bar, .edge, .mosaic, .btn, .spread-fab, input, textarea')) return;
+          if (e.target.closest?.('.bar, .edge, .mosaic, .btn, .spread-fab, .q-group, input, textarea')) return;
           start = {
             x: e.clientX,
             y: e.clientY,

@@ -790,6 +790,35 @@ textarea.meta-desc-lg.edit-input{
 #rd.ui-off .spread-fab{opacity:0;pointer-events:none;transition:opacity .2s}
 #rd .spread-fab{transition:opacity .2s}
 
+/* Calidad Alta / Media / Baja: a la derecha del botón de doble página */
+#rd .q-group{
+  position:absolute;z-index:14;display:flex;gap:6px;
+  bottom:calc(env(safe-area-inset-bottom,0px) + 58px);
+  left:50%;transform:translateX(-50%);
+  transition:opacity .2s;
+}
+#rd .q-group.with-spread{left:calc(50% + 32px);transform:none}
+#rd .q-group .q-btn{
+  width:48px;height:48px;min-width:48px;padding:0;border:0;border-radius:14px;
+  background:#1c1d22e6;color:var(--fg);opacity:.55;cursor:pointer;
+  -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+  box-shadow:0 4px 18px #0008;display:inline-flex;align-items:center;justify-content:center;
+  transition:opacity .15s,background .15s,box-shadow .15s;
+}
+#rd .q-group .q-btn svg{display:block;pointer-events:none}
+#rd .q-group .q-btn.on{
+  opacity:1;background:var(--acc);color:#111;
+  box-shadow:0 0 0 2px #ffffffb0,0 4px 18px #000a;
+}
+#rd .q-group .q-btn:disabled{opacity:.22;cursor:default}
+#rd.ui-off .q-group{opacity:0;pointer-events:none}
+@media (max-width: 420px){
+  #rd .q-group{gap:4px}
+  #rd .q-group .q-btn{width:42px;height:42px;min-width:42px}
+  #rd .q-group.with-spread{left:calc(50% + 28px)}
+}
+.cfg-hint{margin:.1rem .85rem .75rem;font-size:.78rem;opacity:.7;line-height:1.35}
+
 #rd .bot-cluster .fit-ico{font-size:1rem;line-height:1;margin-right:.2rem}
 #rd .bot-cluster .fit-txt{font-size:.82rem;font-weight:600}
 @media (max-width: 700px), (pointer: coarse) {

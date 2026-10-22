@@ -45,6 +45,7 @@ import {
 } from './comicvine.js';
 import * as locks from './lock.js';
 import { initBalance } from './balance.js';
+import { collapseVersions, flattenVersions, QUALITIES, QUALITY_LABEL } from './quality.js';
 
 const apiId = Number(import.meta.env.VITE_API_ID);
 const apiHash = import.meta.env.VITE_API_HASH;
@@ -371,7 +372,8 @@ async function fetchFiles(ch) {
   await ready;
   let prev = [];
   try { prev = (await kv.get('f:' + ch.id)) || []; } catch (_) { prev = []; }
-  const prevById = new Map((Array.isArray(prev) ? prev : []).map((x) => [String(x.id), x]));
+  // prev puede traer entradas agrupadas (con variants): aplanar para detectar cambios en cualquier versión
+  const prevById = new Map(flattenVersions(Array.isArray(prev) ? prev : []).map((x) => [String(x.id), x]));
 
   const out = [];
   for await (const m of client.iterMessages(peerOf(ch), { filter: new Api.InputMessagesFilterDocument(), limit: 100000 })) {
@@ -397,8 +399,10 @@ async function fetchFiles(ch) {
     }
   }
 
-  await kv.set('f:' + ch.id, out);
-  return out;
+  // Versiones de calidad del mismo cómic (Alta / [WebP] Media / [2400px][WebP] Baja): una sola entrada
+  const grouped = collapseVersions(out);
+  await kv.set('f:' + ch.id, grouped);
+  return grouped;
 }
 
 const msgs = new Map();
@@ -892,6 +896,14 @@ function showViewerConfig() {
   );
   body.append(spreadWrap);
   syncSpreadVis();
+
+  section('Calidad');
+  toggleGroup(
+    QUALITIES.map((q) => [q, QUALITY_LABEL[q]]),
+    () => (QUALITIES.includes(pref('quality', 'high')) ? pref('quality', 'high') : 'high'),
+    (v) => setPref('quality', v)
+  );
+  body.append(el('div', 'cfg-hint', 'Se usa la copia con el nombre terminado en [WebP] (Media) o [2400px][WebP] (Baja). Si un cómic no la tiene, se abre la más cercana.'));
 
   section('Ajuste Páginas');
   toggleGroup(
