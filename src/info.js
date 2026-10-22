@@ -2313,7 +2313,12 @@ async function loadFirstPageBlob(ch, f, statusFn) {
  * Recorta portada apaisada a ratio 2:3 según modo y comprime como el resto de portadas.
  * left | center | right → crop; full → imagen completa sin crop lateral.
  */
-async function cropAndCompressCover(blob, mode) {
+/**
+ * Recorta portada apaisada y comprime como el resto de portadas.
+ * mode: left | center | right | full
+ * exactHalf: solo left/right — mitad exacta del ancho original, luego se ajusta al marco 2:3.
+ */
+async function cropAndCompressCover(blob, mode, exactHalf = false) {
   if (!blob) return null;
   let bmp = null;
   try {
@@ -2342,20 +2347,41 @@ async function cropAndCompressCover(blob, mode) {
   const m = String(mode || 'full');
   let sx = 0, sy = 0, cw = sw, ch = sh;
   if (isLandscape && (m === 'left' || m === 'center' || m === 'right')) {
-    // Marco 2:3 (ancho/alto)
-    const targetRatio = 2 / 3;
-    ch = sh;
-    cw = Math.round(ch * targetRatio);
-    if (cw > sw) {
-      cw = sw;
-      ch = Math.round(cw / targetRatio);
-      sy = Math.round((sh - ch) / 2);
+    if (exactHalf && (m === 'left' || m === 'right')) {
+      // Mitad exacta del ancho; alto completo
+      cw = Math.max(1, Math.floor(sw / 2));
+      ch = sh;
+      sx = m === 'right' ? (sw - cw) : 0;
+      sy = 0;
+      // Ajuste al marco 2:3 (cover): recorte adicional centrado si hace falta
+      const targetRatio = 2 / 3;
+      const srcRatio = cw / ch;
+      if (srcRatio > targetRatio) {
+        // más ancha que 2:3 → recortar lados del half
+        const newCw = Math.round(ch * targetRatio);
+        sx = sx + Math.round((cw - newCw) / 2);
+        cw = newCw;
+      } else if (srcRatio < targetRatio) {
+        // más alta que 2:3 → recortar arriba/abajo
+        const newCh = Math.round(cw / targetRatio);
+        sy = Math.round((ch - newCh) / 2);
+        ch = newCh;
+      }
+    } else {
+      // Comportamiento habitual: ventana 2:3 anclada a izq/centro/der
+      const targetRatio = 2 / 3;
+      ch = sh;
+      cw = Math.round(ch * targetRatio);
+      if (cw > sw) {
+        cw = sw;
+        ch = Math.round(cw / targetRatio);
+        sy = Math.round((sh - ch) / 2);
+      }
+      if (m === 'center') sx = Math.round((sw - cw) / 2);
+      else if (m === 'right') sx = Math.max(0, sw - cw);
+      else sx = 0;
     }
-    if (m === 'center') sx = Math.round((sw - cw) / 2);
-    else if (m === 'right') sx = Math.max(0, sw - cw);
-    else sx = 0;
   }
-  // Límite de lado mayor como portadas normales (~280 en grid, usamos un poco más de origen)
   const maxEdge = 560;
   const scale = Math.min(1, maxEdge / Math.max(cw, ch));
   const dw = Math.max(1, Math.round(cw * scale));
@@ -2378,7 +2404,6 @@ async function cropAndCompressCover(blob, mode) {
   if (!out) out = await canvasToBlob('image/jpeg', 0.55);
   cv.width = 0;
   cv.height = 0;
-  // Si falló canvas, comprimir con optimizeImageBlob el original
   if (!(out && out.size) && typeof optimizeImageBlob === 'function') {
     try { out = await optimizeImageBlob(blob, 280, 0.72); } catch (_) {}
   }
@@ -2413,10 +2438,16 @@ function showCoverFitEditor(ch, f, after) {
     ['full', 'Completa', 'Imagen completa sin recorte lateral'],
   ];
   const buttons = [];
+  let halfChkRef = null;
   const select = (mode) => {
     current = mode;
     preview.dataset.coverFit = mode;
     for (const [b, m] of buttons) b.classList.toggle('on', m === mode);
+    if (halfChkRef) {
+      const lr = mode === 'left' || mode === 'right';
+      halfChkRef.disabled = !lr;
+      halfChkRef.parentElement?.classList.toggle('dim', !lr);
+    }
   };
   for (const [mode, lab, hint] of modes) {
     const b = el('button', 'cover-fit-opt' + (mode === current ? ' on' : ''));
@@ -2432,6 +2463,20 @@ function showCoverFitEditor(ch, f, after) {
   }
   body.append(optsWrap);
 
+  // Check solo para Izquierda / Derecha
+  const halfRow = el('label', 'cfg-auto cover-fit-half');
+  const halfChk = el('input');
+  halfChk.type = 'checkbox';
+  halfChk.checked = true;
+  halfRow.append(halfChk, document.createTextNode(' Recorte EXACTO a la mitad'));
+  body.append(halfRow);
+  halfChkRef = halfChk;
+  {
+    const lr = current === 'left' || current === 'right';
+    halfChk.disabled = !lr;
+    halfRow.classList.toggle('dim', !lr);
+  }
+
   const actions = el('div', 'edit-actions');
   const cancel = el('button', 'btn', 'Cancelar');
   cancel.onclick = () => frame.remove();
@@ -2444,9 +2489,10 @@ function showCoverFitEditor(ch, f, after) {
     try {
       save.disabled = true;
       save.textContent = 'Guardando…';
-      const out = await cropAndCompressCover(sourceBlob, current);
+      const exactHalf = !!(halfChk.checked && (current === 'left' || current === 'right'));
+      const out = await cropAndCompressCover(sourceBlob, current, exactHalf);
       if (!out) throw new Error('No se pudo procesar la imagen');
-      await saveCoverBlob(ch, f, out);
+      await saveCoverBlob(ch, f, out, { custom: true });
       // La portada ya está recortada: resetear fit visual a full
       try { if (typeof setCoverFit === 'function') setCoverFit(ch, f, 'full'); } catch (_) {}
       frame.remove();
@@ -2575,7 +2621,7 @@ async function showPickCoverFromComic(ch, f, after) {
             cell.disabled = true;
             status.textContent = 'Guardando portada…';
             // Guardar página completa (saveCoverBlob comprime como el resto)
-            await saveCoverBlob(ch, f, blob);
+            await saveCoverBlob(ch, f, blob, { custom: true });
             doClose(true);
           } catch (e) {
             cell.disabled = false;

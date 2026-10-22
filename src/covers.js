@@ -165,12 +165,33 @@ export function createCovers(state, d) {
   // Lado mayor 280 px; en rejilla se ve bien y limita peso en iPhone (JPEG)
   const thumbFromBlob = (blob) => optimizeImageBlob(blob, 280, 0.72);
 
-  async function saveCoverBlob(ch, f, blob) {
+  /** Marca de portada elegida/adaptada por el usuario (no la pisa el lector). */
+  const coverCustomKey = (ch, f) => `ccustom:${ch.id}:${f.id}`;
+  async function isCustomCover(ch, f) {
+    if (!ch?.id || f?.id == null) return false;
+    try { return !!(await kv.get(coverCustomKey(ch, f))); } catch { return false; }
+  }
+  async function markCustomCover(ch, f, on = true) {
+    if (!ch?.id || f?.id == null) return;
+    try {
+      if (on) await kv.set(coverCustomKey(ch, f), 1);
+      else await kv.del(coverCustomKey(ch, f));
+    } catch (_) {}
+  }
+
+  /**
+   * Guarda miniatura de portada.
+   * opts.custom = true → portada personalizada (Adaptar / Elegir página).
+   * opts.auto = true → generada al abrir el cómic; no sobrescribe si hay custom.
+   */
+  async function saveCoverBlob(ch, f, blob, opts = {}) {
     if (!blob) return;
     const key = `c:${ch.id}:${f.id}`;
     try {
+      if (opts.auto && (await isCustomCover(ch, f))) return;
       const out = await thumbFromBlob(blob);
       if (out) await kv.set(key, out);
+      if (opts.custom) await markCustomCover(ch, f, true);
     } catch (e) { console.warn('portada', e); }
   }
 
@@ -283,6 +304,8 @@ export function createCovers(state, d) {
   return {
     getCover,
     saveCoverBlob,
+    isCustomCover,
+    markCustomCover,
     optimizeImageBlob,
     comicCover,
     pump,

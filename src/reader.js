@@ -129,7 +129,7 @@ export function createReader(state, d) {
         }
         if (cancelled(ac) || !alive(e)) { try { arc.close(); } catch (_) {} return; }
         if (!arc.pages.length) return msg('No se encontraron imágenes.');
-        pageBlob(arc.pages[0]).then((b) => saveCoverBlob(ch, f, b)).catch(() => {});
+        pageBlob(arc.pages[0]).then((b) => saveCoverBlob(ch, f, b, { auto: true })).catch(() => {});
         rdClean = reader(f, arc.pages, arc, { ch, list, idx });
       } catch (err) {
         if (err?.cancelled || cancelled(ac)) return;

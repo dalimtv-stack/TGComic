@@ -852,3 +852,7 @@ textarea.meta-desc-lg.edit-input{
 .info-navrow:has(.info-nav-mid:empty) .info-nav-btn{flex:1}
 .cv-url-input{margin:.35rem 0 .5rem}
 .cv-url-btn{display:block;width:100%;margin:0 0 .25rem}
+
+.cover-fit-half{display:flex;align-items:center;gap:.45rem;margin:.15rem 0 .85rem;font-size:.88rem;font-weight:600;cursor:pointer;user-select:none}
+.cover-fit-half.dim{opacity:.4;pointer-events:none;cursor:default}
+.cover-fit-half input{width:1.05rem;height:1.05rem;accent-color:var(--acc)}
