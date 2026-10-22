@@ -856,3 +856,7 @@ textarea.meta-desc-lg.edit-input{
 .cover-fit-half{display:flex;align-items:center;justify-content:center;gap:.45rem;margin:.35rem 0 .65rem;font-size:.88rem;font-weight:600;cursor:pointer;user-select:none;text-align:center;width:100%}
 .cover-fit-half.dim{opacity:.4;pointer-events:none;cursor:default}
 .cover-fit-half input{width:1.05rem;height:1.05rem;accent-color:var(--acc)}
+
+/* Adaptar portada: la previa dibuja el recorte real */
+.cover-fit-preview .cover-fit-canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:block}
+.cover-fit-preview.cropped .cover-fit-canvas{object-fit:cover}

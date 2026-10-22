@@ -2318,31 +2318,7 @@ async function loadFirstPageBlob(ch, f, statusFn) {
  * mode: left | center | right | full
  * exactHalf: solo left/right — corta el ancho exactamente a la mitad (izq. o der.), alto completo.
  */
-async function cropAndCompressCover(blob, mode, exactHalf = false) {
-  if (!blob) return null;
-  let bmp = null;
-  try {
-    bmp = await createImageBitmap(blob);
-  } catch {
-    try {
-      const url = URL.createObjectURL(blob);
-      bmp = await new Promise((resolve, reject) => {
-        const im = new Image();
-        im.onload = () => resolve(im);
-        im.onerror = reject;
-        im.src = url;
-      });
-      try { URL.revokeObjectURL(url); } catch (_) {}
-    } catch {
-      return null;
-    }
-  }
-  const sw = bmp.width || bmp.naturalWidth || 0;
-  const sh = bmp.height || bmp.naturalHeight || 0;
-  if (!sw || !sh) {
-    try { bmp.close?.(); } catch (_) {}
-    return null;
-  }
+function coverCropRect(sw, sh, mode, exactHalf = false) {
   const isLandscape = sw > sh;
   const m = String(mode || 'full');
   let sx = 0, sy = 0, cw = sw, ch = sh;
@@ -2368,6 +2344,83 @@ async function cropAndCompressCover(blob, mode, exactHalf = false) {
       else sx = 0;
     }
   }
+  return { sx, sy, cw, ch };
+}
+
+/** Selección de Adaptar portada recordada por cómic (modo + recorte exacto a la mitad). */
+const coverAdaptKey = (ch, f) => `coverAdapt:${ch.id}:${f.id}`;
+function getCoverAdapt(ch, f) {
+  try {
+    const v = JSON.parse(localStorage.getItem(coverAdaptKey(ch, f)) || 'null');
+    if (v && ['left', 'center', 'right', 'full'].includes(v.mode)) return { mode: v.mode, half: v.half !== false };
+  } catch (_) {}
+  return null;
+}
+function setCoverAdapt(ch, f, v) {
+  try {
+    if (v) localStorage.setItem(coverAdaptKey(ch, f), JSON.stringify({ mode: v.mode, half: !!v.half }));
+    else localStorage.removeItem(coverAdaptKey(ch, f));
+  } catch (_) {}
+}
+
+/** Imagen de origen de la portada personalizada (página elegida), para poder re-adaptarla. */
+const coverSrcKey = (ch, f) => `csrc:${ch.id}:${f.id}`;
+async function getCoverSource(ch, f) {
+  try {
+    const b = await kv.get(coverSrcKey(ch, f));
+    return (b instanceof Blob && b.size) ? b : null;
+  } catch (_) { return null; }
+}
+/** Guarda la página de origen (reducida a ~1800 px para no ocupar de más). */
+async function rememberCoverSource(ch, f, blob) {
+  if (!blob) return;
+  let out = blob;
+  try {
+    const bmp = await createImageBitmap(blob);
+    const sw = bmp.width, sh = bmp.height;
+    const scale = Math.min(1, 1800 / Math.max(sw, sh));
+    if (scale < 1 || blob.size > 600 * 1024) {
+      const cv = el('canvas');
+      cv.width = Math.max(1, Math.round(sw * scale));
+      cv.height = Math.max(1, Math.round(sh * scale));
+      cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
+      const enc = (type, q) => new Promise((res) => { try { cv.toBlob((b) => res(b || null), type, q); } catch { res(null); } });
+      let enc1 = await enc('image/webp', 0.85);
+      if (!(enc1 && enc1.size && (enc1.type || '').includes('webp'))) enc1 = await enc('image/jpeg', 0.85);
+      if (enc1 && enc1.size && enc1.size < blob.size) out = enc1;
+      cv.width = 0; cv.height = 0;
+    }
+    try { bmp.close?.(); } catch (_) {}
+  } catch (_) {}
+  try { await kv.set(coverSrcKey(ch, f), out); } catch (e) { console.warn('cover source', e); }
+}
+
+async function cropAndCompressCover(blob, mode, exactHalf = false) {
+  if (!blob) return null;
+  let bmp = null;
+  try {
+    bmp = await createImageBitmap(blob);
+  } catch {
+    try {
+      const url = URL.createObjectURL(blob);
+      bmp = await new Promise((resolve, reject) => {
+        const im = new Image();
+        im.onload = () => resolve(im);
+        im.onerror = reject;
+        im.src = url;
+      });
+      try { URL.revokeObjectURL(url); } catch (_) {}
+    } catch {
+      return null;
+    }
+  }
+  const sw = bmp.width || bmp.naturalWidth || 0;
+  const sh = bmp.height || bmp.naturalHeight || 0;
+  if (!sw || !sh) {
+    try { bmp.close?.(); } catch (_) {}
+    return null;
+  }
+  const { sx, sy, cw, ch } = coverCropRect(sw, sh, mode, exactHalf);
   const maxEdge = 560;
   const scale = Math.min(1, maxEdge / Math.max(cw, ch));
   const dw = Math.max(1, Math.round(cw * scale));
@@ -2407,14 +2460,35 @@ function showCoverFitEditor(ch, f, after) {
   close.onclick = () => frame.remove();
   head.append(close);
   const body = el('div', 'info-body');
-  body.append(el('p', 'cover-pick-hint', 'Se usa la primera página del cómic (calidad completa). Izquierda / Centro / Derecha recortan al marco 2:3 y guardan la portada comprimida.'));
+  const hintEl = el('p', 'cover-pick-hint', 'Se usa la primera página del cómic (calidad completa). Izquierda / Centro / Derecha recortan al marco 2:3 y guardan la portada comprimida.');
+  body.append(hintEl);
 
   const preview = el('div', 'cover-fit-preview');
   body.append(preview);
-  let current = 'full';
-  try { current = (typeof getCoverFit === 'function' ? getCoverFit(ch, f) : 'full') || 'full'; } catch (_) {}
-  preview.dataset.coverFit = current;
+  // Selección recordada de la vez anterior (modo + recorte exacto a la mitad)
+  const mem = getCoverAdapt(ch, f);
+  let current = mem?.mode || 'full';
   let sourceBlob = null;
+  let sourceIsRemembered = false;
+  let srcBmp = null;
+  let previewCv = null;
+  // Preview real: dibuja exactamente el recorte que se guardará
+  const updatePreview = () => {
+    if (!srcBmp || !preview.isConnected) return;
+    const sw = srcBmp.width || srcBmp.naturalWidth, sh = srcBmp.height || srcBmp.naturalHeight;
+    const exact = !!(halfChkRef && halfChkRef.checked && (current === 'left' || current === 'right'));
+    const { sx, sy, cw, ch: chh } = coverCropRect(sw, sh, current, exact);
+    const scale = Math.min(1, 480 / Math.max(cw, chh));
+    if (!previewCv) {
+      previewCv = el('canvas', 'cover-fit-canvas');
+      preview.replaceChildren(previewCv);
+    }
+    previewCv.width = Math.max(1, Math.round(cw * scale));
+    previewCv.height = Math.max(1, Math.round(chh * scale));
+    previewCv.getContext('2d').drawImage(srcBmp, sx, sy, cw, chh, 0, 0, previewCv.width, previewCv.height);
+    // Igual que en la rejilla: apaisada → completa (contain); vertical → rellena el marco (cover)
+    preview.classList.toggle('cropped', cw <= chh);
+  };
 
   const optsWrap = el('div', 'cover-fit-opts');
   const modes = [
@@ -2427,13 +2501,13 @@ function showCoverFitEditor(ch, f, after) {
   let halfChkRef = null;
   const select = (mode) => {
     current = mode;
-    preview.dataset.coverFit = mode;
     for (const [b, m] of buttons) b.classList.toggle('on', m === mode);
     if (halfChkRef) {
       const lr = mode === 'left' || mode === 'right';
       halfChkRef.disabled = !lr;
       halfChkRef.parentElement?.classList.toggle('dim', !lr);
     }
+    updatePreview();
   };
   for (const [mode, lab, hint] of modes) {
     const b = el('button', 'cover-fit-opt' + (mode === current ? ' on' : ''));
@@ -2451,7 +2525,8 @@ function showCoverFitEditor(ch, f, after) {
   const halfRow = el('label', 'cover-fit-half');
   const halfChk = el('input');
   halfChk.type = 'checkbox';
-  halfChk.checked = true;
+  halfChk.checked = mem ? mem.half : true;
+  halfChk.onchange = () => updatePreview();
   halfRow.append(halfChk, document.createTextNode(' Recorte EXACTO a la mitad'));
   body.append(halfRow);
   halfChkRef = halfChk;
@@ -2465,7 +2540,9 @@ function showCoverFitEditor(ch, f, after) {
 
   const actions = el('div', 'edit-actions');
   const cancel = el('button', 'btn', 'Cancelar');
-  cancel.onclick = () => frame.remove();
+  const closeFit = () => { try { srcBmp?.close?.(); } catch (_) {} srcBmp = null; frame.remove(); };
+  close.onclick = closeFit;
+  cancel.onclick = closeFit;
   const save = el('button', 'btn edit-save', 'Guardar');
   save.onclick = async () => {
     if (!sourceBlob) {
@@ -2479,9 +2556,12 @@ function showCoverFitEditor(ch, f, after) {
       const out = await cropAndCompressCover(sourceBlob, current, exactHalf);
       if (!out) throw new Error('No se pudo procesar la imagen');
       await saveCoverBlob(ch, f, out, { custom: true });
+      // Recordar la selección y la imagen de origen (para volver a adaptar desde el original)
+      setCoverAdapt(ch, f, { mode: current, half: halfChk.checked });
+      if (!sourceIsRemembered) await rememberCoverSource(ch, f, sourceBlob);
       // La portada ya está recortada: resetear fit visual a full
       try { if (typeof setCoverFit === 'function') setCoverFit(ch, f, 'full'); } catch (_) {}
-      frame.remove();
+      closeFit();
       try { after?.(); } catch (_) {}
     } catch (e) {
       appAlert('No se pudo guardar: ' + (e?.message || e));
@@ -2500,24 +2580,38 @@ function showCoverFitEditor(ch, f, after) {
     try {
       const loading = el('div', 'info-loading', 'Cargando página del cómic…');
       preview.append(loading);
-      sourceBlob = await loadFirstPageBlob(ch, f, (t) => {
-        try { loading.textContent = t || 'Cargando…'; } catch (_) {}
-      });
+      // Si hay una imagen de origen recordada (portada personalizada), se adapta esa, no la caché ni la 1ª página
+      sourceBlob = await getCoverSource(ch, f);
+      sourceIsRemembered = !!sourceBlob;
+      if (sourceIsRemembered) {
+        hintEl.textContent = 'Se usa la imagen de origen que elegiste para esta portada (calidad completa). Izquierda / Centro / Derecha recortan al marco 2:3 y guardan la portada comprimida.';
+      } else {
+        sourceBlob = await loadFirstPageBlob(ch, f, (t) => {
+          try { loading.textContent = t || 'Cargando…'; } catch (_) {}
+        });
+      }
       if (!preview.isConnected) return;
-      const img = new Image();
-      img.onload = () => {
-        if (!preview.isConnected) return;
-        if (img.naturalWidth > img.naturalHeight) preview.classList.add('landscape');
-        else preview.classList.remove('landscape');
-        preview.replaceChildren(img);
-        if (!(img.naturalWidth > img.naturalHeight)) {
-          body.insertBefore(
-            el('p', 'cover-pick-hint', 'La primera página no es apaisada; Completa guarda la imagen entera. Izquierda/Centro/Derecha solo recortan si es más ancha que alta.'),
-            optsWrap
-          );
-        }
-      };
-      setBlobImg(img, sourceBlob, preview);
+      try {
+        srcBmp = await createImageBitmap(sourceBlob);
+      } catch (_) {
+        srcBmp = await new Promise((resolve, reject) => {
+          const im = new Image();
+          const u = URL.createObjectURL(sourceBlob);
+          im.onload = () => { try { URL.revokeObjectURL(u); } catch (_) {} resolve(im); };
+          im.onerror = reject;
+          im.src = u;
+        });
+      }
+      if (!preview.isConnected) return;
+      const landscape = (srcBmp.width || srcBmp.naturalWidth) > (srcBmp.height || srcBmp.naturalHeight);
+      if (landscape) preview.classList.add('landscape'); else preview.classList.remove('landscape');
+      updatePreview();
+      if (!landscape) {
+        body.insertBefore(
+          el('p', 'cover-pick-hint', 'La imagen no es apaisada; Completa guarda la imagen entera. Izquierda/Centro/Derecha solo recortan si es más ancha que alta.'),
+          optsWrap
+        );
+      }
     } catch (e) {
       preview.replaceChildren();
       preview.append(el('div', 'info-loading', 'Error: ' + (e?.message || e)));
@@ -2608,6 +2702,9 @@ async function showPickCoverFromComic(ch, f, after) {
             status.textContent = 'Guardando portada…';
             // Guardar página completa (saveCoverBlob comprime como el resto)
             await saveCoverBlob(ch, f, blob, { custom: true });
+            // Recordar esta página como imagen de origen (Adaptar partirá de ella) y reiniciar el recorte
+            await rememberCoverSource(ch, f, blob);
+            setCoverAdapt(ch, f, null);
             doClose(true);
           } catch (e) {
             cell.disabled = false;
