@@ -129,6 +129,31 @@ export function createViews(d) {
       return;
     }
     const outName = comicDownloadName(f);
+
+    // 1) Pedir carpeta YA (gesto del usuario). Si se descarga antes, el navegador
+    //    bloquea showDirectoryPicker y cae al guardado silencioso de Descargas.
+    let dirHandle = null;
+    const canPickDir = typeof window.showDirectoryPicker === 'function'
+      && !( /iPhone|iPad|iPod/i.test(navigator.userAgent || '') );
+    if (canPickDir) {
+      try {
+        dirHandle = await window.showDirectoryPicker({
+          mode: 'readwrite',
+          id: 'tgcomic-downloads',
+          startIn: 'downloads',
+        });
+      } catch (e) {
+        if (e?.name === 'AbortError') return; // canceló
+        console.warn('[download] showDirectoryPicker', e);
+        // Si falla el picker, preguntamos si continuar a Descargas del navegador
+        const ok = await appConfirm(
+          'No se pudo abrir el selector de carpeta del sistema.\n¿Guardar en la carpeta Descargas del navegador?',
+          'Descarga'
+        );
+        if (!ok) return;
+      }
+    }
+
     let statusFrame = null;
     const closeStatus = () => { try { statusFrame?.remove(); } catch (_) {} statusFrame = null; };
     const setStatus = (t) => {
@@ -149,6 +174,7 @@ export function createViews(d) {
         }
       } catch (_) {}
     };
+
     try {
       if (readyP && typeof readyP.then === 'function') await readyP;
       setStatus('Obteniendo archivo de Telegram…');
@@ -167,22 +193,18 @@ export function createViews(d) {
       const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
       const blob = new Blob([u8], { type: 'application/octet-stream' });
 
-      if (typeof window.showDirectoryPicker === 'function') {
-        try {
-          setStatus('Elige carpeta…');
-          const dir = await window.showDirectoryPicker({ mode: 'readwrite' });
-          const fh = await dir.getFileHandle(outName, { create: true });
-          const w = await fh.createWritable();
-          await w.write(blob);
-          await w.close();
-          closeStatus();
-          await appAlert('Guardado:\\n' + outName);
-          return;
-        } catch (e) {
-          if (e?.name === 'AbortError') { closeStatus(); return; }
-          console.warn('[download] directory picker', e);
-        }
+      if (dirHandle) {
+        setStatus('Guardando en la carpeta elegida…');
+        const fh = await dirHandle.getFileHandle(outName, { create: true });
+        const w = await fh.createWritable();
+        await w.write(blob);
+        await w.close();
+        closeStatus();
+        await appAlert('Guardado en la carpeta elegida:\n' + outName);
+        return;
       }
+
+      // Sin File System Access (Safari/Firefox/iOS): descarga del navegador
       setStatus('Guardando…');
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
