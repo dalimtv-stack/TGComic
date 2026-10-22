@@ -495,7 +495,7 @@ function showCaptionEditor(ch, f, after, opts = {}) {
   });
 }
 
-function showComicVinePicker(ch, f, { onPick } = {}) {
+function showComicVinePicker(ch, f, { onPick, series, number, query, fileName, channelName } = {}) {
   document.querySelector('.info-frame.cv-picker')?.remove();
   const frame = el('div', 'info-frame cv-picker');
   const box = el('div', 'info-box');
@@ -556,14 +556,35 @@ function showComicVinePicker(ch, f, { onPick } = {}) {
     if (ev.key === 'Enter') { ev.preventDefault(); loadFromUrl(); }
   });
 
-  const parsed = parseComicName(comicSourceName(f), ch?.name);
+  // Contexto: cómic existente (ch/f) o datos de subida (opts series/number/…)
+  const chName = (channelName != null && String(channelName).trim())
+    ? String(channelName).trim()
+    : (ch?.name || '');
+  const fname = (fileName != null && String(fileName).trim())
+    ? String(fileName).trim()
+    : (f?.name || '');
+  let parsed = null;
+  try {
+    if (f || fname) parsed = parseComicName(
+      f ? comicSourceName(f) : fname,
+      chName
+    );
+  } catch (_) {}
   const cap = parseComicCaption(f?.caption || '');
-  const qDefault = buildSearchQuery({
-    channel: ch?.name || '',
-    series: cap.series || parsed?.series || seriesBase(f?.name || '', ch?.name) || '',
-    number: parsed?.number || '',
-    fileName: f?.name || '',
-  });
+  const seriesForQ = (series != null && String(series).trim())
+    ? String(series).trim()
+    : (cap.series || parsed?.series || seriesBase(fname, chName) || '');
+  const numberForQ = (number != null && String(number).trim())
+    ? String(number).replace(/^#/, '').trim()
+    : (parsed?.number || '');
+  const qDefault = (query != null && String(query).trim())
+    ? String(query).trim()
+    : buildSearchQuery({
+        channel: chName,
+        series: seriesForQ,
+        number: numberForQ,
+        fileName: fname,
+      });
 
   body.append(el('label', 'sync-label', 'Búsqueda'));
   const qInp = el('input', 'edit-input');

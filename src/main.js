@@ -1748,6 +1748,7 @@ try {
     fetchFiles,
     refreshLibrary,
     natural,
+    get showComicVinePicker() { return showComicVinePicker; },
     getIsHome: () => stack.length < 2 && !document.getElementById('rd'),
     formatBytes: (n) => {
       const x = Number(n) || 0;

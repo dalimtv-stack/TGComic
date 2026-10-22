@@ -8,12 +8,6 @@ import * as zip from '@zip.js/zip.js';
 import { createExtractorFromData } from 'node-unrar-js';
 import rarWasm from 'node-unrar-js/esm/js/unrar.wasm?url';
 import { buildComicCaption } from './parse.js';
-import {
-  comicVineConfigured,
-  searchIssuesSmart,
-  fetchIssueDetail,
-  buildSearchQuery,
-} from './comicvine.js';
 
 const SEP = '::';
 const TSEP = ':';
@@ -894,151 +888,71 @@ export function createUploadTool(d) {
       /** @type {any[]} */
       let rows = [];
 
-      /** Identificar un archivo con Comic Vine y rellenar su ficha. */
+      /** Identificar: mismo frame que en Ficha Telegram (info.js). */
       const identifyForRow = (row) => {
-        document.querySelector('.info-frame.cv-picker-upload')?.remove();
-        const frame = el('div', 'info-frame cv-picker-upload');
-        const box = el('div', 'info-box');
-        const head = el('div', 'info-head');
-        head.append(el('span', '', 'Identificar (Comic Vine)'));
-        const close = el('button', 'btn info-close', '×');
-        close.onclick = () => frame.remove();
-        head.append(close);
-        const body = el('div', 'info-body');
-        const seriesQ = String(seriesInp.value || '').trim();
-        const numberQ = String(row.numberInp.value || '').replace(/^#/, '').trim();
-        const chQ = currentChannelName();
-        // No pasar canal si coincide con la serie (evita "BRSRKR BRSRKR 01")
-        const qDefault = buildSearchQuery({
-          channel: (seriesQ && chQ && seriesQ.toLowerCase() === chQ.toLowerCase()) ? '' : chQ,
-          series: seriesQ || chQ,
-          number: numberQ,
-          fileName: row.file?.name || '',
-        });
-        body.append(el('label', 'sync-label', 'Búsqueda'));
-        const qInp = el('input', 'edit-input');
-        qInp.type = 'text';
-        qInp.value = qDefault;
-        body.append(qInp);
-        const searchBtn = el('button', 'btn edit-save', 'Buscar');
-        searchBtn.type = 'button';
-        body.append(searchBtn);
-        const status = el('p', 'sync-status', '');
-        body.append(status);
-        const list = el('div', 'cv-results');
-        body.append(list);
-        const runSearch = async () => {
-          list.replaceChildren();
-          if (!comicVineConfigured()) {
-            status.textContent = 'Configura VITE_COMICVINE_API_KEY.';
-            status.className = 'sync-status sync-err';
-            return;
-          }
-          const q = qInp.value.trim();
-          if (!q) { status.textContent = 'Escribe algo para buscar'; return; }
-          searchBtn.disabled = true;
-          status.className = 'sync-status';
-          status.textContent = 'Buscando…';
-          try {
-            const results = await searchIssuesSmart({
-              query: q,
-              series: seriesQ,
-              number: numberQ,
-            });
-            status.textContent = results.length ? (results.length + ' resultados') : 'Sin resultados';
-            for (const r of results) {
-              const btn = el('button', 'cv-result');
-              btn.type = 'button';
-              const title = [r.volume, r.issueNumber ? ('#' + r.issueNumber) : '', r.name].filter(Boolean).join(' ');
-              btn.append(el('b', '', title || ('Issue ' + r.id)));
-              if (r.publisher || r.coverDate) {
-                btn.append(el('span', 'cv-sub', [r.publisher, r.coverDate].filter(Boolean).join(' · ')));
-              }
-              btn.onclick = async () => {
-                btn.disabled = true;
-                status.textContent = 'Cargando ficha…';
-                try {
-                  let detail = null;
-                  try {
-                    detail = r.apiDetailUrl
-                      ? await fetchIssueDetail(r.apiDetailUrl)
-                      : await fetchIssueDetail(r.id);
-                  } catch (_) {}
-                  if (!detail) {
-                    detail = {
-                      name: r.name,
-                      issueNumber: r.issueNumber,
-                      volume: r.volume,
-                      coverDate: r.coverDate,
-                      publisher: r.publisher || '',
-                      writers: [],
-                      artists: [],
-                      description: '',
-                    };
-                  }
-                  row.fichaChk.checked = true;
-                  row.fichaBox.hidden = false;
-                  row.idBtn.hidden = false;
-                  const num = String(detail.issueNumber || r.issueNumber || numberQ || '').replace(/^#/, '');
-                  const story = String(detail.name || r.name || '').trim();
-                  let titleLine = '';
-                  if (num && story) titleLine = '#' + num + ' - ' + story;
-                  else if (num) titleLine = '#' + num;
-                  else titleLine = story;
-                  // Como en Editar cómic: CV en .cv, checks activados, apply()
-                  if (row.titleEsCtrl) {
-                    row.titleEsCtrl.cv = titleLine;
-                    row.origCtrl.cv = titleLine;
-                    row.seriesCtrl.cv = detail.volume || seriesQ || '';
-                    row.writerCtrl.cv = (detail.writers && detail.writers.length) ? detail.writers.join(' | ') : '';
-                    row.artistCtrl.cv = (detail.artists && detail.artists.length) ? detail.artists.join(' | ') : '';
-                    row.pubCtrl.cv = detail.publisher || r.publisher || '';
-                    row.dateCtrl.cv = detail.coverDate || r.coverDate || '';
-                    row.descCtrl.cv = detail.description || '';
-                    row.setSelectMode?.(true);
-                    for (const c of (row.fieldCtrls || [])) {
-                      const hasCv = !!(c.cv && String(c.cv).trim());
-                      c.chk.checked = hasCv;
-                      c.apply();
-                    }
-                  } else {
-                    row.titleEsInp.value = titleLine;
-                    row.origInp.value = titleLine;
-                    row.capSeriesInp.value = detail.volume || seriesQ || '';
-                    row.writerInp.value = (detail.writers && detail.writers.length) ? detail.writers.join(' | ') : '';
-                    row.artistInp.value = (detail.artists && detail.artists.length) ? detail.artists.join(' | ') : '';
-                    row.pubInp.value = detail.publisher || r.publisher || '';
-                    row.dateInp.value = detail.coverDate || r.coverDate || '';
-                    row.descInp.value = detail.description || '';
-                  }
-                  if (num && !row.numberInp.value) {
-                    row.numberInp.value = num;
-                    updateRowPreview(row);
-                  }
-                  frame.remove();
-                } catch (e) {
-                  status.textContent = e?.message || String(e);
-                  status.className = 'sync-status sync-err';
-                  btn.disabled = false;
+        const pick = typeof d.showComicVinePicker === 'function' ? d.showComicVinePicker : null;
+        if (!pick) {
+          uiAlert('Identificar no disponible (showComicVinePicker no inyectado).');
+          return;
+        }
+        const seriesQ = seriesInp.value.trim() || ctxSeries || '';
+        const numberQ = String(row.numberInp?.value || '').trim();
+        const chName = currentChannelName();
+        pick(
+          { name: chName },
+          { name: row.file?.name || '', caption: '' },
+          {
+            series: seriesQ,
+            number: numberQ,
+            fileName: row.file?.name || '',
+            channelName: chName,
+            onPick: (detail) => {
+              if (!detail) return;
+              const num = String(detail.issueNumber || '').replace(/^#/, '').trim();
+              const story = String(detail.name || '').trim();
+              let titleLine = '';
+              if (num && story) titleLine = '#' + num + ' - ' + story;
+              else if (num) titleLine = '#' + num;
+              else titleLine = story;
+
+              if (row.titleEsCtrl) {
+                row.titleEsCtrl.cv = titleLine;
+                row.origCtrl.cv = titleLine;
+                row.seriesCtrl.cv = detail.volume || seriesQ || '';
+                row.writerCtrl.cv = (detail.writers && detail.writers.length) ? detail.writers.join(' | ') : '';
+                row.artistCtrl.cv = (detail.artists && detail.artists.length) ? detail.artists.join(' | ') : '';
+                row.pubCtrl.cv = detail.publisher || '';
+                row.dateCtrl.cv = detail.coverDate || '';
+                row.descCtrl.cv = detail.description || '';
+                row.setSelectMode?.(true);
+                for (const c of (row.fieldCtrls || [])) {
+                  // Editorial / Serie / Título España desmarcados por defecto
+                  const key = c === row.titleEsCtrl || c === row.seriesCtrl || c === row.pubCtrl
+                    ? false
+                    : !!(c.cv && String(c.cv).trim());
+                  // User previously wanted Editorial, Serie, Título España unchecked by default
+                  let checked = !!(c.cv && String(c.cv).trim());
+                  if (c === row.titleEsCtrl || c === row.seriesCtrl || c === row.pubCtrl) checked = false;
+                  c.chk.checked = checked;
+                  c.apply();
                 }
-              };
-              list.append(btn);
-            }
-          } catch (e) {
-            status.textContent = e?.message || String(e);
-            status.className = 'sync-status sync-err';
-          } finally {
-            searchBtn.disabled = false;
+              } else {
+                if (row.titleEsInp) row.titleEsInp.value = titleLine;
+                if (row.origInp) row.origInp.value = titleLine;
+                if (row.capSeriesInp) row.capSeriesInp.value = detail.volume || seriesQ || '';
+                if (row.writerInp) row.writerInp.value = (detail.writers && detail.writers.length) ? detail.writers.join(' | ') : '';
+                if (row.artistInp) row.artistInp.value = (detail.artists && detail.artists.length) ? detail.artists.join(' | ') : '';
+                if (row.pubInp) row.pubInp.value = detail.publisher || '';
+                if (row.dateInp) row.dateInp.value = detail.coverDate || '';
+                if (row.descInp) row.descInp.value = detail.description || '';
+              }
+              if (num && row.numberInp && !row.numberInp.value) {
+                row.numberInp.value = num;
+                try { updateRowPreview(row); } catch (_) {}
+              }
+            },
           }
-        };
-        searchBtn.onclick = () => runSearch();
-        qInp.addEventListener('keydown', (ev) => {
-          if (ev.key === 'Enter') { ev.preventDefault(); runSearch(); }
-        });
-        box.append(head, body);
-        frame.append(box);
-        document.body.append(frame);
-        runSearch();
+        );
       };
 
       const currentChannelName = () => {
