@@ -363,8 +363,7 @@ function grid(items, withSearch, searchPlaceholder, gridKind) {
     // Mismo layout que canales (editorial): home-search-wrap, sin #search con márgenes extra
     const wrap = el('div', 'home-search-wrap');
     const s = el('input');
-    s.type = 'text';
-    s.inputMode = 'search';
+    s.type = 'search';
     s.placeholder = searchPlaceholder || 'Buscar…';
     s.autocomplete = 'off';
     const clear = el('button', 'search-clear', '×');
@@ -387,7 +386,7 @@ function grid(items, withSearch, searchPlaceholder, gridKind) {
   // No forzar scroll a 0: show()/go() restauran la posición al volver del lector
 }
 
-function sheet(title, opts, meta = {}) {
+function sheet(title, opts, sheetOpts = {}) {
   // Un solo menú a la vez (Android a veces abre dos)
   document.querySelectorAll('.sheet').forEach((s) => s.remove());
   const bg = el('div', 'sheet'), box = el('div', 'box');
@@ -395,23 +394,20 @@ function sheet(title, opts, meta = {}) {
   box.append(el('div', 'sh-title', title));
   for (const [label, fn] of opts) {
     const b = el('button', 'btn', label);
-    b.onclick = () => { close(); try { fn(); } catch (_) {} };
+    b.onclick = () => { close(); fn(); };
     box.append(b);
   }
-  // meta.cancelLabel: "Volver" en submenús; meta.onCancel: reabre el menú padre
-  const cancelLab = meta.cancelLabel || 'Cancelar';
-  const c = el('button', 'btn', cancelLab);
+  const cancelLabel = (sheetOpts && sheetOpts.cancelLabel) || 'Cancelar';
+  const onCancel = sheetOpts && typeof sheetOpts.onCancel === 'function' ? sheetOpts.onCancel : null;
+  const c = el('button', 'btn', cancelLabel);
   c.onclick = () => {
     close();
-    try { meta.onCancel?.(); } catch (_) {}
-  };
-  box.append(c);
-  bg.onclick = (ev) => {
-    if (ev.target === bg) {
-      close();
-      try { meta.onCancel?.(); } catch (_) {}
+    if (onCancel) {
+      try { onCancel(); } catch (_) {}
     }
   };
+  box.append(c);
+  bg.onclick = (ev) => { if (ev.target === bg) close(); };
   bg.append(box);
   document.body.append(bg);
 }

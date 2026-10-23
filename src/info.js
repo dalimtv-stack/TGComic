@@ -845,7 +845,11 @@ function showEditComicTitle(ch, f, currentLabel, after) {
   };
   body.append(fichaBtn);
 
-  const doSave = (closeAfter) => {
+  const actions = el('div', 'edit-actions');
+  const cancel = el('button', 'btn', 'Cancelar');
+  cancel.onclick = () => frame.remove();
+  const save = el('button', 'btn edit-save', 'Guardar');
+  save.onclick = async () => {
     const titleV = inputTitle.value.trim();
     let titleSave = titleV;
     if (titleSave && ch.name) {
@@ -854,8 +858,11 @@ function showEditComicTitle(ch, f, currentLabel, after) {
         titleSave = titleSave.replace(new RegExp('^' + esc + '\\s*-\\s*', 'i'), '').trim();
       } catch (_) {}
     }
+    // Vacío = restaurar automático. Cualquier otro texto se guarda tal cual
+    // (antes se descartaba si se parecía al título del archivo/caption y no persistía).
     if (!titleSave) titleSave = '';
 
+    // Serie desde el <select>
     let seriesSave = '';
     const sel = seriesSel.value;
     if (sel === '__other__') {
@@ -864,7 +871,7 @@ function showEditComicTitle(ch, f, currentLabel, after) {
       else if (parsedSeries && custom.toLowerCase() === parsedSeries.toLowerCase()) seriesSave = '';
       else seriesSave = custom;
     } else if (!sel) {
-      seriesSave = '';
+      seriesSave = ''; // original
     } else if (parsedSeries && sel.toLowerCase() === parsedSeries.toLowerCase()) {
       seriesSave = '';
     } else {
@@ -873,38 +880,39 @@ function showEditComicTitle(ch, f, currentLabel, after) {
 
     setComicDisplayName(ch, f, titleSave, () => {
       setComicSeries(ch, f, seriesSave, () => {
+        // No cerrar: permitir seguir editando / navegar entre cómics
+        cancel.textContent = 'Salir';
         try { after?.(); } catch (_) {}
-        if (closeAfter) {
-          frame.remove();
-        } else {
-          cancel.textContent = 'Salir';
-          try {
-            const tip = el('p', 'cover-pick-hint edit-saved-hint', 'Guardado.');
-            tip.style.color = 'var(--acc)';
-            actions.parentElement?.querySelector('.edit-saved-hint')?.remove();
-            body.insertBefore(tip, actions);
-            setTimeout(() => { try { tip.remove(); } catch (_) {} }, 1500);
-          } catch (_) {}
-        }
       });
     });
   };
-
-  const actions = el('div', 'edit-actions');
-  const cancel = el('button', 'btn', 'Cancelar');
-  cancel.onclick = () => frame.remove();
-  const save = el('button', 'btn edit-save', 'Guardar');
-  save.onclick = () => doSave(false);
-
+  // Anterior / Siguiente del mismo canal
   const navRow = el('div', 'edit-nav-row');
-  const prevBtn = el('button', 'btn edit-nav-btn', '‹ Anterior');
-  const nextBtn = el('button', 'btn edit-nav-btn', 'Siguiente ›');
-  prevBtn.type = 'button';
-  nextBtn.type = 'button';
-  prevBtn.disabled = true;
-  nextBtn.disabled = true;
+  const prevBtn = el('button', 'btn edit-nav-btn', '← Anterior');
+  const nextBtn = el('button', 'btn edit-nav-btn', 'Siguiente →');
+  const openNeighbor = async (dir) => {
+    let files = [];
+    try {
+      if (typeof kv?.get === 'function') files = (await kv.get('f:' + ch.id)) || [];
+    } catch (_) {}
+    if (!files.length) return;
+    const sorted = files.slice().sort((a, b) =>
+      String(a?.name || '').localeCompare(String(b?.name || ''), undefined, { numeric: true, sensitivity: 'base' })
+    );
+    const idx = sorted.findIndex((x) => String(x.id) === String(f.id));
+    if (idx < 0) return;
+    const ni = idx + dir;
+    if (ni < 0 || ni >= sorted.length) return;
+    const nf = sorted[ni];
+    frame.remove();
+    const nlabel = (typeof comicDisplayName === 'function')
+      ? comicDisplayName(ch, nf, nf.name || '')
+      : (nf.name || '');
+    showEditComicTitle(ch, nf, nlabel, after);
+  };
+  prevBtn.onclick = () => openNeighbor(-1);
+  nextBtn.onclick = () => openNeighbor(1);
   navRow.append(prevBtn, nextBtn);
-
   actions.append(cancel, save);
   body.append(actions);
   body.append(navRow);
@@ -912,26 +920,8 @@ function showEditComicTitle(ch, f, currentLabel, after) {
   frame.append(box);
   document.body.append(frame);
   setTimeout(() => { inputTitle.focus(); inputTitle.select(); }, 50);
-
-  comicNeighbors(ch, f).then(({ prev, next }) => {
-    if (prev) {
-      prevBtn.disabled = false;
-      prevBtn.onclick = () => {
-        frame.remove();
-        const lab = comicDisplayName(ch, prev, comicDisplay(comicSourceName(prev), ch.name) || '');
-        showEditComicTitle(ch, prev, lab, after);
-      };
-    } else prevBtn.hidden = true;
-    if (next) {
-      nextBtn.disabled = false;
-      nextBtn.onclick = () => {
-        frame.remove();
-        const lab = comicDisplayName(ch, next, comicDisplay(comicSourceName(next), ch.name) || '');
-        showEditComicTitle(ch, next, lab, after);
-      };
-    } else nextBtn.hidden = true;
-  }).catch(() => { prevBtn.hidden = true; nextBtn.hidden = true; });
 }
+
 
 function showSeriesInfo(ch, seriesLabel, files) {
   try {

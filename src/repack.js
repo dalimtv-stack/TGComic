@@ -1406,7 +1406,7 @@ export function createRepackTool(d) {
 
 
   /**
-   * Añadir versión WebP a TODOS los cómics de un canal (misma UI que serie).
+   * Añadir versión WebP a TODOS los cómics de un canal (misma UI/lógica que serie).
    */
   function offerWebpVersionChannel(ch, files) {
     const list = (files || []).filter(Boolean);
@@ -1418,8 +1418,6 @@ export function createRepackTool(d) {
       } catch (_) {}
       return;
     }
-    // Reutilizar la misma lógica/UI que serie, con etiqueta de canal
-    const label = (ch.name || 'Canal');
     document.querySelector('.info-frame.webp-version')?.remove();
     const frame = el('div', 'info-frame webp-version');
     const box = el('div', 'info-box');
@@ -1430,6 +1428,7 @@ export function createRepackTool(d) {
     head.append(close);
     const body = el('div', 'info-body');
 
+    const label = (ch.name || 'Canal');
     body.append(el('p', 'cover-pick-hint',
       `Canal «${label}» · ${list.length} cómic(s). Se descargará cada cómic, se convertirán sus páginas a WebP y se subirá la copia al mismo canal (un trabajo por cómic en la Cola de tareas).`
     ));
@@ -1513,5 +1512,4 @@ export function createRepackTool(d) {
     suggestUploadName,
   };
 }
-
 

@@ -413,8 +413,9 @@ export function createReader(state, d) {
         if (autoOn) autoStop(); else autoStart();
       };
       paintPlay();
+
       // Ajustes de reproducción automática (engranaje a la izquierda del Play)
-      const COG_D = 'M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.94C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.67 16.04,18.34 16.56,17.94L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z';
+      const COG_D = 'M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.94C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.94L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z';
       const cfgBtn = el('button', 'btn auto-cfg-fab');
       cfgBtn.type = 'button';
       cfgBtn.innerHTML = iconSvg(COG_D, 22);
@@ -428,34 +429,36 @@ export function createReader(state, d) {
         const overlay = el('div', 'rd-auto-cfg');
         const box = el('div', 'rd-auto-cfg-box');
         box.append(el('div', 'rd-auto-cfg-title', 'Reproducción automática'));
-        const lab = el('label', 'sync-label', 'Segundos entre páginas');
+        box.append(el('p', 'rd-auto-cfg-hint', 'Segundos entre páginas (2–120)'));
         const inp = el('input', 'edit-input');
         inp.type = 'number';
         inp.min = '2';
         inp.max = '120';
         inp.step = '1';
         inp.value = String(Math.max(2, Math.min(120, +(pref('autoPlaySec', '7') || 7))));
-        box.append(lab, inp);
+        box.append(inp);
         const ok = el('button', 'btn edit-save', 'Aceptar');
         ok.onclick = () => {
-          let v = Math.max(2, Math.min(120, +(inp.value) || 7));
-          setPref('autoPlaySec', String(v));
+          let n = parseInt(inp.value, 10);
+          if (!Number.isFinite(n)) n = 7;
+          n = Math.max(2, Math.min(120, n));
+          try { setPref('autoPlaySec', String(n)); } catch (_) {
+            try { localStorage.setItem('pref:autoPlaySec', String(n)); } catch (_) {}
+          }
           overlay.remove();
-          if (wasOn) autoStart();
+          if (wasOn) {
+            autoOn = true;
+            paintPlay();
+            autoSchedule();
+          }
         };
         box.append(ok);
         overlay.append(box);
-        overlay.addEventListener('click', (e) => {
-          if (e.target === overlay) {
-            overlay.remove();
-            if (wasOn) autoStart();
-          }
-        });
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) ok.click(); });
         rd.append(overlay);
         try { inp.focus(); inp.select(); } catch (_) {}
       };
-      rd.append(cfgBtn);
-      rd.append(playBtn);
+      rd.append(cfgBtn, playBtn);
       document.body.style.overflow = 'hidden';
       try { enterReaderFullscreen(); } catch (_) {}
       try { sizeReaderEl(rd); } catch (_) {}
@@ -507,10 +510,7 @@ export function createReader(state, d) {
         else { clearTimeout(uiTimer); rd.classList.add('ui-off'); }
       };
       // Solo ratón real (en táctil el mouseenter emulado dejaba el timer cancelado para siempre)
-      const hoverTargets = () => [cluster, bot, ...rd.querySelectorAll('.play-fab, .auto-cfg-fab, .q-group, .spread-fab')];
-      const bindHoverStay = (node) => {
-        if (!node || node._uiHoverBound) return;
-        node._uiHoverBound = true;
+      for (const node of [cluster, bot]) {
         node.addEventListener('pointerenter', (e) => {
           if (e.pointerType !== 'mouse') return;
           uiHover = true;
@@ -519,20 +519,10 @@ export function createReader(state, d) {
         });
         node.addEventListener('pointerleave', (e) => {
           if (e.pointerType !== 'mouse') return;
-          // Si el puntero sigue sobre otra zona de UI, no ocultar
-          const rel = e.relatedTarget;
-          if (rel && hoverTargets().some((n) => n && n.contains?.(rel))) return;
           uiHover = false;
           armUiHide();
         });
-      };
-      for (const node of hoverTargets()) bindHoverStay(node);
-      // Los FAB se crean antes; re-bind si se añaden más tarde
-      try {
-        const mo = new MutationObserver(() => { for (const node of hoverTargets()) bindHoverStay(node); });
-        mo.observe(rd, { childList: true });
-        observers._uiHoverMo = mo;
-      } catch (_) {}
+      }
       armUiHide();
       // rd.className = ... borra 'ui-off'; esta utilidad lo conserva
       const setRdClass = (cls) => {
@@ -616,7 +606,7 @@ export function createReader(state, d) {
         let samples = [];
         const onDown = (e) => {
           if (e.button !== 0) return;
-          if (e.target.closest?.('.bar, .edge, .mosaic, .btn, .spread-fab, .play-fab, .auto-cfg-fab, .q-group, .rd-auto-cfg, input, textarea')) return;
+          if (e.target.closest?.('.bar, .edge, .mosaic, .btn, .spread-fab, .play-fab, .auto-cfg-fab, .q-group, input, textarea')) return;
           start = {
             x: e.clientX,
             y: e.clientY,
@@ -1002,7 +992,7 @@ export function createReader(state, d) {
 
         rd.addEventListener('touchstart', (e) => {
           // Toque en laterales/barra: no iniciar gesto de página en #rd
-          if (e.target.closest?.('.edge, .bar, .mosaic, .spread-fab, .play-fab, .q-group')) {
+          if (e.target.closest?.('.edge, .bar, .mosaic, .spread-fab, .play-fab, .auto-cfg-fab, .q-group')) {
             sx = null;
             pinch = null;
             return;
@@ -1051,7 +1041,7 @@ export function createReader(state, d) {
         }, { passive: false });
 
         rd.addEventListener('touchend', (e) => {
-          if (e.target.closest?.('.edge, .bar, .mosaic, .spread-fab, .play-fab, .q-group')) {
+          if (e.target.closest?.('.edge, .bar, .mosaic, .spread-fab, .play-fab, .auto-cfg-fab, .q-group')) {
             sx = null;
             return;
           }
@@ -1517,14 +1507,8 @@ export function createReader(state, d) {
         observers = [loadIO];
         observers._scroll = onScroll;
 
-        // Laterales: click cambia de página (como en modo Página)
-        const eL = el('div', 'edge l'), eR = el('div', 'edge r');
-        rd.append(eL, eR);
-        eL.onclick = (ev) => { try { ev.stopPropagation(); } catch (_) {} goToPage(n - 1); };
-        eR.onclick = (ev) => { try { ev.stopPropagation(); } catch (_) {} goToPage(n + 1); };
-
         rd.onclick = (ev) => {
-          if (ev.target.closest?.('.bar, .next-btn, .mosaic, .edge, .play-fab, .auto-cfg-fab, .q-group, .spread-fab, .rd-auto-cfg')) return;
+          if (ev.target.closest?.('.bar, .next-btn, .mosaic')) return;
           toggleUI();
         };
 
@@ -1629,13 +1613,11 @@ export function createReader(state, d) {
             const offset = rd.scrollLeft - posOf(n);
             const vx = info.vx || 0;
             let idx = n;
-            // Solo cambia de página con recorrido claro (~40 %) o flick fuerte; movimiento pequeño solo re-alinea
-            if (offset > w * 0.40 || vx < -0.9) idx = Math.min(pages.length - 1, n + 1);
-            else if (offset < -w * 0.40 || vx > 0.9) idx = Math.max(0, n - 1);
-            else {
-              // Re-alinear a la página actual sin saltar
-              return animateScroll(rd, 'scrollLeft', posOf(n), 280);
-            }
+            // Solo cambio de página con recorrido amplio (~40 %) o lanzamiento fuerte
+            if (offset > w * 0.40 || vx < -0.85) idx = Math.min(pages.length - 1, n + 1);
+            else if (offset < -w * 0.40 || vx > 0.85) idx = Math.max(0, n - 1);
+            const far = pageAt(rd.scrollLeft + rd.clientWidth / 2);
+            if (Math.abs(far - n) > 1) idx = far;
             if (idx !== n) {
               n = idx;
               savePage(n);
@@ -1701,37 +1683,47 @@ export function createReader(state, d) {
           observers._touchMove = onTm;
           observers._touchEnd = onTe;
 
-          // PC: rueda mueve el strip horizontal; en página alta (Ancho) prioriza scroll vertical interno
+          // PC: rueda cambia de página en horizontal; en páginas altas (ajuste ancho) primero recorre vertical
           const onWheelH = (e) => {
             const dy = e.deltaY || 0;
             const dx = e.deltaX || 0;
-            const slot = slots[n];
-            if (fitMode() === 'width' && slot && slot.dataset.tall === '1') {
-              const canY = slot.scrollHeight > slot.clientHeight + 2;
-              if (canY) {
-                const atTop = slot.scrollTop <= 0;
-                const atBot = slot.scrollTop + slot.clientHeight >= slot.scrollHeight - 2;
-                if ((dy < 0 && !atTop) || (dy > 0 && !atBot)) {
-                  // dejar que el scroll interno de la página maneje
-                  return;
+            const dominant = Math.abs(dx) > Math.abs(dy) ? dx : dy;
+            if (Math.abs(dominant) < 8) return;
+            // Página alta en ajuste ancho: dejar scroll vertical interno hasta el borde
+            if (fitMode() === 'width') {
+              const slot = slots[n];
+              if (slot && slot.dataset.tall === '1') {
+                const canY = slot.scrollHeight > slot.clientHeight + 2;
+                if (canY) {
+                  const atTop = slot.scrollTop <= 0;
+                  const atBot = slot.scrollTop + slot.clientHeight >= slot.scrollHeight - 2;
+                  if ((dominant < 0 && !atTop) || (dominant > 0 && !atBot)) return;
                 }
               }
             }
-            // Desplazar strip horizontal con la rueda
-            const delta = Math.abs(dx) > Math.abs(dy) ? dx : dy;
-            if (Math.abs(delta) < 1) return;
             e.preventDefault();
-            syncLock = true;
-            clearTimeout(scrollT);
-            rd.scrollLeft += delta;
-            clearTimeout(onWheelH._t);
-            onWheelH._t = setTimeout(() => {
-              syncLock = false;
-              try { onScroll(); } catch (_) {}
-            }, 80);
+            snapTo(dominant > 0 ? n + 1 : n - 1);
           };
           rd.addEventListener('wheel', onWheelH, { passive: false });
           observers._wheel = onWheelH;
+
+          // Laterales: click izq/der en modo horizontal continuo
+          const onHorizEdgeClick = (ev) => {
+            if (ev.target.closest?.('.bar, .edge, .mosaic, .btn, .play-fab, .auto-cfg-fab, .q-group, .spread-fab')) return;
+            if (rd.classList.contains('zoom')) return;
+            const rect = rd.getBoundingClientRect();
+            const x = ev.clientX - rect.left;
+            const w = rect.width || 1;
+            if (x < w * 0.22) {
+              ev.preventDefault();
+              snapTo(Math.max(0, n - 1));
+            } else if (x > w * 0.78) {
+              ev.preventDefault();
+              snapTo(Math.min(pages.length - 1, n + 1));
+            }
+          };
+          rd.addEventListener('click', onHorizEdgeClick);
+          observers._horizEdgeClick = onHorizEdgeClick;
         }
 
         goToPage(n);
