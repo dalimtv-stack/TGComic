@@ -45,7 +45,7 @@ import {
 } from './comicvine.js';
 import * as locks from './lock.js';
 import { initBalance } from './balance.js';
-import { collapseVersions, flattenVersions, QUALITIES, QUALITY_LABEL } from './quality.js';
+import { collapseVersions, flattenVersions, splitStats, QUALITIES, QUALITY_LABEL } from './quality.js';
 
 const apiId = Number(import.meta.env.VITE_API_ID);
 const apiHash = import.meta.env.VITE_API_HASH;
@@ -266,12 +266,16 @@ async function collectAppStats() {
   } catch (_) {}
 
   const channels = Array.isArray(LIB) ? LIB.length : 0;
-  let comics = 0, telegramBytes = 0;
+  // Principal = archivos sin etiqueta WebP; las copias [WebP] / [2400px][WebP] se cuentan aparte
+  let comics = 0, telegramBytes = 0, webpComics = 0, webpBytes = 0;
   if (Array.isArray(LIB)) {
     for (const ch of LIB) {
       const files = (await kv.get('f:' + ch.id)) || [];
-      comics += files.length;
-      for (const f of files) telegramBytes += Number(f.size) || 0;
+      const st = splitStats(files);
+      comics += st.main.n;
+      telegramBytes += st.main.bytes;
+      webpComics += st.webp.n;
+      webpBytes += st.webp.bytes;
     }
   }
 
@@ -307,7 +311,7 @@ async function collectAppStats() {
     idbTotal, covers, art, other, coverN, artN,
     listsBytes, listsN,
     lsBytes, sessionBytes, sessionOk, lsKeyCount: lsKeys.length,
-    channels, comics, telegramBytes,
+    channels, comics, telegramBytes, webpComics, webpBytes,
     pageCacheBytes, pageCacheCount, pageCacheLimitMB,
     lastSync, failedUploads,
   };
@@ -701,8 +705,8 @@ function showInfoFrame() {
   collectAppStats().then((s) => {
     body.replaceChildren();
     const lines = [];
-    const sec = (t) => {
-      body.append(el('div', 'info-sec', t));
+    const sec = (t, cls = '') => {
+      body.append(el('div', 'info-sec' + (cls ? ' ' + cls : ''), t));
       lines.push('', '## ' + t);
     };
     const add = (label, value) => {
@@ -730,6 +734,12 @@ function showInfoFrame() {
     add('Canales', String(s.channels));
     add('Cómics (listados)', String(s.comics));
     add('Tamaño en Telegram', formatBytes(s.telegramBytes));
+
+    if (s.webpComics) {
+      sec('WebP', 'info-sec-webp');
+      add('Cómics', String(s.webpComics));
+      add('Tamaño', formatBytes(s.webpBytes));
+    }
 
     if (titleSpan) {
       titleSpan.onclick = async (ev) => {
@@ -933,6 +943,24 @@ function showViewerConfig() {
   hideWrap.append(hideLab, hideInp);
   body.append(hideWrap);
 
+  section('Reproducción automática');
+  const apWrap = el('div', 'cfg-field');
+  const apLab = el('label', 'sync-label', 'Cambiar de página cada (segundos). Por defecto 7 segundos.');
+  const apInp = el('input', 'edit-input');
+  apInp.type = 'number';
+  apInp.min = '2';
+  apInp.max = '120';
+  apInp.step = '1';
+  apInp.value = pref('autoPlaySec', '7');
+  apInp.onchange = () => {
+    const v = Math.max(2, Math.min(120, +apInp.value || 7));
+    apInp.value = String(v);
+    setPref('autoPlaySec', String(v));
+  };
+  apWrap.append(apLab, apInp);
+  body.append(apWrap);
+  body.append(el('div', 'cfg-hint', 'Botón Play del visor (a la izquierda del de doble página). En Horizontal/Vertical el cambio de página es con desplazamiento suave.'));
+
   section('Caché de páginas (lectura)');
   const pcWrap = el('div', 'cfg-field');
   const pcLab = el('label', 'sync-label', 'Máximo de caché de páginas en este dispositivo. Por defecto 500 MB');
@@ -1060,7 +1088,9 @@ function go(title, render) {
   show();
 }
 let lastScrollY = 0, headerHidden = false;
+let pendingRefresh = false;
 function show() {
+  pendingRefresh = false;
   cleanup?.(); cleanup = null;
   const e = stack[stack.length - 1];
   if (!e || typeof e.render !== 'function') {
@@ -1105,6 +1135,24 @@ function show() {
     setTimeout(applyScroll, 350);
   });
 }
+/**
+ * Repinta la vista actual, pero NUNCA con el visor abierto (parpadeos al terminar tareas de la cola):
+ * se aplaza hasta que se cierre el visor.
+ */
+function refreshView() {
+  if (document.getElementById('rd')) { pendingRefresh = true; return; }
+  pendingRefresh = false;
+  show();
+}
+try {
+  window.addEventListener('tgcomic:reader', (ev) => {
+    if (ev?.detail?.open) return;
+    // Esperar: al cambiar de modo el visor se cierra y se vuelve a abrir al instante
+    setTimeout(() => {
+      if (pendingRefresh && !document.getElementById('rd')) refreshView();
+    }, 250);
+  });
+} catch (_) {}
 backBtn.onclick = () => history.back();
 // Header: ocultar al bajar, mostrar al subir
 const onScrollHeader = () => {
@@ -1750,8 +1798,8 @@ const repackTool = createRepackTool({
     } catch (_) {}
     try {
       const top = stack[stack.length - 1];
-      if (top) top.scrollY = window.scrollY || 0;
-      show();
+      if (top && !document.getElementById('rd')) top.scrollY = window.scrollY || 0;
+      refreshView();
     } catch (_) {}
   },
 });
@@ -1849,9 +1897,9 @@ try {
         if (sameChannel || sameEditorial || onHome || editorialContext) {
           // Guardar scroll aproximado y repintar
           try {
-            top.scrollY = window.scrollY || document.documentElement.scrollTop || 0;
+            if (!document.getElementById('rd')) top.scrollY = window.scrollY || document.documentElement.scrollTop || 0;
           } catch (_) {}
-          show();
+          refreshView();
         }
       } catch (e) {
         console.warn('[upload] onUploadDone refresh', e);
@@ -1936,6 +1984,17 @@ async function migrateCacheImages() {
   if (!apiId || !apiHash) return msg('Faltan VITE_API_ID y VITE_API_HASH.');
   // Sync antes de biblioteca / seguir leyendo
   try { await sync.syncOnStartup(); } catch (_) {}
+  // Pull periódico / al volver a la pestaña: Seguir leyendo y progreso casi en tiempo real entre equipos
+  try { sync.startAutoPull?.(15000); } catch (_) {}
+  try {
+    window.addEventListener('tg-sync-pulled', () => {
+      try {
+        if (document.querySelector('.info-frame, .sheet, .app-dialog')) return;
+        const e = stack[stack.length - 1];
+        if (e && !e._isComic) refreshView();
+      } catch (_) {}
+    });
+  } catch (_) {}
   try { applyCoverSizePrefs(); } catch (_) {} // por si la sincronización tocó algo: los tamaños son locales
   LIB = (await kv.get('lib')) || [];
   // Migrar progreso legado page:msg → page:ch:msg solo para cómics conocidos; borra legados sueltos

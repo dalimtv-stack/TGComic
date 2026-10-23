@@ -9,8 +9,19 @@ export function createJobQueue({ el, pref }) {
   const STATS = 'jobQueue:stats';
   let jobs = [];
   let running = false;
-  let paused = false;
+  let paused = false;   // cola en pausa: no arranca más trabajos (el actual sigue hasta terminar)
+  let stopped = false;  // detenida: además se abortó el trabajo en curso
+  const abortedIds = new Set();
+  let abortCbs = [];
+  let currentCtrl = null;
   let listeners = new Set();
+  // Iconos Material Design Icons (mdi-pause / mdi-square / mdi-play)
+  const ICON = {
+    pause: 'M14,19H18V5H14M6,19H10V5H6V19Z',
+    stop: 'M3,3V21H21V3',
+    play: 'M8,5.14V19.14L19,12.14L8,5.14Z',
+  };
+  const iconSvg = (d) => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="' + d + '"/></svg>';
 
   function load() {
     try {
@@ -52,6 +63,7 @@ export function createJobQueue({ el, pref }) {
     return {
       jobs: jobs.map(({ _run, ...j }) => j),
       paused,
+      stopped,
       running,
     };
   }
@@ -75,13 +87,31 @@ export function createJobQueue({ el, pref }) {
     } catch (_) {}
   }
 
+  function fmtRemaining(ms) {
+    if (ms < 60000) return `~${Math.max(1, Math.round(ms / 1000))} s restantes`;
+    const min = Math.round(ms / 60000);
+    if (min < 90) return `~${min} min restantes`;
+    const h = Math.floor(min / 60);
+    const m = min % 60;
+    return `~${h} h${m ? ' ' + m + ' min' : ''} restantes`;
+  }
+
+  /** Ej.: "20 cómics pendientes y ~50 min restantes" */
   function etaLabel() {
-    const pending = jobs.filter((j) => j.status === 'pending' || j.status === 'running' || j.status === 'paused');
+    const active = jobs.filter((j) => j.status === 'pending' || j.status === 'running');
+    if (!active.length) return '';
+    const n = active.length;
+    const count = n === 1 ? '1 cómic pendiente' : `${n} cómics pendientes`;
     const avg = avgMsPerJob();
-    if (!pending.length || !avg) return '';
-    const ms = avg * pending.length;
-    if (ms < 60000) return `~${Math.round(ms / 1000)} s restantes`;
-    return `~${Math.round(ms / 60000)} min restantes`;
+    if (!avg) return count;
+    const waiting = active.filter((j) => j.status === 'pending').length;
+    const cur = active.find((j) => j.status === 'running');
+    let ms = avg * waiting;
+    if (cur) {
+      const el0 = cur.startedAt ? Date.now() - cur.startedAt : 0;
+      ms += Math.max(avg * 0.1, avg - el0);
+    }
+    return `${count} y ${fmtRemaining(ms)}`;
   }
 
   function enqueue(job) {
@@ -108,13 +138,28 @@ export function createJobQueue({ el, pref }) {
     return id;
   }
 
+  /** Pausa la cola: el trabajo en curso continúa, pero no arranca el siguiente. */
   function pause() {
     paused = true;
     emit();
   }
 
+  /** Detiene TODO: pausa la cola y aborta el trabajo en curso (descarga, descompresión o subida). */
+  function stop() {
+    paused = true;
+    stopped = true;
+    const cur = jobs.find((j) => j.status === 'running');
+    if (cur) {
+      abortedIds.add(cur.id);
+      try { currentCtrl?.abort(); } catch (_) {}
+      for (const cb of abortCbs.slice()) { try { cb(); } catch (_) {} }
+    }
+    emit();
+  }
+
   function resume() {
     paused = false;
+    stopped = false;
     emit();
     pump();
   }
@@ -132,6 +177,7 @@ export function createJobQueue({ el, pref }) {
     j.status = 'pending';
     j.error = null;
     j.progress = 0;
+    j.attempts = 0;
     emit();
     pump();
   }
@@ -153,6 +199,10 @@ export function createJobQueue({ el, pref }) {
     next.status = 'running';
     next.startedAt = Date.now();
     next.attempts = (next.attempts || 0) + 1;
+    const ctrl = new AbortController();
+    currentCtrl = ctrl;
+    abortCbs = [];
+    abortedIds.delete(next.id);
     emit();
 
     const ctx = {
@@ -191,10 +241,16 @@ export function createJobQueue({ el, pref }) {
         save();
       },
       isPaused: () => paused,
-      waitWhilePaused: async () => {
-        while (paused) await new Promise((r) => setTimeout(r, 200));
+      // Pausar NO frena el trabajo en curso (solo impide arrancar el siguiente)
+      waitWhilePaused: async () => {},
+      // Stop: señal y callbacks para que el runner aborte descarga / descompresión / subida
+      signal: ctrl.signal,
+      onAbort: (cb) => {
+        if (typeof cb !== 'function') return;
+        abortCbs.push(cb);
+        if (abortedIds.has(next.id)) { try { cb(); } catch (_) {} }
       },
-      isAborted: () => next.status === 'cancelled',
+      isAborted: () => abortedIds.has(next.id) || next.status === 'cancelled',
     };
 
     try {
@@ -208,6 +264,13 @@ export function createJobQueue({ el, pref }) {
         if (next.startedAt) recordDuration(next.finishedAt - next.startedAt);
       }
     } catch (e) {
+      if (e?.cancelled || e?.name === 'AbortError' || abortedIds.has(next.id)) {
+        // Detenido por el usuario: no reintentar solo; queda disponible "Reintentar"
+        next.status = 'cancelled';
+        next.error = null;
+        next.finishedAt = Date.now();
+        try { ctx.log('Detenido por el usuario'); } catch (_) {}
+      } else {
       next.error = e?.message || String(e);
       if (next.attempts < next.maxAttempts && typeof next._run === 'function') {
         next.status = 'pending';
@@ -216,7 +279,11 @@ export function createJobQueue({ el, pref }) {
         next.status = 'error';
         next.finishedAt = Date.now();
       }
+      }
     }
+    abortedIds.delete(next.id);
+    currentCtrl = null;
+    abortCbs = [];
     running = false;
     emit();
     pump();
@@ -371,14 +438,26 @@ export function createJobQueue({ el, pref }) {
     pendFold.append(pendBody);
 
     const actions = el('div', 'repack-panel-actions job-queue-actions');
-    const btnPause = el('button', 'btn', 'Pausar');
+    // Pausar / Reanudar (icono): pausa la cola, el proceso en curso continúa
+    const btnPause = el('button', 'btn job-ico-btn');
     btnPause.id = 'job-queue-pause';
     btnPause.type = 'button';
+    btnPause.innerHTML = iconSvg(ICON.pause);
+    btnPause.title = 'Pausar la cola (el proceso en curso continúa)';
+    btnPause.setAttribute('aria-label', btnPause.title);
     btnPause.onclick = () => {
       if (paused) resume();
       else pause();
-      btnPause.textContent = paused ? 'Reanudar' : 'Pausar';
+      paintPanel();
     };
+    // Stop (icono): detiene todos los procesos, incluido el que está en curso
+    const btnStop = el('button', 'btn job-ico-btn');
+    btnStop.id = 'job-queue-stop';
+    btnStop.type = 'button';
+    btnStop.innerHTML = iconSvg(ICON.stop);
+    btnStop.title = 'Detener todo (incluido el proceso en curso)';
+    btnStop.setAttribute('aria-label', btnStop.title);
+    btnStop.onclick = () => { stop(); paintPanel(); };
     const btnClear = el('button', 'btn', 'Limpiar completados');
     btnClear.id = 'job-queue-clear';
     btnClear.type = 'button';
@@ -386,7 +465,7 @@ export function createJobQueue({ el, pref }) {
     const btnClose = el('button', 'btn', 'Cerrar');
     btnClose.type = 'button';
     btnClose.onclick = () => { panel.hidden = true; };
-    actions.append(btnPause, btnClear, btnClose);
+    actions.append(btnPause, btnStop, btnClear, btnClose);
 
     panel.append(head, bar, eta, curFold, pendFold, actions);
     document.body.append(panel);
@@ -472,10 +551,17 @@ export function createJobQueue({ el, pref }) {
     const btnPause = document.getElementById('job-queue-pause');
     const btnClear = document.getElementById('job-queue-clear');
     const curStatus = document.getElementById('job-current-status');
-    if (btnPause) btnPause.textContent = paused ? 'Reanudar' : 'Pausar';
+    const btnStopEl = document.getElementById('job-queue-stop');
+    if (btnPause) {
+      // Reanudar se muestra si la cola está en pausa o detenida
+      btnPause.innerHTML = iconSvg(paused ? ICON.play : ICON.pause);
+      btnPause.title = paused ? 'Reanudar la cola' : 'Pausar la cola (el proceso en curso continúa)';
+      btnPause.setAttribute('aria-label', btnPause.title);
+    }
+    if (btnStopEl) btnStopEl.disabled = !jobs.some((x) => x.status === 'running');
     if (btnClear) {
       const hasDone = jobs.some((x) => x.status === 'done');
-      const hasFail = jobs.some((x) => x.status === 'error' || x.status === 'interrupted');
+      const hasFail = jobs.some((x) => x.status === 'error' || x.status === 'interrupted' || x.status === 'cancelled');
       if (hasDone) {
         btnClear.hidden = false;
         btnClear.textContent = 'Limpiar completados';
@@ -486,7 +572,11 @@ export function createJobQueue({ el, pref }) {
         btnClear.hidden = true;
       }
     }
-    if (eta) eta.textContent = etaLabel() || (paused ? 'En pausa' : '');
+    if (eta) {
+      const lab = etaLabel();
+      const pre = stopped ? 'Detenida' : (paused ? 'En pausa' : '');
+      eta.textContent = pre && lab ? (pre + ' · ' + lab) : (lab || pre);
+    }
 
     const runningJob = jobs.find((x) => x.status === 'running');
     if (curStatus) {
@@ -494,7 +584,7 @@ export function createJobQueue({ el, pref }) {
         // El detalle está en el log; aquí solo el nombre breve (la barra lleva el %)
         curStatus.textContent = runningJob.label || 'Procesando…';
       } else if (paused) {
-        curStatus.textContent = 'En pausa';
+        curStatus.textContent = stopped ? 'Detenida' : 'En pausa';
       } else {
         const nextJ = jobs.find((x) => x.status === 'pending');
         curStatus.textContent = nextJ ? ('Siguiente: ' + nextJ.label) : 'Ninguno';
@@ -520,7 +610,7 @@ export function createJobQueue({ el, pref }) {
       const label = el('span', 'job-row-label');
       label.textContent = '[' + st + '] ' + job.label + (job.error ? ' — ' + job.error : '');
       row.append(label);
-      if (st === 'error' || st === 'interrupted') {
+      if (st === 'error' || st === 'interrupted' || st === 'cancelled') {
         const rt = el('button', 'btn repack-min', 'Reintentar');
         rt.type = 'button';
         rt.onclick = () => retry(job.id);
@@ -566,7 +656,7 @@ export function createJobQueue({ el, pref }) {
   save();
 
   function clearFailed() {
-    jobs = jobs.filter((x) => x.status !== 'error' && x.status !== 'interrupted');
+    jobs = jobs.filter((x) => x.status !== 'error' && x.status !== 'interrupted' && x.status !== 'cancelled');
     emit();
   }
 
@@ -592,6 +682,7 @@ export function createJobQueue({ el, pref }) {
   return {
     enqueue,
     pause,
+    stop,
     resume,
     retry,
     remove,

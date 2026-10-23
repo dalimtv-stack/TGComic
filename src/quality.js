@@ -138,3 +138,18 @@ export function collapseVersions(files, nameOf = sourceNameOf) {
   });
   return out;
 }
+
+/**
+ * Estadísticas de una lista de archivos separando las copias WebP (Media/Baja) del resto.
+ * Aplana las entradas agrupadas (variants) y clasifica cada archivo real por su nombre.
+ *   main = archivos sin etiqueta WebP (Alta)   ·   webp = copias [WebP] y [2400px][WebP]
+ */
+export function splitStats(files) {
+  const out = { main: { n: 0, bytes: 0 }, webp: { n: 0, bytes: 0 } };
+  for (const f of flattenVersions(files)) {
+    const bucket = parseQuality(sourceNameOf(f)).q === 'high' ? out.main : out.webp;
+    bucket.n++;
+    bucket.bytes += Number(f?.size) || 0;
+  }
+  return out;
+}

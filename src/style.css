@@ -791,13 +791,28 @@ textarea.meta-desc-lg.edit-input{
 #rd .spread-fab{transition:opacity .2s}
 
 /* Calidad Alta / Media / Baja: a la derecha del botón de doble página */
+/* Posición ESTÁTICA en todos los modos: siempre a la derecha del hueco del botón de doble página */
 #rd .q-group{
   position:fixed;z-index:14;display:flex;gap:6px; /* fixed: en modo vertical/horizontal #rd hace scroll y absolute se iría con el contenido */
   bottom:calc(env(safe-area-inset-bottom,0px) + 58px);
-  left:50%;transform:translateX(-50%);
+  left:calc(50% + 32px);transform:none;
   transition:opacity .2s;
 }
-#rd .q-group.with-spread{left:calc(50% + 32px);transform:none}
+
+/* Play / Pausa de reproducción automática: a la izquierda del botón de doble página */
+#rd .play-fab{
+  position:fixed;z-index:14;
+  bottom:calc(env(safe-area-inset-bottom,0px) + 58px);
+  left:calc(50% - 32px);transform:translateX(-100%);
+  width:48px;height:48px;min-width:48px;padding:0;
+  border-radius:14px;background:#1c1d22e6;color:var(--fg);
+  -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+  box-shadow:0 4px 18px #0008;display:inline-flex;align-items:center;justify-content:center;
+  border:0;cursor:pointer;transition:opacity .2s,background .15s;
+}
+#rd .play-fab svg{display:block;pointer-events:none}
+#rd .play-fab.on{background:var(--acc);color:#111}
+#rd.ui-off .play-fab{opacity:0;pointer-events:none}
 #rd .q-group .q-btn{
   width:48px;height:48px;min-width:48px;padding:0;border:0;border-radius:14px;
   background:#1c1d22e6;color:var(--fg);opacity:.55;cursor:pointer;
@@ -815,7 +830,8 @@ textarea.meta-desc-lg.edit-input{
 @media (max-width: 420px){
   #rd .q-group{gap:4px}
   #rd .q-group .q-btn{width:42px;height:42px;min-width:42px}
-  #rd .q-group.with-spread{left:calc(50% + 28px)}
+  #rd .q-group{left:calc(50% + 28px)}
+  #rd .play-fab{left:calc(50% - 28px)}
 }
 .cfg-hint{margin:.1rem .85rem .75rem;font-size:.78rem;opacity:.7;line-height:1.35}
 
@@ -826,7 +842,7 @@ textarea.meta-desc-lg.edit-input{
   #rd .bot-cluster .fit-ico{font-size:1rem;margin-right:.15rem}
   #rd .bot-cluster .btn{gap:0}
 }
-#rd.drag-scroll{cursor:grabbing!important;user-select:none;-webkit-user-select:none}
+#rd.drag-scroll{cursor:grabbing!important;user-select:none;-webkit-user-select:none;scroll-snap-type:none!important}
 #rd.drag-scroll *{cursor:grabbing!important;user-select:none;-webkit-user-select:none}
 #rd.horiz, #rd.vert{cursor:grab}
 
@@ -889,3 +905,11 @@ textarea.meta-desc-lg.edit-input{
 /* Adaptar portada: la previa dibuja el recorte real */
 .cover-fit-preview .cover-fit-canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:block}
 .cover-fit-preview.cropped .cover-fit-canvas{object-fit:cover}
+
+/* Cola de tareas: botones de icono (pausa / stop / reanudar) */
+.job-ico-btn{display:inline-flex;align-items:center;justify-content:center;min-width:46px;padding-left:.6rem;padding-right:.6rem}
+.job-ico-btn svg{display:block;pointer-events:none}
+.job-ico-btn:disabled{opacity:.4;cursor:default}
+
+/* Información: bloque de copias WebP en amarillo */
+.info-sec.info-sec-webp{color:var(--acc)}

@@ -8,6 +8,7 @@ import * as zip from '@zip.js/zip.js';
 import { createExtractorFromData } from 'node-unrar-js';
 import rarWasm from 'node-unrar-js/esm/js/unrar.wasm?url';
 import { buildComicCaption } from './parse.js';
+import { fitTelegramCaption } from './caption.js';
 import { withQualityTags, stripQualityTags, existingCopy, flattenVersions, parseQuality, QUALITY_LABEL } from './quality.js';
 
 const SEP = '::';
@@ -510,28 +511,7 @@ export function createUploadTool(d) {
     throw new Error('Formato no soportado (usa CBZ o CBR)');
   }
 
-  /**
-   * Telegram limita el caption a 1024 caracteres.
-   * Preferimos recortar la descripción; si no cabe, el resto del texto.
-   */
-  function fitTelegramCaption(text, max = 1024) {
-    let s = String(text || '').replace(/\r\n/g, '\n').trimEnd();
-    if (s.length <= max) return s;
-    const marker = '\nDescripción: ';
-    const descIdx = s.indexOf(marker);
-    if (descIdx >= 0) {
-      const head = s.slice(0, descIdx);
-      if (head.length <= max) {
-        const room = max - head.length - marker.length;
-        if (room >= 8) {
-          const body = s.slice(descIdx + marker.length).trim();
-          return head + marker + body.slice(0, Math.max(0, room - 1)).trimEnd() + '…';
-        }
-        return head.slice(0, max);
-      }
-    }
-    return s.slice(0, Math.max(0, max - 1)).trimEnd() + '…';
-  }
+  // fitTelegramCaption: ver caption.js (la Descripción siempre se sube; se recorta con "...")
 
   function isCaptionTooLongError(e) {
     const m = String(e?.message || e || '');
@@ -552,6 +532,7 @@ export function createUploadTool(d) {
 
     const attrs = [new Api.DocumentAttributeFilename({ fileName })];
     const onProg = (p) => {
+      if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
       const n = Number(p);
       if (Number.isFinite(n) && n >= 0 && n <= 1) {
         status?.(`Subiendo… ${Math.min(100, Math.round(n * 100))}%`);
@@ -602,6 +583,7 @@ export function createUploadTool(d) {
       await sendWithCaption(inputFile, captionSafe);
       return;
     } catch (e) {
+      if (e?.cancelled || abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
       console.warn('[upload] uploadFile(File) falló', e);
       // Si el fallo fue solo caption y ya se agotaron reintentos, no confundir con CustomFile
       if (isCaptionTooLongError(e)) {
@@ -661,6 +643,7 @@ export function createUploadTool(d) {
       await sendWithCaption(inputFile, captionSafe);
       return;
     } catch (e) {
+      if (e?.cancelled || abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
       console.warn('[upload] CustomFile falló', e);
       if (isCaptionTooLongError(e)) {
         throw new Error('Caption demasiado largo para Telegram (máx. 1024). Acorta la descripción.');
@@ -1377,6 +1360,8 @@ export function createUploadTool(d) {
             };
             try {
               abort = false;
+              // Stop de la cola: abortar descompresión / subida en curso
+              ctx.onAbort?.(() => { abort = true; });
               st('[' + outName + '] Preparando canal…');
               ctx.setProgress(10);
               await yieldTick();

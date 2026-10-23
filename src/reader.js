@@ -313,7 +313,7 @@ export function createReader(state, d) {
       document.body.append(rd);
       // Botones de calidad (Alta / Media / Baja) a la derecha del de doble página
       if (qVariants) {
-        const qGroup = el('div', 'q-group' + (continuous ? '' : ' with-spread'));
+        const qGroup = el('div', 'q-group');
         for (const q of QSET) {
           const b = el('button', 'btn q-btn' + (ctx?.q === q ? ' on' : ''));
           b.type = 'button';
@@ -334,6 +334,86 @@ export function createReader(state, d) {
         }
         rd.append(qGroup);
       }
+      // ---- Reproducción automática (Play): pasa de página sola cada N segundos ----
+      const PLAY_D = 'M8,5.14V19.14L19,12.14L8,5.14Z'; // mdi-play
+      const PAUSE_D = 'M14,19H18V5H14M6,19H10V5H6V19Z'; // mdi-pause
+      const iconSvg = (d, s = 22) => `<svg xmlns="http://www.w3.org/2000/svg" width="${s}" height="${s}" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="${d}"/></svg>`;
+      let autoOn = false, autoT = 0, autoStep = null, autoRaf = 0, autoFinish = null;
+      const autoMs = () => Math.max(2, Math.min(120, +(pref('autoPlaySec', '7') || 7))) * 1000;
+      const playBtn = el('button', 'btn play-fab');
+      playBtn.type = 'button';
+      const paintPlay = () => {
+        playBtn.innerHTML = iconSvg(autoOn ? PAUSE_D : PLAY_D);
+        playBtn.title = autoOn ? 'Pausar reproducción automática' : 'Reproducir automáticamente';
+        playBtn.setAttribute('aria-label', playBtn.title);
+        playBtn.setAttribute('aria-pressed', autoOn ? 'true' : 'false');
+        playBtn.classList.toggle('on', autoOn);
+      };
+      const autoCancelAnim = () => {
+        if (autoRaf) { cancelAnimationFrame(autoRaf); autoRaf = 0; }
+        const fin = autoFinish;
+        autoFinish = null;
+        if (fin) fin();
+      };
+      /** Desplazamiento suave (ease in-out). En #rd desactiva el scroll-snap mientras dura. */
+      const animateScroll = (target, prop, to, dur) => new Promise((resolve) => {
+        autoCancelAnim();
+        const from = target[prop];
+        const delta = to - from;
+        if (!Number.isFinite(delta) || Math.abs(delta) < 1) { resolve(); return; }
+        const time = dur || Math.min(1300, Math.max(650, 400 + Math.abs(delta) * 0.45));
+        const isRd = target === rd;
+        const prevSnap = isRd ? rd.style.scrollSnapType : '';
+        const prevBeh = target.style.scrollBehavior;
+        if (isRd) rd.style.scrollSnapType = 'none';
+        target.style.scrollBehavior = 'auto';
+        const t0 = performance.now();
+        const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+        autoFinish = () => {
+          autoFinish = null;
+          if (isRd) rd.style.scrollSnapType = prevSnap;
+          target.style.scrollBehavior = prevBeh;
+          resolve();
+        };
+        const tick = (now) => {
+          const t = Math.min(1, (now - t0) / time);
+          target[prop] = from + delta * ease(t);
+          if (t < 1) autoRaf = requestAnimationFrame(tick);
+          else { autoRaf = 0; const fin = autoFinish; if (fin) fin(); }
+        };
+        autoRaf = requestAnimationFrame(tick);
+      });
+      const autoSchedule = () => {
+        clearTimeout(autoT);
+        if (!autoOn) return;
+        autoT = setTimeout(autoTick, autoMs());
+      };
+      const autoStop = () => {
+        autoOn = false;
+        clearTimeout(autoT);
+        autoCancelAnim();
+        paintPlay();
+      };
+      const autoTick = async () => {
+        if (!autoOn) return;
+        if (document.hidden || document.querySelector('.mosaic') || !document.getElementById('rd')) { autoSchedule(); return; }
+        let more = true;
+        try { more = (await autoStep?.()) !== false; } catch (e) { console.warn('[autoplay]', e); }
+        if (!autoOn) return;
+        if (!more) { autoStop(); return; } // fin del cómic
+        autoSchedule();
+      };
+      const autoStart = () => { autoOn = true; paintPlay(); autoSchedule(); };
+      // Si el usuario interactúa (arrastra, rueda, toca), se reinicia la cuenta atrás
+      const autoBump = () => { if (!autoOn) return; autoCancelAnim(); autoSchedule(); };
+      rd.addEventListener('pointerdown', autoBump, { passive: true });
+      rd.addEventListener('wheel', autoBump, { passive: true });
+      playBtn.onclick = (ev) => {
+        try { ev.stopPropagation(); } catch (_) {}
+        if (autoOn) autoStop(); else autoStart();
+      };
+      paintPlay();
+      rd.append(playBtn);
       document.body.style.overflow = 'hidden';
       try { enterReaderFullscreen(); } catch (_) {}
       try { sizeReaderEl(rd); } catch (_) {}
@@ -478,9 +558,10 @@ export function createReader(state, d) {
         let dragging = false;
         let raf = 0;
         let pending = null;
+        let samples = [];
         const onDown = (e) => {
           if (e.button !== 0) return;
-          if (e.target.closest?.('.bar, .edge, .mosaic, .btn, .spread-fab, .q-group, input, textarea')) return;
+          if (e.target.closest?.('.bar, .edge, .mosaic, .btn, .spread-fab, .play-fab, .q-group, input, textarea')) return;
           start = {
             x: e.clientX,
             y: e.clientY,
@@ -488,6 +569,7 @@ export function createReader(state, d) {
             st: rd.scrollTop,
           };
           dragging = false;
+          samples = [{ t: performance.now(), x: e.clientX, y: e.clientY }];
           try {
             rd.classList.add('drag-scroll');
             rd.style.scrollBehavior = 'auto';
@@ -513,6 +595,8 @@ export function createReader(state, d) {
           }
           try { e.preventDefault(); } catch (_) {}
           pending = { dx, dy };
+          samples.push({ t: performance.now(), x: e.clientX, y: e.clientY });
+          if (samples.length > 12) samples.shift();
           if (!raf) raf = requestAnimationFrame(applyScroll);
         };
         const onUp = (e) => {
@@ -520,6 +604,19 @@ export function createReader(state, d) {
           const dx = e.clientX - start.x;
           const dy = e.clientY - start.y;
           const wasDrag = dragging;
+          // Velocidad del puntero (px/ms) en los últimos ~120 ms: para el "lanzamiento" al soltar
+          let vx = 0, vy = 0;
+          try {
+            const now = performance.now();
+            const recent = samples.filter((p) => now - p.t <= 120);
+            if (recent.length >= 2) {
+              const a = recent[0], b = recent[recent.length - 1];
+              const dt = Math.max(1, b.t - a.t);
+              vx = (b.x - a.x) / dt;
+              vy = (b.y - a.y) / dt;
+            }
+          } catch (_) {}
+          samples = [];
           if (raf) { cancelAnimationFrame(raf); raf = 0; }
           if (scrollWhileDrag && pending) applyScroll();
           start = null;
@@ -530,7 +627,7 @@ export function createReader(state, d) {
             rd.style.scrollBehavior = '';
           } catch (_) {}
           if (scrollWhileDrag) {
-            try { opts.onDragEnd?.(wasDrag); } catch (_) {}
+            try { opts.onDragEnd?.(wasDrag, { dx, dy, vx, vy }); } catch (_) {}
             return;
           }
           const axis = getAxis();
@@ -687,6 +784,19 @@ export function createReader(state, d) {
           } catch (err) { cnt.textContent = 'Error'; console.error(err); }
         };
         goToPage = (i) => turn(isSpread() ? toSpreadRight(i) : i);
+        // Play: página alta (ajuste Ancho) → primero se recorre hacia abajo; después, siguiente página/doble página
+        autoStep = async () => {
+          if (rd.classList.contains('zoom')) return true;
+          const canY = rd.scrollHeight > rd.clientHeight + 6;
+          if (canY && rd.scrollTop + rd.clientHeight < rd.scrollHeight - 8) {
+            await animateScroll(rd, 'scrollTop', Math.min(rd.scrollTop + rd.clientHeight * 0.9, rd.scrollHeight - rd.clientHeight));
+            return true;
+          }
+          const nxt = isSpread() ? nextSpread(n) : n + 1;
+          if (nxt > pages.length - 1 || nxt === n) return false; // fin del cómic
+          await turn(nxt);
+          return true;
+        };
         eL.onclick = () => turn(isSpread() ? prevSpread(n) : n - 1);
         eR.onclick = () => turn(isSpread() ? nextSpread(n) : n + 1);
         bindMousePageDrag(() => 'x',
@@ -837,7 +947,7 @@ export function createReader(state, d) {
 
         rd.addEventListener('touchstart', (e) => {
           // Toque en laterales/barra: no iniciar gesto de página en #rd
-          if (e.target.closest?.('.edge, .bar, .mosaic')) {
+          if (e.target.closest?.('.edge, .bar, .mosaic, .spread-fab, .play-fab, .q-group')) {
             sx = null;
             pinch = null;
             return;
@@ -886,7 +996,7 @@ export function createReader(state, d) {
         }, { passive: false });
 
         rd.addEventListener('touchend', (e) => {
-          if (e.target.closest?.('.edge, .bar, .mosaic')) {
+          if (e.target.closest?.('.edge, .bar, .mosaic, .spread-fab, .play-fab, .q-group')) {
             sx = null;
             return;
           }
@@ -1256,22 +1366,62 @@ export function createReader(state, d) {
             setTimeout(() => { syncLock = false; }, 150);
           });
         };
+        // Horizontal con ratón: al soltar encaja la página con animación suave (se asigna más abajo)
+        let horizSnap = null;
         bindMousePageDrag(
           () => (horiz ? 'x' : 'y'),
           () => { goToPage(n - 1); },
           () => { goToPage(n + 1); },
           true,
           {
-            onDragStart: () => { syncLock = true; clearTimeout(scrollT); },
-            onDragEnd: () => {
-              // Liberar y sincronizar página visible
-              requestAnimationFrame(() => {
+            onDragStart: () => { syncLock = true; clearTimeout(scrollT); autoCancelAnim(); },
+            onDragEnd: (wasDrag, info) => {
+              const release = () => requestAnimationFrame(() => {
                 syncLock = false;
                 try { onScroll(); } catch (_) {}
               });
+              if (horiz && wasDrag && horizSnap) {
+                Promise.resolve(horizSnap(info)).then(release, release);
+              } else {
+                // Liberar y sincronizar página visible
+                release();
+              }
             },
           }
         );
+
+        // Play: Vertical/Horizontal. Páginas altas (ajuste Ancho) se recorren por tramos; después, siguiente página con scroll suave
+        autoStep = async () => {
+          if (syncLock) return true;
+          if (horiz) {
+            const idx = pageAt(rd.scrollLeft + rd.clientWidth * 0.35);
+            const slot = slots[idx];
+            if (fitMode() === 'width' && slot && slot.dataset.tall === '1'
+              && slot.scrollHeight > slot.clientHeight + 6
+              && slot.scrollTop + slot.clientHeight < slot.scrollHeight - 8) {
+              await animateScroll(slot, 'scrollTop', Math.min(slot.scrollTop + slot.clientHeight * 0.9, slot.scrollHeight - slot.clientHeight));
+              return true;
+            }
+            if (idx >= pages.length - 1) return false;
+            await ensure(idx + 1);
+            ensure(idx + 2);
+            await animateScroll(rd, 'scrollLeft', posOf(idx + 1));
+            return true;
+          }
+          const top = rd.scrollTop;
+          const vhh = rd.clientHeight;
+          const idx = pageAt(top + vhh * 0.35);
+          const pBot = posOf(idx) + sizes[idx];
+          if (pBot - (top + vhh) > 12) {
+            await animateScroll(rd, 'scrollTop', Math.min(top + vhh * 0.9, pBot - vhh));
+            return true;
+          }
+          if (idx >= pages.length - 1) return false;
+          await ensure(idx + 1);
+          ensure(idx + 2);
+          await animateScroll(rd, 'scrollTop', posOf(idx + 1));
+          return true;
+        };
 
         const onScroll = () => {
           if (syncLock) return;
@@ -1413,6 +1563,24 @@ export function createReader(state, d) {
               ensure(idx - 1); ensure(idx); ensure(idx + 1); ensure(idx + 2);
             }
           };
+          horizSnap = (info = {}) => {
+            const w = Math.max(1, sizes[n] || rd.clientWidth);
+            const offset = rd.scrollLeft - posOf(n);
+            const vx = info.vx || 0;
+            let idx = n;
+            // Poco recorrido (~15 %) o un lanzamiento ligero bastan para cambiar de página
+            if (offset > w * 0.15 || vx < -0.4) idx = Math.min(pages.length - 1, n + 1);
+            else if (offset < -w * 0.15 || vx > 0.4) idx = Math.max(0, n - 1);
+            const far = pageAt(rd.scrollLeft + rd.clientWidth / 2);
+            if (Math.abs(far - n) > 1) idx = far;
+            if (idx !== n) {
+              n = idx;
+              savePage(n);
+              setCount();
+              ensure(idx - 1); ensure(idx); ensure(idx + 1); ensure(idx + 2);
+            }
+            return animateScroll(rd, 'scrollLeft', posOf(idx), 420);
+          };
           const onTs = (e) => {
             if (e.touches.length !== 1) { axis = null; return; }
             axis = null;
@@ -1494,6 +1662,8 @@ export function createReader(state, d) {
       setCount();
       return () => {
         clearTimeout(uiTimer);
+        clearTimeout(autoT);
+        try { autoCancelAnim(); } catch (_) {}
         observers.forEach((o) => { try { o.disconnect(); } catch (_) {} });
         if (observers._scroll) rd.removeEventListener('scroll', observers._scroll);
         if (observers._wheel) rd.removeEventListener('wheel', observers._wheel);

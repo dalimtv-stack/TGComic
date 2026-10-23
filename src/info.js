@@ -1,5 +1,6 @@
 import { isComicRead, getPageIndex, getPagesTotal, readProgress } from './progress.js';
 import * as sync from './sync.js';
+import { splitStats } from './quality.js';
 
 /**
  * Información y edición: cómic, serie, canal, editorial; selectores de portada.
@@ -28,6 +29,14 @@ export function createInfoEdit(d) {
     listAllIssuesForVolume, parseVolumeIdFromUrl, listIssuesForVolume,
     go, show, stack, natural,
   } = d;
+
+  /** Bloque "WebP" (amarillo) con nº de cómics y tamaño de las copias WebP; solo si las hay. */
+  const addWebpInfo = (body, row, st) => {
+    if (!st?.webp?.n) return;
+    body.append(el('div', 'info-sec info-sec-webp', 'WebP'));
+    body.append(row('Cómics', String(st.webp.n)));
+    body.append(row('Tamaño', formatBytes(st.webp.bytes)));
+  };
 
   // Aliases for helpers that may be on d as functions defined later
   const channelCoverKey = (ch) => `cc:${ch.id}`;
@@ -889,9 +898,9 @@ function showSeriesInfo(ch, seriesLabel, files) {
   try {
     document.querySelector('.info-frame.series-info')?.remove();
     const display = seriesDisplayName(ch, seriesLabel);
-    const n = files?.length || 0;
-    let bytes = 0;
-    for (const f of files || []) bytes += Number(f.size) || 0;
+    const st = splitStats(files || []);
+    const n = st.main.n;
+    const bytes = st.main.bytes;
     const frame = el('div', 'info-frame series-info');
     const box = el('div', 'info-box');
     const head = el('div', 'info-head');
@@ -920,6 +929,7 @@ function showSeriesInfo(ch, seriesLabel, files) {
     body.append(row('Editorial', ch?.group || '—'));
     body.append(row('Números', String(n)));
     body.append(row('Tamaño total', formatBytes(bytes)));
+    addWebpInfo(body, row, st);
 
     // Cómics con algún campo CV/editorial/descripción vacío
     const pending = (files || []).filter((f) => comicNeedsCvFill(f, ch));
@@ -1834,11 +1844,14 @@ async function showGroupInfo(originalName) {
     document.querySelector('.info-frame.group-info')?.remove();
     const display = groupDisplayName(originalName);
     const chs = getLIB().filter((c) => c.group === originalName);
-    let comics = 0, bytes = 0;
+    let comics = 0, bytes = 0, wn = 0, wb = 0;
     for (const ch of chs) {
       const files = (await kv.get('f:' + ch.id)) || [];
-      comics += files.length;
-      for (const f of files) bytes += Number(f.size) || 0;
+      const st = splitStats(files);
+      comics += st.main.n;
+      bytes += st.main.bytes;
+      wn += st.webp.n;
+      wb += st.webp.bytes;
     }
     const frame = el('div', 'info-frame group-info');
     const box = el('div', 'info-box');
@@ -1859,6 +1872,7 @@ async function showGroupInfo(originalName) {
     body.append(row('Canales', String(chs.length)));
     body.append(row('Cómics (listados)', String(comics)));
     body.append(row('Tamaño total', formatBytes(bytes)));
+    addWebpInfo(body, row, { webp: { n: wn, bytes: wb } });
     box.append(head, body);
     frame.append(box);
   // No cerrar al pulsar fuera: solo × / Cancelar
@@ -2082,9 +2096,9 @@ async function showChannelInfo(ch) {
     document.querySelector('.info-frame.channel-info')?.remove();
     const display = channelDisplayName(ch);
     let files = (await kv.get('f:' + ch.id)) || [];
-    const n = files.length;
-    let bytes = 0;
-    for (const f of files) bytes += Number(f.size) || 0;
+    const st = splitStats(files);
+    const n = st.main.n;
+    const bytes = st.main.bytes;
     let seriesCount = 0;
     try {
       const groups = groupSeries(files, ch.name, seriesOverrideFor(ch));
@@ -2110,6 +2124,7 @@ async function showChannelInfo(ch) {
     body.append(row('Cómics', String(n)));
     body.append(row('Series (agrupadas)', String(seriesCount)));
     body.append(row('Tamaño total', formatBytes(bytes)));
+    addWebpInfo(body, row, st);
     box.append(head, body);
     frame.append(box);
   // No cerrar al pulsar fuera: solo × / Cancelar

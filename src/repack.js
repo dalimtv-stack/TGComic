@@ -3,6 +3,7 @@
  * Móvil: poca RAM, un archivo a la vez, liberar buffers.
  */
 import * as zip from '@zip.js/zip.js';
+import { fitTelegramCaption } from './caption.js';
 import { withQualityTags, existingCopy, flattenVersions, sourceNameOf, parseQuality, QUALITY_LABEL } from './quality.js';
 
 export function createRepackTool(d) {
@@ -717,13 +718,6 @@ export function createRepackTool(d) {
           console.warn('[repack] caption rebuild', e);
         }
       }
-      // Límite Telegram 1024
-      if (caption && caption.length > 1024) {
-        const cut = caption.slice(0, 1023);
-        const lastNl = cut.lastIndexOf('\n');
-        caption = (lastNl > 200 ? cut.slice(0, lastNl) : cut).trimEnd();
-        status(`Caption recortado a ${caption.length}/1024`);
-      }
       if (!caption || !String(caption).trim()) {
         caption = typeof buildComicCaption === 'function'
           ? buildComicCaption({ fileName: outName })
@@ -736,6 +730,14 @@ export function createRepackTool(d) {
             caption = buildComicCaption(fields);
           }
         } catch (_) {}
+      }
+      // Límite Telegram 1024: la Descripción siempre se sube; si no cabe se recorta por palabras con "..."
+      {
+        const fitted = fitTelegramCaption(caption, 1024);
+        if (fitted.length < String(caption || '').length) {
+          status(`Caption ajustado a ${fitted.length}/1024 caracteres (Descripción recortada con "...")`);
+        }
+        caption = fitted;
       }
       status(caption ? ('Caption: ' + caption.length + ' caracteres') : 'Sin caption');
       try {
@@ -795,6 +797,9 @@ export function createRepackTool(d) {
       const onProgress = (p) => {
         try { ctx?.setProgress?.(p); } catch (_) {}
       };
+      // Stop de la cola: abortar descarga / descompresión / subida en curso
+      abort = false;
+      ctx?.onAbort?.(() => { abort = true; });
       await processOne({ ...item, asWebp, webpOpts }, deleteOriginal, asWebp, onStatus, webpOpts, onProgress);
     };
 
