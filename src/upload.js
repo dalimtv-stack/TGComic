@@ -322,6 +322,20 @@ export function createUploadTool(d) {
     return { series: base || chName || '', number: '', info: tags };
   }
 
+  const isGramNoise = (e) => /Missing MTProto Entity|TL definition for ID 0/i.test(String(e?.message || e || ''));
+  /** GramJS a veces lanza un error de parseo DESPUÉS de enviar: el mensaje ya está en Telegram, no reintentar (duplicaría la subida). */
+  async function sendFileSafe(client, peer, opts) {
+    try {
+      return await client.sendFile(peer, opts);
+    } catch (e) {
+      if (isGramNoise(e)) {
+        console.warn('[upload] aviso interno GramJS tras enviar (mensaje enviado):', e?.message || e);
+        return null;
+      }
+      throw e;
+    }
+  }
+
   function uiAlert(msg) {
     if (typeof window.appAlert === 'function') return window.appAlert(String(msg || ''));
     alert(String(msg || ''));
@@ -546,7 +560,7 @@ export function createUploadTool(d) {
 
     const sendWithCaption = async (fileRef, cap) => {
       try {
-        await client.sendFile(peer, {
+        await sendFileSafe(client, peer, {
           file: fileRef,
           caption: cap || '',
           forceDocument: true,
@@ -560,7 +574,7 @@ export function createUploadTool(d) {
             const short = lim === 0 ? '' : fitTelegramCaption(cap, lim);
             status?.(`Caption demasiado largo; reintento con ${short.length}/1024…`);
             try {
-              await client.sendFile(peer, {
+              await sendFileSafe(client, peer, {
                 file: fileRef,
                 caption: short,
                 forceDocument: true,
@@ -614,7 +628,7 @@ export function createUploadTool(d) {
       try {
         const browserFile = new File([blob], fileName, { type: blob.type || 'application/zip' });
         status?.('Subiendo (sendFile directo)…');
-        await client.sendFile(peer, {
+        await sendFileSafe(client, peer, {
           file: browserFile,
           caption: captionSafe,
           forceDocument: true,
@@ -654,7 +668,7 @@ export function createUploadTool(d) {
       status?.(`Reintento sendFile… (${e?.message || e})`);
     }
 
-    await client.sendFile(peer, {
+    await sendFileSafe(client, peer, {
       file: custom,
       caption: captionSafe,
       forceDocument: true,

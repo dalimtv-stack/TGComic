@@ -881,7 +881,7 @@ function showViewerConfig() {
     spreadWrap.hidden = m !== 'page';
   };
 
-  toggleGroup(
+  const modeGrp = toggleGroup(
     [
       ['page', 'Modo Página'],
       ['vertical', 'Modo Vertical'],
@@ -894,7 +894,8 @@ function showViewerConfig() {
     (v) => setPref('mode', v),
     (v) => syncSpreadVis(v)
   );
-  body.append(spreadWrap);
+  // Una Página / Dos Páginas justo debajo de "Modo Página" (antes de Modo Vertical)
+  try { modeGrp.wrap.firstElementChild.after(spreadWrap); } catch (_) { body.append(spreadWrap); }
   syncSpreadVis();
 
   section('Calidad');
@@ -1947,6 +1948,16 @@ async function migrateCacheImages() {
       migrateLegacyProgress(LIB, (id) => filesByCh[String(id)] || []);
       sessionStorage.setItem('progMigV2', '1');
     }
+  } catch (_) {}
+  // Aviso interno de GramJS tras enviar un archivo (el mensaje ya se ha enviado): no mostrarlo como error
+  try {
+    const isGramNoise = (x) => /Missing MTProto Entity|TL definition for ID 0/i.test(String(x?.message || x || ''));
+    window.addEventListener('unhandledrejection', (ev) => {
+      if (isGramNoise(ev?.reason)) { ev.preventDefault(); console.warn('[tg] aviso interno GramJS ignorado:', ev.reason?.message || ev.reason); }
+    });
+    window.addEventListener('error', (ev) => {
+      if (isGramNoise(ev?.message) || isGramNoise(ev?.error)) { ev.preventDefault(); ev.stopImmediatePropagation?.(); }
+    }, true);
   } catch (_) {}
   try { initBalance(document.querySelector('#app')); } catch (_) {}
   stack.push({ title: 'Cómics', render: groupsView });

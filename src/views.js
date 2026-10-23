@@ -222,6 +222,37 @@ export function createViews(d) {
     }
   }
 
+  /** Submenú de serie: Información · Editar TODA la serie · Marcar · Desagrupar/Agrupar · Añadir versión WebP (+ Bloquear aparte) */
+  function seriesSheetOpts(ch, seriesLabel, fs, redraw, { groupState = 'grouped', afterBack = null } = {}) {
+    const back = afterBack || redraw;
+    const files = fs || [];
+    const opts = [
+      ['Información', () => showSeriesInfo(ch, seriesLabel, files)],
+      ['Editar TODA la serie', () => showEditSeries(ch, seriesLabel, files, redraw)],
+      ['Marcar', () => {
+        sheet('Marcar', [
+          ['Marcar toda la serie como leída', () => markSeriesRead(ch, files, redraw)],
+          ['Marcar toda la serie NO como leída', () => markSeriesUnread(ch, files, redraw)],
+        ]);
+      }],
+    ];
+    if (groupState === 'short' || groupState === 'full') {
+      opts.push(['Agrupar', () => setUngroupMode(ch, seriesLabel, null, back)]);
+    } else if (files.length > 1) {
+      opts.push(['Desagrupar', () => {
+        sheet('Desagrupar', [
+          ['Desagrupar con Número y Títulos', () => setUngroupMode(ch, seriesLabel, 'short', back)],
+          ['Desagrupar con Nombre Serie, Número y Títulos', () => setUngroupMode(ch, seriesLabel, 'full', back)],
+        ]);
+      }]);
+    }
+    opts.push(['Añadir versión WebP', () => {
+      try { repackTool?.offerWebpVersionSeries?.(ch, seriesLabel, files); }
+      catch (e) { appAlert(e?.message || e); }
+    }]);
+    return opts;
+  }
+
   function comicSheetOpts(ch, f, label, redraw, ctx = {}) {
     const seriesLabel = ctx.seriesLabel || null;
     const seriesFiles = ctx.seriesFiles || null;
@@ -272,16 +303,13 @@ export function createViews(d) {
     if (groupState === 'grouped' && seriesFiles && seriesFiles.length > 1) {
       opts.push(['Desagrupar', () => {
         sheet('Desagrupar', [
-          ['Desagrupar serie', () => setUngroupMode(ch, seriesLabel, 'short', afterBack || redraw)],
-          ['Desagrupar serie (con nombre)', () => setUngroupMode(ch, seriesLabel, 'full', afterBack || redraw)],
+          ['Desagrupar con Número y Títulos', () => setUngroupMode(ch, seriesLabel, 'short', afterBack || redraw)],
+          ['Desagrupar con Nombre Serie, Número y Títulos', () => setUngroupMode(ch, seriesLabel, 'full', afterBack || redraw)],
         ]);
       }]);
     } else if (groupState === 'short' || groupState === 'full') {
-      opts.push(['Desagrupar', () => {
-        sheet('Desagrupar', [
-          ['Volver a agrupar la serie', () => setUngroupMode(ch, seriesLabel, null, afterBack || redraw)],
-        ]);
-      }]);
+      // Serie desagrupada: la opción pasa a "Agrupar"
+      opts.push(['Agrupar', () => setUngroupMode(ch, seriesLabel, null, afterBack || redraw)]);
     }
 
     opts.push(['Añadir versión WebP', () => {
@@ -1034,21 +1062,11 @@ function filesView(ch) {
           longPress: () => sheet(label, comicSheetOpts(ch, f, label, redraw, sheetCtx).concat(
             lockToggleOpts('comic', { ch, f }, label, redraw)
           )),
-          menu: (groupState && seriesLabel) ? () => sheet(seriesDisplayName(ch, seriesLabel), [
-            ['Editar TODA la serie', () => showEditSeries(ch, seriesLabel, seriesFiles || [], redraw)],
-            ...lockToggleOpts('series', { ch, seriesLabel }, seriesDisplayName(ch, seriesLabel), redraw),
-            ...(seriesFiles && seriesFiles.length > 1
-              ? [seriesFiles.some((x) => !isComicRead(ch.id, x.id))
-                  ? ['Marcar serie como leída', () => markSeriesRead(ch, seriesFiles, redraw)]
-                  : ['Marcar serie como no leída', () => markSeriesUnread(ch, seriesFiles, redraw)]]
-              : []),
-            ...(groupState === 'grouped' && seriesFiles?.length > 1
-              ? [['Desagrupar serie', () => setUngroupMode(ch, seriesLabel, 'short', redraw)],
-                 ['Desagrupar serie (con nombre)', () => setUngroupMode(ch, seriesLabel, 'full', redraw)]]
-              : groupState === 'short' || groupState === 'full'
-                ? [['Volver a agrupar la serie', () => setUngroupMode(ch, seriesLabel, null, redraw)]]
-                : []),
-          ]) : undefined,
+          menu: (groupState && seriesLabel) ? () => sheet(
+            seriesDisplayName(ch, seriesLabel),
+            seriesSheetOpts(ch, seriesLabel, seriesFiles || [], redraw, { groupState })
+              .concat(lockToggleOpts('series', { ch, seriesLabel }, seriesDisplayName(ch, seriesLabel), redraw))
+          ) : undefined,
         };
       };
 
@@ -1087,15 +1105,7 @@ function filesView(ch) {
           });
         } else {
           const seriesUnread = fs.some((f) => !isComicRead(ch.id, f.id));
-          const seriesOpts = [
-            ['Información', () => showSeriesInfo(ch, seriesLabel, fs)],
-            ['Editar TODA la serie', () => showEditSeries(ch, seriesLabel, fs, redraw)],
-            seriesUnread
-              ? ['Marcar serie como leída', () => markSeriesRead(ch, fs, redraw)]
-              : ['Marcar serie como no leída', () => markSeriesUnread(ch, fs, redraw)],
-            ['Desagrupar serie', () => setUngroupMode(ch, seriesLabel, 'short', redraw)],
-            ['Desagrupar serie (con nombre)', () => setUngroupMode(ch, seriesLabel, 'full', redraw)],
-          ];
+          const seriesOpts = seriesSheetOpts(ch, seriesLabel, fs, redraw, { groupState: 'grouped' });
           const seriesSearch = (seriesShown + ' ' + seriesLabel + ' ' + fs.map((f) => f.name).join(' ')).toLowerCase();
           const seriesRestricted = locks.isContentRestricted('series', { ch, seriesLabel });
           const seriesLockOpts = () => lockToggleOpts('series', { ch, seriesLabel }, seriesDisplayName(ch, seriesLabel), redraw);

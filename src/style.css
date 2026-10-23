@@ -792,7 +792,7 @@ textarea.meta-desc-lg.edit-input{
 
 /* Calidad Alta / Media / Baja: a la derecha del botón de doble página */
 #rd .q-group{
-  position:absolute;z-index:14;display:flex;gap:6px;
+  position:fixed;z-index:14;display:flex;gap:6px; /* fixed: en modo vertical/horizontal #rd hace scroll y absolute se iría con el contenido */
   bottom:calc(env(safe-area-inset-bottom,0px) + 58px);
   left:50%;transform:translateX(-50%);
   transition:opacity .2s;
