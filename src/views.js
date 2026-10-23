@@ -438,7 +438,8 @@ function groupsView() {
     const searchWrap = el('div', 'home-search-wrap');
     const s = el('input');
     s.id = 'home-search';
-    s.type = 'search';
+    s.type = 'text';
+    s.inputMode = 'search';
     s.placeholder = 'Buscar editorial, canal, serie o cómic…';
     s.autocomplete = 'off';
     s.value = groupsView._q || '';
@@ -786,123 +787,167 @@ function groupsView() {
       fold.append(g);
       fold.addEventListener('toggle', () => setPref('pubsOpen', fold.open ? '1' : '0'));
       homeBody.append(fold);
-    };
 
-    // ---- Autores (guionistas desde caption) ----
-    const authorsFold = el('details', 'pubs-fold authors-fold');
-    if (pref('authorsOpen', '0') === '1') authorsFold.open = true;
-    authorsFold.append(el('summary', '', 'Autores'));
-    const authorsBody = el('div', 'authors-fold-body');
-    const authorSearch = el('input', 'edit-input');
-    authorSearch.type = 'text';
-    authorSearch.inputMode = 'search';
-    authorSearch.placeholder = 'Buscar por guionista…';
-    authorSearch.autocomplete = 'off';
-    const authorResults = el('div', 'home-search-results authors-results');
-    authorsBody.append(authorSearch, authorResults);
-    authorsFold.append(authorsBody);
-    authorsFold.addEventListener('toggle', () => setPref('authorsOpen', authorsFold.open ? '1' : '0'));
-    homeBody.append(authorsFold);
+      // ---- Autores (debajo de Editoriales) ----
+      const authorsFold = el('details', 'pubs-fold authors-fold');
+      if (pref('authorsOpen', '0') === '1') authorsFold.open = true;
+      authorsFold.append(el('summary', '', 'Autores'));
+      const authorsBody = el('div', 'authors-fold-body');
+      const authorSearch = el('input', 'edit-input');
+      authorSearch.type = 'text';
+      authorSearch.inputMode = 'search';
+      authorSearch.placeholder = 'Buscar por guionista…';
+      authorSearch.autocomplete = 'off';
+      const authorTop = el('div', 'authors-top-list');
+      const authorResults = el('div', 'home-search-results authors-results');
+      authorResults.hidden = true;
+      authorsBody.append(authorSearch, authorTop, authorResults);
+      authorsFold.append(authorsBody);
+      authorsFold.addEventListener('toggle', () => setPref('authorsOpen', authorsFold.open ? '1' : '0'));
+      homeBody.append(authorsFold);
 
-    const extractWriters = (caption) => {
-      const people = [];
-      try {
-        if (typeof parseComicCaption === 'function') {
-          const p = parseComicCaption(caption || '') || {};
-          const raw = p.writer || p.guionista || p.Guionista || '';
-          String(raw).split(/[,;\/&]+/).forEach((x) => {
+      const extractWriters = (caption) => {
+        const people = [];
+        try {
+          if (typeof parseComicCaption === 'function') {
+            const p = parseComicCaption(caption || '') || {};
+            const raw = p.writer || p.guionista || p.Guionista || '';
+            String(raw).split(/[,;\/&]+/).forEach((x) => {
+              const n = String(x || '').trim();
+              if (n && n.length > 1) people.push(n);
+            });
+            if (people.length) return people;
+          }
+        } catch (_) {}
+        const m = String(caption || '').match(/Guionista\s*:\s*([^\n]+)/i);
+        if (m) {
+          m[1].split(/[,;\/&]+/).forEach((x) => {
             const n = String(x || '').trim();
             if (n && n.length > 1) people.push(n);
           });
-          return people;
         }
-      } catch (_) {}
-      const m = String(caption || '').match(/Guionista\s*:\s*([^\n]+)/i);
-      if (m) {
-        m[1].split(/[,;\/&]+/).forEach((x) => {
-          const n = String(x || '').trim();
-          if (n && n.length > 1) people.push(n);
-        });
-      }
-      return people;
-    };
+        return people;
+      };
 
-    let authorsIndex = null; // Map nameLower -> { name, items: [{ch,f}] }
-    const ensureAuthorsIndex = async () => {
-      if (authorsIndex) return authorsIndex;
-      authorsIndex = new Map();
-      const lib = (typeof LIB !== 'undefined' ? LIB : d.LIB) || [];
-      for (const ch of lib) {
-        if (locks.isContentRestricted('channel', ch)) continue;
-        let files = [];
-        try { files = (await kv.get('f:' + ch.id)) || []; } catch (_) { files = []; }
-        for (const f of files) {
-          if (!f) continue;
-          if (locks.isContentRestricted('comic', { ch, f })) continue;
-          const writers = extractWriters(f.caption || '');
-          for (const w of writers) {
-            const key = w.toLowerCase();
-            let entry = authorsIndex.get(key);
-            if (!entry) { entry = { name: w, items: [] }; authorsIndex.set(key, entry); }
-            entry.items.push({ ch, f });
+      const seriesNameOf = (ch, f) => {
+        try {
+          if (typeof seriesOverrideFor === 'function') {
+            const ov = seriesOverrideFor(ch, f);
+            if (ov && String(ov).trim()) return String(ov).trim();
+          }
+        } catch (_) {}
+        try {
+          if (typeof groupSeries === 'function') {
+            const g = groupSeries(f?.name || '', ch?.name);
+            if (g && String(g).trim()) return String(g).trim();
+          }
+        } catch (_) {}
+        try {
+          const p = parseComicName?.(comicSourceName?.(f) || f?.name || '', ch?.name);
+          if (p?.series) return String(p.series).trim();
+        } catch (_) {}
+        return '';
+      };
+
+      const openAuthorView = (authorName, items) => {
+        const title = authorName || 'Autor';
+        go(title, async () => {
+          h1.textContent = title;
+          const list = (items || []).slice().sort((a, b) => {
+            const ca = String(a.ch?.name || '');
+            const cb = String(b.ch?.name || '');
+            let c = ca.localeCompare(cb, undefined, { numeric: true, sensitivity: 'base' });
+            if (c) return c;
+            const sa = seriesNameOf(a.ch, a.f);
+            const sb = seriesNameOf(b.ch, b.f);
+            c = sa.localeCompare(sb, undefined, { numeric: true, sensitivity: 'base' });
+            if (c) return c;
+            const la = comicDisplayName(a.ch, a.f, comicDisplay(comicSourceName(a.f), a.ch?.name) || a.f?.name || '');
+            const lb = comicDisplayName(b.ch, b.f, comicDisplay(comicSourceName(b.f), b.ch?.name) || b.f?.name || '');
+            return natural(la, lb);
+          });
+          const cards = list.map(({ ch, f }) => {
+            const label = comicDisplayName(ch, f, comicDisplay(comicSourceName(f), ch?.name) || f?.name || '');
+            const ser = seriesNameOf(ch, f);
+            const sub = [ch?.name, ser].filter(Boolean).join(' · ');
+            const redraw = () => openAuthorView(authorName, items);
+            return cardNode({
+              kind: 'comic',
+              label,
+              sub,
+              cover: () => comicCover(ch, f),
+              go: () => {
+                if (!locks.guardRestricted('comic', { ch, f }, label)) return;
+                openComic(ch, f);
+              },
+              longPress: () => sheet(label, comicSheetOpts(ch, f, label, redraw).concat(
+                lockToggleOpts('comic', { ch, f }, label, redraw)
+              )),
+            });
+          });
+          grid(cards);
+        });
+      };
+
+      const paintAuthorMatches = (matches) => {
+        authorResults.replaceChildren();
+        if (!matches.length) {
+          authorResults.append(el('p', 'cover-pick-hint', 'Sin coincidencias'));
+          return;
+        }
+        for (const e of matches) {
+          const row = el('button', 'btn search-result-row');
+          row.type = 'button';
+          row.textContent = `${e.name} (${e.items.length})`;
+          row.onclick = () => openAuthorView(e.name, e.items);
+          authorResults.append(row);
+        }
+      };
+
+      (async () => {
+        const idx = new Map();
+        for (const ch of (LIB || [])) {
+          try { if (locks.isContentRestricted('channel', ch)) continue; } catch (_) {}
+          let files = [];
+          try { files = (await kv.get('f:' + ch.id)) || []; } catch (_) { files = []; }
+          for (const f of files) {
+            if (!f) continue;
+            try { if (locks.isContentRestricted('comic', { ch, f })) continue; } catch (_) {}
+            for (const w of extractWriters(f.caption || '')) {
+              const key = w.toLowerCase();
+              let entry = idx.get(key);
+              if (!entry) { entry = { name: w, items: [] }; idx.set(key, entry); }
+              entry.items.push({ ch, f });
+            }
           }
         }
-      }
-      return authorsIndex;
+        const ranked = [...idx.values()].sort((a, b) => b.items.length - a.items.length || a.name.localeCompare(b.name));
+        authorTop.replaceChildren();
+        for (const e of ranked.slice(0, 20)) {
+          const row = el('button', 'btn search-result-row author-top-row');
+          row.type = 'button';
+          row.textContent = `${e.name} (${e.items.length})`;
+          row.onclick = () => openAuthorView(e.name, e.items);
+          authorTop.append(row);
+        }
+        if (!ranked.length) {
+          authorTop.append(el('p', 'cover-pick-hint', 'No hay guionistas en los captions indexados.'));
+        }
+        authorSearch.oninput = () => {
+          const q = authorSearch.value.trim().toLowerCase();
+          if (!q) {
+            authorResults.hidden = true;
+            authorResults.replaceChildren();
+            authorTop.hidden = false;
+            return;
+          }
+          authorTop.hidden = true;
+          authorResults.hidden = false;
+          paintAuthorMatches(ranked.filter((e) => e.name.toLowerCase().includes(q)).slice(0, 40));
+        };
+      })().catch((e) => console.warn('[authors]', e));
     };
 
-    const openAuthorView = (authorName, items) => {
-      const title = authorName || 'Autor';
-      go(title, async () => {
-        h1.textContent = title;
-        const list = (items || []).slice().sort((a, b) => {
-          const la = comicDisplayName(a.ch, a.f, comicDisplay(comicSourceName(a.f), a.ch?.name) || a.f?.name || '');
-          const lb = comicDisplayName(b.ch, b.f, comicDisplay(comicSourceName(b.f), b.ch?.name) || b.f?.name || '');
-          return natural(la, lb);
-        });
-        const cards = list.map(({ ch, f }) => {
-          const label = comicDisplayName(ch, f, comicDisplay(comicSourceName(f), ch?.name) || f?.name || '');
-          const redraw = () => openAuthorView(authorName, items);
-          return cardNode({
-            kind: 'comic',
-            label,
-            sub: (ch.name || '') + (f.size ? ' · ' + (typeof formatBytes === 'function' ? formatBytes(f.size) : '') : ''),
-            cover: () => comicCover(ch, f),
-            go: () => {
-              if (!locks.guardRestricted('comic', { ch, f }, label)) return;
-              openComic(ch, f);
-            },
-            longPress: () => sheet(label, comicSheetOpts(ch, f, label, redraw).concat(
-              lockToggleOpts('comic', { ch, f }, label, redraw)
-            )),
-          });
-        });
-        grid(cards);
-      });
-    };
-
-    authorSearch.oninput = async () => {
-      const q = authorSearch.value.trim().toLowerCase();
-      authorResults.replaceChildren();
-      if (!q) { authorResults.hidden = true; return; }
-      authorResults.hidden = false;
-      const idx = await ensureAuthorsIndex();
-      const matches = [...idx.values()]
-        .filter((e) => e.name.toLowerCase().includes(q))
-        .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
-        .slice(0, 40);
-      if (!matches.length) {
-        authorResults.append(el('p', 'cover-pick-hint', 'Sin coincidencias'));
-        return;
-      }
-      for (const e of matches) {
-        const row = el('button', 'btn search-result-row');
-        row.type = 'button';
-        row.textContent = `${e.name} (${e.items.length})`;
-        row.onclick = () => openAuthorView(e.name, e.items);
-        authorResults.append(row);
-      }
-    };
 
     const showResults = (list, q) => {
       resultsHost.replaceChildren();

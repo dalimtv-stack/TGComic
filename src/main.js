@@ -589,6 +589,49 @@ const { getCover, saveCoverBlob, optimizeImageBlob, comicCover, pump, io } = cov
 
 // ---------- Navegación y vistas ----------
 const app = $('#app'), titleEl = $('#title'), backBtn = $('#back'), actions = $('#actions');
+
+const REFRESH_D = 'M17.65,6.35C16.2,4.9 14.21,4 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18A6,6 0 0,1 6,12A6,6 0 0,1 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z';
+let homeRefreshBtn = $('#home-refresh');
+if (!homeRefreshBtn) {
+  homeRefreshBtn = document.createElement('button');
+  homeRefreshBtn.id = 'home-refresh';
+  homeRefreshBtn.className = 'btn home-refresh-btn';
+  homeRefreshBtn.type = 'button';
+  homeRefreshBtn.title = 'Actualizar listados';
+  homeRefreshBtn.setAttribute('aria-label', 'Actualizar listados de cómics, series y canales');
+  homeRefreshBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="' + REFRESH_D + '"/></svg>';
+  const topEl = $('#top');
+  if (topEl && backBtn) topEl.insertBefore(homeRefreshBtn, backBtn.nextSibling);
+  else if (topEl) topEl.insertBefore(homeRefreshBtn, topEl.firstChild);
+}
+homeRefreshBtn.hidden = true;
+homeRefreshBtn.onclick = async () => {
+  if (homeRefreshBtn.dataset.busy === '1') return;
+  homeRefreshBtn.dataset.busy = '1';
+  homeRefreshBtn.disabled = true;
+  const prevTitle = titleEl.textContent;
+  try {
+    titleEl.textContent = 'Actualizando…';
+    const lib = LIB || [];
+    // Forzar re-lectura de mensajes de cada canal (actualiza f:<id> en IndexedDB)
+    for (let i = 0; i < lib.length; i++) {
+      const ch = lib[i];
+      try {
+        titleEl.textContent = `Actualizando… ${i + 1}/${lib.length}`;
+        await fetchFiles(ch);
+      } catch (e) {
+        console.warn('[refresh]', ch?.name, e);
+      }
+    }
+    try { searchIndex = null; } catch (_) {}
+  } finally {
+    homeRefreshBtn.dataset.busy = '0';
+    homeRefreshBtn.disabled = false;
+    titleEl.textContent = prevTitle || 'Cómics';
+  }
+  try { refreshView(); } catch (_) { try { groupsView(); } catch (_) {} }
+};
+
 const top = $('#top');
 const h1 = titleEl;
 const search = null; // el buscador se crea dentro de cada vista
@@ -1099,6 +1142,7 @@ function show() {
   }
   titleEl.textContent = e.title || 'Cómics';
   backBtn.hidden = stack.length < 2;
+  if (homeRefreshBtn) homeRefreshBtn.hidden = stack.length >= 2;
   $('#top')?.classList.toggle('home', stack.length < 2);
   headerHidden = false;
   $('#top')?.classList.remove('hide');
@@ -1778,7 +1822,7 @@ const repackTool = createRepackTool({
     return (x / (1024 * 1024)).toFixed(2) + ' MB';
   },
   onUploadDone: async (ch, meta = {}) => {
-    // Misma lógica que subida: refrescar listado actual
+    // Actualizar caché del canal siempre
     try {
       if (ch?.id) await fetchFiles(ch);
     } catch (_) {}
@@ -1796,9 +1840,22 @@ const repackTool = createRepackTool({
         }
       }
     } catch (_) {}
+    // Solo refrescar la vista visible si le afecta (no la home genérica)
     try {
+      if (document.getElementById('rd')) { pendingRefresh = true; return; }
+      if (stack.length < 2) {
+        // Home: no repintar solo porque subió un cómic a una editorial/canal ya existente
+        return;
+      }
       const top = stack[stack.length - 1];
-      if (top && !document.getElementById('rd')) top.scrollY = window.scrollY || 0;
+      const title = String(top?.title || '').toLowerCase();
+      const chName = String(ch?.name || '').toLowerCase();
+      const group = String(ch?.group || '').toLowerCase();
+      const affects =
+        (chName && title && (title === chName || title.includes(chName) || chName.includes(title)))
+        || (group && title && (title === group || title.includes(group)));
+      if (!affects) return;
+      top.scrollY = window.scrollY || 0;
       refreshView();
     } catch (_) {}
   },
