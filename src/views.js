@@ -288,13 +288,13 @@ export function createViews(d) {
         const markOpts = [
           unread
             ? ['Marcar CÓMIC como leído', () => markComicRead(ch, f, redraw)]
-            : ['Marcar CÓMIC como no leído', () => markComicUnread(ch, f, redraw)],
+            : ['Marcar CÓMIC como NO leído', () => markComicUnread(ch, f, redraw)],
         ];
         if (seriesFiles && seriesFiles.length > 1) {
           const anyUnread = seriesFiles.some((x) => !isComicRead(ch.id, x.id));
           markOpts.push(anyUnread
             ? ['Marcar SERIE como leída', () => markSeriesRead(ch, seriesFiles, redraw)]
-            : ['Marcar SERIE como no leída', () => markSeriesUnread(ch, seriesFiles, redraw)]);
+            : ['Marcar SERIE como NO leída', () => markSeriesUnread(ch, seriesFiles, redraw)]);
         }
         sheet('Marcar', markOpts);
       }],
