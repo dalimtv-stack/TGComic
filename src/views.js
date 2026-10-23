@@ -866,16 +866,22 @@ function groupsView() {
             const lb = comicDisplayName(b.ch, b.f, comicDisplay(comicSourceName(b.f), b.ch?.name) || b.f?.name || '');
             return natural(la, lb);
           });
-          const cards = list.map(({ ch, f }) => {
+          const redraw = () => openAuthorView(authorName, items);
+          const itemsForGrid = list.map(({ ch, f }) => {
             const label = comicDisplayName(ch, f, comicDisplay(comicSourceName(f), ch?.name) || f?.name || '');
             const ser = seriesNameOf(ch, f);
             const sub = [ch?.name, ser].filter(Boolean).join(' · ');
-            const redraw = () => openAuthorView(authorName, items);
-            return cardNode({
+            const comicRestricted = (() => {
+              try { return locks.isContentRestricted('comic', { ch, f }); } catch (_) { return false; }
+            })();
+            return {
               kind: 'comic',
-              label,
-              sub,
-              cover: () => comicCover(ch, f),
+              label: comicRestricted ? '' : label,
+              sub: comicRestricted ? '' : sub,
+              cover: () => comicRestricted
+                ? locks.lockedCoverNode(ART)
+                : comicCover(ch, f),
+              hiddenMeta: comicRestricted,
               go: () => {
                 if (!locks.guardRestricted('comic', { ch, f }, label)) return;
                 openComic(ch, f);
@@ -883,9 +889,9 @@ function groupsView() {
               longPress: () => sheet(label, comicSheetOpts(ch, f, label, redraw).concat(
                 lockToggleOpts('comic', { ch, f }, label, redraw)
               )),
-            });
+            };
           });
-          grid(cards);
+          grid(itemsForGrid, false, '', 'comics');
         });
       };
 

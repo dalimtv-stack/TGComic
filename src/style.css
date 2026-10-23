@@ -4,8 +4,18 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 #top{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:.5rem;padding:calc(var(--sat) + .5rem) .75rem .5rem;background:rgba(15,16,18,.85);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);transition:transform .25s ease,opacity .25s ease}
 #top.hide{transform:translateY(-110%);opacity:0;pointer-events:none}
 #top h1{flex:1;margin:0;font-size:1.15rem;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#top.home h1{text-align:center}
-#top.home #actions{position:absolute;right:.75rem}
+#top.home{position:sticky}
+#top.home h1{
+  text-align:center;
+  position:absolute;left:0;right:0;
+  margin:0 auto;width:100%;
+  pointer-events:none;z-index:0;
+}
+#top.home #back,
+#top.home #home-refresh{
+  position:relative;z-index:1;
+}
+#top.home #actions{position:absolute;right:.75rem;z-index:1}
 .btn{min-width:44px;height:44px;padding:0 .9rem;border:0;border-radius:12px;background:var(--card);color:inherit;font:inherit;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
 .btn:active{opacity:.6}
 #back{font-size:1.6rem;padding:0 .6rem}

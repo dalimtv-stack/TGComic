@@ -627,7 +627,7 @@ homeRefreshBtn.onclick = async () => {
   } finally {
     homeRefreshBtn.dataset.busy = '0';
     homeRefreshBtn.disabled = false;
-    titleEl.textContent = prevTitle || 'Cómics';
+    titleEl.textContent = prevTitle || 'TGComics';
   }
   try { refreshView(); } catch (_) { try { groupsView(); } catch (_) {} }
 };
@@ -1140,7 +1140,7 @@ function show() {
     try { msg('Error de navegación. Recarga la página.'); } catch (_) {}
     return;
   }
-  titleEl.textContent = e.title || 'Cómics';
+  titleEl.textContent = e.title || (stack.length < 2 ? 'TGComics' : 'Cómics');
   backBtn.hidden = stack.length < 2;
   if (homeRefreshBtn) homeRefreshBtn.hidden = stack.length >= 2;
   $('#top')?.classList.toggle('home', stack.length < 2);
@@ -2076,7 +2076,7 @@ async function migrateCacheImages() {
     }, true);
   } catch (_) {}
   try { initBalance(document.querySelector('#app')); } catch (_) {}
-  stack.push({ title: 'Cómics', render: groupsView });
+  stack.push({ title: 'TGComics', render: groupsView });
   show();
   // Optimizar caché antigua en segundo plano (WebP + menos resolución)
   migrateCacheImages();
