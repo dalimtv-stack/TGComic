@@ -230,20 +230,22 @@ export function createViews(d) {
       ['Información', () => showSeriesInfo(ch, seriesLabel, files)],
       ['Editar TODA la serie', () => showEditSeries(ch, seriesLabel, files, redraw)],
       ['Marcar', () => {
+        const openRoot = () => sheet(seriesDisplayName(ch, seriesLabel), seriesSheetOpts(ch, seriesLabel, files, redraw, { groupState, afterBack }));
         sheet('Marcar', [
           ['Marcar toda la serie como leída', () => markSeriesRead(ch, files, redraw)],
           ['Marcar toda la serie NO como leída', () => markSeriesUnread(ch, files, redraw)],
-        ]);
+        ], { cancelLabel: 'Volver', onCancel: openRoot });
       }],
     ];
     if (groupState === 'short' || groupState === 'full') {
       opts.push(['Agrupar', () => setUngroupMode(ch, seriesLabel, null, back)]);
     } else if (files.length > 1) {
       opts.push(['Desagrupar', () => {
+        const openRoot = () => sheet(seriesDisplayName(ch, seriesLabel), seriesSheetOpts(ch, seriesLabel, files, redraw, { groupState, afterBack }));
         sheet('Desagrupar', [
           ['Desagrupar con Número y Títulos', () => setUngroupMode(ch, seriesLabel, 'short', back)],
           ['Desagrupar con Nombre Serie, Número y Títulos', () => setUngroupMode(ch, seriesLabel, 'full', back)],
-        ]);
+        ], { cancelLabel: 'Volver', onCancel: openRoot });
       }]);
     }
     opts.push(['Añadir versión WebP', () => {
@@ -262,6 +264,9 @@ export function createViews(d) {
     const opts = [
       ['Información', () => showComicInfo(ch, f, label)],
       ['Editar', () => {
+        const openRoot = () => sheet(label, comicSheetOpts(ch, f, label, redraw, ctx).concat(
+          lockToggleOpts('comic', { ch, f }, label, redraw)
+        ));
         const openEditMenu = () => {
           const editOpts = [
             ['Editar datos del cómic', () => showEditComicTitle(ch, f, label, redraw)],
@@ -279,11 +284,14 @@ export function createViews(d) {
               showPickCoverFromComic(ch, f, () => { try { redraw?.(); } catch (_) {} openEditMenu(); });
             } else appAlert('Elegir portada no disponible');
           }]);
-          sheet('Editar', editOpts);
+          sheet('Editar', editOpts, { cancelLabel: 'Volver', onCancel: openRoot });
         };
         openEditMenu();
       }],
       ['Marcar', () => {
+        const openRoot = () => sheet(label, comicSheetOpts(ch, f, label, redraw, ctx).concat(
+          lockToggleOpts('comic', { ch, f }, label, redraw)
+        ));
         const unread = !isComicRead(ch.id, f.id);
         const markOpts = [
           unread
@@ -296,16 +304,19 @@ export function createViews(d) {
             ? ['Marcar SERIE como leída', () => markSeriesRead(ch, seriesFiles, redraw)]
             : ['Marcar SERIE como NO leída', () => markSeriesUnread(ch, seriesFiles, redraw)]);
         }
-        sheet('Marcar', markOpts);
+        sheet('Marcar', markOpts, { cancelLabel: 'Volver', onCancel: openRoot });
       }],
     ];
 
     if (groupState === 'grouped' && seriesFiles && seriesFiles.length > 1) {
       opts.push(['Desagrupar', () => {
+        const openRoot = () => sheet(label, comicSheetOpts(ch, f, label, redraw, ctx).concat(
+          lockToggleOpts('comic', { ch, f }, label, redraw)
+        ));
         sheet('Desagrupar', [
           ['Desagrupar con Número y Títulos', () => setUngroupMode(ch, seriesLabel, 'short', afterBack || redraw)],
           ['Desagrupar con Nombre Serie, Número y Títulos', () => setUngroupMode(ch, seriesLabel, 'full', afterBack || redraw)],
-        ]);
+        ], { cancelLabel: 'Volver', onCancel: openRoot });
       }]);
     } else if (groupState === 'short' || groupState === 'full') {
       // Serie desagrupada: la opción pasa a "Agrupar"
@@ -435,9 +446,10 @@ function groupsView() {
     const searchWrap = el('div', 'home-search-wrap');
     const s = el('input');
     s.id = 'home-search';
-    s.type = 'search';
+    s.type = 'text'; // text: evita la × nativa del navegador (type=search) + la nuestra
     s.placeholder = 'Buscar editorial, canal, serie o cómic…';
     s.autocomplete = 'off';
+    s.inputMode = 'search';
     s.value = groupsView._q || '';
     const clearBtn = el('button', 'search-clear home-search-clear', '×');
     clearBtn.type = 'button';
@@ -451,6 +463,18 @@ function groupsView() {
       s.focus();
     };
     searchWrap.append(s, clearBtn);
+    // Clic fuera de la búsqueda / resultados → cerrar listado
+    const onDocClick = (ev) => {
+      if (!groupsView._q) return;
+      if (searchWrap.contains(ev.target) || resultsHost.contains(ev.target)) return;
+      s.value = '';
+      groupsView._q = '';
+      clearBtn.hidden = true;
+      showResults([], '');
+    };
+    setTimeout(() => document.addEventListener('pointerdown', onDocClick, true), 0);
+    // limpiar al repintar home
+    groupsView._searchOutside = onDocClick;
     nodes.push(searchWrap);
 
     const resultsHost = el('div', 'home-search-results');
@@ -716,6 +740,102 @@ function groupsView() {
       })();
       const gs = [...new Set(LIB.map((c) => c.group))];
       gs.sort((a, b) => natural(groupDisplayName(a), groupDisplayName(b)));
+
+      // --- Autores (guionistas del caption) ---
+      const authorsFold = el('details', 'pubs-fold authors-fold');
+      if (pref('authorsOpen', '0') === '1') authorsFold.open = true;
+      authorsFold.append(el('summary', '', 'Autores'));
+      const authorsBody = el('div', 'authors-fold-body');
+      const aSearch = el('input', 'edit-input authors-search');
+      aSearch.type = 'text';
+      aSearch.placeholder = 'Buscar por guionista…';
+      aSearch.autocomplete = 'off';
+      const aResults = el('div', 'authors-results');
+      authorsBody.append(aSearch, aResults);
+      authorsFold.append(authorsBody);
+      authorsFold.addEventListener('toggle', () => setPref('authorsOpen', authorsFold.open ? '1' : '0'));
+      homeBody.append(authorsFold);
+
+      let authorsIndex = null; // Map nameLower -> { name, items: [{ch,f}] }
+      const loadAuthors = async () => {
+        if (authorsIndex) return authorsIndex;
+        const map = new Map();
+        const LIB = libNow();
+        for (const ch of LIB) {
+          let files = [];
+          try { files = (await kv.get('f:' + ch.id)) || []; } catch (_) {}
+          for (const f of files) {
+            const cap = String(f?.caption || '');
+            const m = cap.match(/^\s*Guionista\s*:\s*(.+)$/im);
+            if (!m) continue;
+            const people = String(m[1]).split(/\s*\|\s*|\s*;\s*|\s*,\s*/).map((x) => x.trim()).filter(Boolean);
+            for (const name of people) {
+              const key = name.toLowerCase();
+              if (!map.has(key)) map.set(key, { name, items: [] });
+              map.get(key).items.push({ ch, f });
+            }
+          }
+        }
+        authorsIndex = map;
+        return map;
+      };
+      const paintAuthors = (q) => {
+        aResults.replaceChildren();
+        const qq = String(q || '').trim().toLowerCase();
+        if (!qq) return;
+        loadAuthors().then((map) => {
+          if ((aSearch.value || '').trim().toLowerCase() !== qq) return;
+          const hits = [];
+          for (const [k, v] of map) {
+            if (k.includes(qq)) hits.push(v);
+          }
+          hits.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+          if (!hits.length) {
+            aResults.append(el('p', 'home-search-empty', 'Sin autores para «' + q + '»'));
+            return;
+          }
+          for (const h of hits.slice(0, 40)) {
+            const btn = el('button', 'home-search-row authors-row');
+            btn.type = 'button';
+            const text = el('div', 'home-search-text');
+            text.append(el('b', '', h.name));
+            text.append(el('small', '', h.items.length + (h.items.length === 1 ? ' cómic' : ' cómics')));
+            btn.append(text);
+            btn.onclick = () => {
+              // Pantalla tipo canales: todos los cómics del autor
+              go(h.name, async (e) => {
+                const items = [];
+                for (const { ch, f } of h.items) {
+                  if (locks.isContentRestricted('comic', { ch, f })) continue;
+                  const base = comicDisplay(comicSourceName(f), ch.name);
+                  const lab = comicDisplayName(ch, f, base);
+                  items.push({
+                    kind: 'comic',
+                    label: lab,
+                    sub: channelDisplayName(ch) + ' · ' + sizeLabel(f, ch),
+                    searchText: (lab + ' ' + (f.name || '')).toLowerCase(),
+                    isUnread: !isComicRead(ch.id, f.id),
+                    cover: () => comicCover(ch, f),
+                    go: () => openComic(ch, f),
+                    longPress: () => sheet(lab, comicSheetOpts(ch, f, lab, () => {}).concat(
+                      lockToggleOpts('comic', { ch, f }, lab, () => {})
+                    )),
+                  });
+                }
+                items.sort((a, b) => natural(a.label, b.label));
+                grid(items, true, 'Buscar en ' + h.name + '…', 'comics');
+              });
+            };
+            aResults.append(btn);
+          }
+        });
+      };
+      let aTimer = null;
+      aSearch.oninput = () => {
+        clearTimeout(aTimer);
+        aTimer = setTimeout(() => paintAuthors(aSearch.value), 160);
+      };
+
       const fold = el('details', 'pubs-fold');
       if (pref('pubsOpen', '0') === '1') fold.open = true;
       const sum = el('summary', '', 'Editoriales');
@@ -903,6 +1023,15 @@ function channelsView(g) {
           longPress: () => sheet(label, [
             ['Información', () => showChannelInfo(ch)],
             ['Editar', () => showEditChannel(ch, files, () => build())],
+            ['Añadir versión WebP', () => {
+              try {
+                if (typeof repackTool?.offerWebpVersionChannel === 'function') {
+                  repackTool.offerWebpVersionChannel(ch, files);
+                } else {
+                  appAlert('Función WebP de canal no disponible.');
+                }
+              } catch (e) { appAlert(e?.message || e); }
+            }],
             ...lockToggleOpts('channel', ch, label, () => build()),
           ]),
         });
@@ -913,7 +1042,8 @@ function channelsView(g) {
       const nodes = [];
       const searchWrap = el('div', 'home-search-wrap');
       const s = el('input');
-      s.type = 'search';
+      s.type = 'text';
+      s.inputMode = 'search';
       s.placeholder = 'Buscar canal, serie o cómic en esta editorial…';
       s.autocomplete = 'off';
       s.value = channelsView._q?.[g] || '';

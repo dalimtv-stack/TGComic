@@ -363,7 +363,8 @@ function grid(items, withSearch, searchPlaceholder, gridKind) {
     // Mismo layout que canales (editorial): home-search-wrap, sin #search con márgenes extra
     const wrap = el('div', 'home-search-wrap');
     const s = el('input');
-    s.type = 'search';
+    s.type = 'text';
+    s.inputMode = 'search';
     s.placeholder = searchPlaceholder || 'Buscar…';
     s.autocomplete = 'off';
     const clear = el('button', 'search-clear', '×');
@@ -386,15 +387,31 @@ function grid(items, withSearch, searchPlaceholder, gridKind) {
   // No forzar scroll a 0: show()/go() restauran la posición al volver del lector
 }
 
-function sheet(title, opts) {
+function sheet(title, opts, meta = {}) {
   // Un solo menú a la vez (Android a veces abre dos)
   document.querySelectorAll('.sheet').forEach((s) => s.remove());
-  const bg = el('div', 'sheet'), box = el('div', 'box'), close = () => bg.remove();
+  const bg = el('div', 'sheet'), box = el('div', 'box');
+  const close = () => bg.remove();
   box.append(el('div', 'sh-title', title));
-  for (const [label, fn] of opts) { const b = el('button', 'btn', label); b.onclick = () => { close(); fn(); }; box.append(b); }
-  const c = el('button', 'btn', 'Cancelar'); c.onclick = close;
+  for (const [label, fn] of opts) {
+    const b = el('button', 'btn', label);
+    b.onclick = () => { close(); try { fn(); } catch (_) {} };
+    box.append(b);
+  }
+  // meta.cancelLabel: "Volver" en submenús; meta.onCancel: reabre el menú padre
+  const cancelLab = meta.cancelLabel || 'Cancelar';
+  const c = el('button', 'btn', cancelLab);
+  c.onclick = () => {
+    close();
+    try { meta.onCancel?.(); } catch (_) {}
+  };
   box.append(c);
-  bg.onclick = (ev) => { if (ev.target === bg) close(); };
+  bg.onclick = (ev) => {
+    if (ev.target === bg) {
+      close();
+      try { meta.onCancel?.(); } catch (_) {}
+    }
+  };
   bg.append(box);
   document.body.append(bg);
 }

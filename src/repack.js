@@ -1404,8 +1404,107 @@ export function createRepackTool(d) {
     document.body.append(frame);
   }
 
+
+  /**
+   * Añadir versión WebP a TODOS los cómics de un canal (misma UI que serie).
+   */
+  function offerWebpVersionChannel(ch, files) {
+    const list = (files || []).filter(Boolean);
+    if (!ch || !list.length) {
+      try {
+        const m = 'No hay cómics en este canal.';
+        if (typeof window.appAlert === 'function') window.appAlert(m);
+        else alert(m);
+      } catch (_) {}
+      return;
+    }
+    // Reutilizar la misma lógica/UI que serie, con etiqueta de canal
+    const label = (ch.name || 'Canal');
+    document.querySelector('.info-frame.webp-version')?.remove();
+    const frame = el('div', 'info-frame webp-version');
+    const box = el('div', 'info-box');
+    const head = el('div', 'info-head');
+    head.append(el('span', '', 'Añadir versión WebP'));
+    const close = el('button', 'btn info-close', '×');
+    close.onclick = () => frame.remove();
+    head.append(close);
+    const body = el('div', 'info-body');
+
+    body.append(el('p', 'cover-pick-hint',
+      `Canal «${label}» · ${list.length} cómic(s). Se descargará cada cómic, se convertirán sus páginas a WebP y se subirá la copia al mismo canal (un trabajo por cómic en la Cola de tareas).`
+    ));
+
+    const mkRow = (title, text, checked) => {
+      const row = el('label', 'repack-check');
+      const cb = el('input');
+      cb.type = 'checkbox';
+      cb.checked = checked;
+      row.append(cb, document.createTextNode(' '), el('b', '', title), document.createTextNode(' - ' + text));
+      body.append(row);
+      return cb;
+    };
+    const midCb = mkRow('Media', 'convertir todos los cómics del canal a WebP', true);
+    const lowCb = mkRow('Baja', 'convertir todos los cómics del canal a WebP y redimensionar las imágenes grandes a 2400px', false);
+
+    body.append(el('label', 'sync-label', 'Calidad WebP (0–1)'));
+    const qualityInp = el('input', 'edit-input');
+    qualityInp.type = 'text';
+    qualityInp.value = '0.40';
+    qualityInp.placeholder = '0.40';
+    body.append(qualityInp);
+
+    const actions = el('div', 'edit-actions');
+    const cancel = el('button', 'btn', 'Cancelar');
+    cancel.onclick = () => frame.remove();
+    const goBtn = el('button', 'btn edit-save', 'Subir versiones WebP');
+    goBtn.onclick = async () => {
+      const targets = [];
+      if (midCb.checked) targets.push({ key: 'mid', resize: false, label: 'Media' });
+      if (lowCb.checked) targets.push({ key: 'low', resize: true, label: 'Baja' });
+      if (!targets.length) { await askAlert('Selecciona al menos una calidad (Media o Baja).'); return; }
+      let quality = parseFloat(String(qualityInp.value).replace(',', '.'));
+      if (!(quality > 0 && quality <= 1)) quality = 0.40;
+
+      const plans = { mid: [], low: [] };
+      const skipped = [];
+      for (const f of list) {
+        for (const t of targets) {
+          const outName = withQualityTags(sourceNameOf(f), { webp: true, resize: t.resize });
+          if (existingCopy(flattenVersions([f]), outName)) {
+            skipped.push(`· ${outName}  (${t.label})`);
+            continue;
+          }
+          plans[t.key].push({
+            ch, f, outName, asWebp: true,
+            webpOpts: { quality, resize: t.resize, maxEdge: 2400 },
+            caption: f.caption || '',
+          });
+        }
+      }
+      frame.remove();
+      const todo = plans.mid.length + plans.low.length;
+      if (skipped.length) {
+        await askAlert(
+          'Ya existen estas versiones y no se van a hacer:\n\n' + skipped.join('\n')
+          + (todo ? `\n\nSe crearán las ${todo} restantes.` : '\n\nNo queda nada por crear.')
+        );
+      }
+      for (const t of targets) {
+        const items = plans[t.key];
+        if (!items.length) continue;
+        await runQueue(items, false, true, items[0].webpOpts);
+      }
+    };
+    actions.append(cancel, goBtn);
+    body.append(actions);
+    box.append(head, body);
+    frame.append(box);
+    document.body.append(frame);
+  }
+
   return {
     offerWebpVersionSeries,
+    offerWebpVersionChannel,
     showRepackFrame,
     isRunning: () => running,
     hideFloatingUi,
@@ -1414,4 +1513,5 @@ export function createRepackTool(d) {
     suggestUploadName,
   };
 }
+
 
