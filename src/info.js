@@ -1688,7 +1688,7 @@ async function getChannelCoverBlob(ch, files) {
   }
   return null;
 }
-async async function setChannelCoverBlob(ch, blob) {
+async function setChannelCoverBlob(ch, blob) {
   if (!blob) return;
   const key = channelCoverKey(ch);
   try {
@@ -1849,7 +1849,7 @@ async function getGithubChannelArtBlob(ch, preferredUrl) {
 async function clearGroupCover(name) {
   try { await kv.del(groupCoverKey(name)); } catch (_) {}
 }
-async async function setGroupCoverBlob(name, blob) {
+async function setGroupCoverBlob(name, blob) {
   if (!blob) return;
   const key = groupCoverKey(name);
   try {
