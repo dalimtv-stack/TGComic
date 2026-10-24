@@ -26,7 +26,7 @@ export function createViews(d) {
     go, show, stack,
     sheet, bindLongPress, grid,
     showGroupInfo, showEditGroup, showChannelInfo, showEditChannel,
-    showSeriesInfo, showEditSeries, showComicInfo, showEditComicTitle,
+    showSeriesInfo, showEditSeries, showSeriesCvFillForm, showComicInfo, showEditComicTitle,
     showCoverFitEditor, showPickCoverFromComic, getCoverFit,
     ungroupMap, setUngroupMode, getComicSeriesOverride,
     firstAvailableCover, kv, natural,
@@ -229,7 +229,20 @@ export function createViews(d) {
     const files = fs || [];
     const opts = [
       ['Información', () => showSeriesInfo(ch, seriesLabel, files)],
-      ['Editar TODA la serie', () => showEditSeries(ch, seriesLabel, files, redraw)],
+      ['Editar', () => {
+        const openRoot = () => sheet(seriesDisplayName(ch, seriesLabel), seriesSheetOpts(ch, seriesLabel, files, redraw, { groupState, afterBack }));
+        const editOpts = [
+          ['Editar TODA la serie', () => showEditSeries(ch, seriesLabel, files, redraw)],
+          ['Recargar fichas Telegram (Cómic Vine)', () => {
+            if (typeof showSeriesCvFillForm === 'function') {
+              showSeriesCvFillForm(ch, seriesLabel, files, { overwrite: true });
+            } else {
+              appAlert('Función no disponible');
+            }
+          }],
+        ];
+        sheet('Editar', editOpts, { cancelLabel: 'Volver', onCancel: openRoot });
+      }],
       ['Marcar', () => {
         const openRoot = () => sheet(seriesDisplayName(ch, seriesLabel), seriesSheetOpts(ch, seriesLabel, files, redraw, { groupState, afterBack }));
         sheet('Marcar', [

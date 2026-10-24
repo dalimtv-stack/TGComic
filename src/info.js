@@ -1025,19 +1025,24 @@ function normIssueKey(n) {
  * Título original, Guionista, Dibujante, Fecha (resto desde archivo).
  * No toca cómics que ya tengan esos campos.
  */
-function showSeriesCvFillForm(ch, seriesLabel, files) {
+function showSeriesCvFillForm(ch, seriesLabel, files, opts = {}) {
+  const overwrite = !!(opts && opts.overwrite);
   document.querySelector('.info-frame.series-cv-fill')?.remove();
   const display = seriesDisplayName(ch, seriesLabel);
   const frame = el('div', 'info-frame series-cv-fill');
   const box = el('div', 'info-box');
   const head = el('div', 'info-head');
-  head.append(el('span', '', 'Rellenar serie (Comic Vine)'));
+  head.append(el('span', '', overwrite
+    ? 'Recargar fichas Telegram (Comic Vine)'
+    : 'Rellenar serie (Comic Vine)'));
   const close = el('button', 'btn info-close', '×');
   close.onclick = () => frame.remove();
   head.append(close);
   const body = el('div', 'info-body');
   body.append(el('p', 'cover-pick-hint',
-    'Serie: ' + display + '. Pega la URL del volumen en Comic Vine. Se rellenan solo los campos vacíos: Título original, Guionista, Dibujante, Fecha y Descripción (Comic Vine); Editorial desde la editorial del canal en TGComic. Nombre de archivo, Título España y Serie salen del archivo / serie local. Lo que ya esté relleno no se sobrescribe.'
+    overwrite
+      ? ('Serie: ' + display + '. Pega la URL del volumen en Comic Vine. Se SOBRESCRIBEN Título original, Guionista, Dibujante, Fecha, Descripción y Editorial (si hay dato nuevo). Nombre de archivo, Título España y Serie se mantienen del archivo / serie local.')
+      : ('Serie: ' + display + '. Pega la URL del volumen en Comic Vine. Se rellenan solo los campos vacíos: Título original, Guionista, Dibujante, Fecha y Descripción (Comic Vine); Editorial desde la editorial del canal en TGComic. Nombre de archivo, Título España y Serie salen del archivo / serie local. Lo que ya esté relleno no se sobrescribe.')
   ));
   body.append(el('label', 'sync-label', 'URL de la serie (Comic Vine)'));
   const urlInp = el('input', 'edit-input');
@@ -1073,7 +1078,7 @@ function showSeriesCvFillForm(ch, seriesLabel, files) {
       return;
     }
     frame.remove();
-    await runSeriesCvFill(ch, seriesLabel, files, volId, url);
+    await runSeriesCvFill(ch, seriesLabel, files, volId, url, { overwrite });
   };
   actions.append(cancel, goBtn);
   body.append(actions);
@@ -1130,7 +1135,7 @@ async function editCaptionWithFloodWait(ch, f, caption, onStatus) {
   }
 }
 
-async function runSeriesCvFill(ch, seriesLabel, files, volId, sourceUrl) {
+async function runSeriesCvFill(ch, seriesLabel, files, volId, sourceUrl, opts = {}) {
   const progFrame = el('div', 'info-frame series-cv-prog');
   const progBox = el('div', 'info-box');
   const progHead = el('div', 'info-head');
@@ -1173,10 +1178,15 @@ async function runSeriesCvFill(ch, seriesLabel, files, volId, sourceUrl) {
       if (!byNum.has(k)) byNum.set(k, iss);
     }
 
-    const targets = (files || []).filter((f) => comicNeedsCvFill(f, ch));
+    const overwrite = !!(opts && opts.overwrite);
+    const targets = overwrite
+      ? (files || []).filter(Boolean)
+      : (files || []).filter((f) => comicNeedsCvFill(f, ch));
     if (!targets.length) {
       progFrame.remove();
-      await appAlert('Ningún cómic de la serie necesita relleno (todos los campos cubiertos).');
+      await appAlert(overwrite
+        ? 'No hay cómics en esta serie.'
+        : 'Ningún cómic de la serie necesita relleno (todos los campos cubiertos).');
       showSeriesInfo(ch, seriesLabel, files);
       return;
     }
@@ -1202,9 +1212,11 @@ async function runSeriesCvFill(ch, seriesLabel, files, volId, sourceUrl) {
       return { key: '', parsed, src };
     };
     const keep = (prev, next) => {
+      const n = String(next || '').trim();
       const p = String(prev || '').trim();
+      if (overwrite) return n || p; // sobrescribir si CV trae valor
       if (p) return p;
-      return String(next || '').trim();
+      return n;
     };
     const fitCaption = (fields) => {
       let caption = buildComicCaption(fields);
@@ -2675,7 +2687,7 @@ function showCoverFitEditor(ch, f, after) {
 /** Elegir una página del cómic como portada; al terminar vuelve al callback (submenú Editar). */
 async function showPickCoverFromComic(ch, f, after) {
   document.querySelector('.info-frame.cover-pages')?.remove();
-  const frame = el('div', 'info-frame cover-pages');
+  const frame = el('div', 'info-frame cover-pick cover-pages');
   const box = el('div', 'info-box cover-pick-box');
   const head = el('div', 'info-head');
   head.append(el('span', '', 'Elegir portada'));
@@ -2783,6 +2795,7 @@ async function showPickCoverFromComic(ch, f, after) {
     showComicInfo,
     showCoverFitEditor,
     showPickCoverFromComic,
+    showSeriesCvFillForm,
     showDescriptionPanel: typeof showDescriptionPanel === 'function' ? showDescriptionPanel : undefined,
     showCaptionEditor,
     showComicVinePicker,
