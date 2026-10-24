@@ -1037,3 +1037,71 @@ textarea.meta-desc-lg.edit-input{
 .sort-manual-btns{display:flex;gap:4px;flex-shrink:0}
 .sort-move{min-width:40px;width:40px;height:40px;padding:0;font-size:1.1rem;line-height:1}
 .sort-move:disabled{opacity:.3}
+
+
+/* ---- Controles inferiores del visor (tamaños y gaps unificados) ---- */
+#rd .spread-fab,
+#rd .play-fab,
+#rd .auto-cfg-fab,
+#rd .q-group .btn,
+#rd .q-group button{
+  width:48px!important;
+  height:48px!important;
+  min-width:48px!important;
+  min-height:48px!important;
+  max-width:48px!important;
+  max-height:48px!important;
+  padding:0!important;
+  border-radius:14px!important;
+  box-sizing:border-box!important;
+  display:inline-flex!important;
+  align-items:center!important;
+  justify-content:center!important;
+  font-size:0.85rem!important;
+  line-height:1!important;
+}
+#rd .spread-fab,
+#rd .play-fab,
+#rd .auto-cfg-fab{
+  position:fixed!important;
+  bottom:calc(env(safe-area-inset-bottom,0px) + 58px)!important;
+  z-index:14!important;
+  background:#1c1d22e6!important;
+  color:var(--fg)!important;
+  border:0!important;
+  box-shadow:0 4px 18px #0008!important;
+  -webkit-backdrop-filter:blur(12px);
+  backdrop-filter:blur(12px);
+  transform:none!important;
+}
+/* Centro: doble página */
+#rd .spread-fab{
+  left:50%!important;
+  margin-left:-24px!important; /* 48/2 */
+}
+/* Play: 8px a la izquierda del spread */
+#rd .play-fab{
+  left:calc(50% - 24px - 8px - 48px)!important;
+  margin-left:0!important;
+}
+/* Engranaje autoplay: 8px a la izquierda del play */
+#rd .auto-cfg-fab{
+  left:calc(50% - 24px - 8px - 48px - 8px - 48px)!important;
+  margin-left:0!important;
+}
+#rd .auto-cfg-fab svg{
+  width:22px!important;
+  height:22px!important;
+  display:block;
+}
+/* Calidad: 8px a la derecha del spread */
+#rd .q-group{
+  position:fixed!important;
+  bottom:calc(env(safe-area-inset-bottom,0px) + 58px)!important;
+  left:calc(50% + 24px + 8px)!important;
+  transform:none!important;
+  display:flex!important;
+  gap:8px!important;
+  z-index:14!important;
+  margin:0!important;
+}

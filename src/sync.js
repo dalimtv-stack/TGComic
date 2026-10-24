@@ -11,27 +11,9 @@ const SCHEMA = 1;
 const LS_USER = 'sync:username';
 const LS_PASS = 'sync:password';
 const LS_META = 'sync:meta';
-const LS_TS = 'sync:ts'; // marca de tiempo local (ms) de la última edición de cada clave de progreso
-
-// Claves donde "gana el cambio más reciente" (no el valor mayor): permite volver atrás a propósito.
-const TS_PREFIXES = ['page:', 'read:'];
-const isTsKey = (k) => TS_PREFIXES.some((p) => k.startsWith(p));
-
-function loadTs() {
-  try { return JSON.parse(localStorage.getItem(LS_TS) || '{}') || {}; } catch { return {}; }
-}
-
-/** Llamar tras CADA escritura local de page:/read: (acción del usuario en este dispositivo). */
-export function touchKey(k) {
-  if (!k || !isTsKey(k)) return;
-  try {
-    const t = loadTs();
-    t[k] = Date.now();
-    localStorage.setItem(LS_TS, JSON.stringify(t));
-  } catch (_) {}
-}
 
 const SYNC_PREFIXES = [
+  'coverblob:',
   'pref:',
   'page:',
   'pages:',
@@ -41,7 +23,6 @@ const SYNC_PREFIXES = [
   'comicSeries:',
   'ungroup:',
   'read:',
-  'coverAdapt:', // portada personalizada: nº de página elegida + modo de recorte (sin imágenes)
 ];
 const SYNC_KEYS = ['channelNames', 'groupNames', 'lastRead', 'recentReads', 'contentLocks'];
 
@@ -75,15 +56,7 @@ async function userRowId(username) {
   return sha256Hex('tgcomic-user:' + normalizeUser(username));
 }
 
-const _keyCache = new Map();
 async function deriveKey(username, password) {
-  const ck = normalizeUser(username) + '\n' + password;
-  if (_keyCache.has(ck)) return _keyCache.get(ck);
-  const k = await _deriveKey(username, password);
-  _keyCache.set(ck, k);
-  return k;
-}
-async function _deriveKey(username, password) {
   const enc = new TextEncoder();
   const base = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
   const salt = enc.encode('tgcomic-sync-v1:' + normalizeUser(username));
@@ -172,8 +145,7 @@ async function upsertRemote(id, payload, verifier) {
 }
 
 export function collectSnapshot() {
-  const data = { v: SCHEMA, keys: {}, ts: {} };
-  const allTs = loadTs();
+  const data = { v: SCHEMA, keys: {} };
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
@@ -182,7 +154,6 @@ export function collectSnapshot() {
       const ok = SYNC_KEYS.includes(k) || SYNC_PREFIXES.some((p) => k.startsWith(p));
       if (!ok) continue;
       data.keys[k] = localStorage.getItem(k);
-      if (isTsKey(k) && allTs[k]) data.ts[k] = allTs[k];
     }
   } catch (_) {}
   return data;
@@ -206,22 +177,15 @@ export function applySnapshot(snap) {
 
 /**
  * Fusiona snapshot remoto con el local.
- * - page: / read: → gana el cambio MÁS RECIENTE (marca de tiempo por clave), así se puede
- *   retroceder a propósito. Sin marcas (datos antiguos) → fallback: página mayor / leído si alguno
- * - pages: (total de páginas) → número mayor
+ * - page: / pages: → se queda el número mayor (más progreso)
+ * - read: → leído si cualquiera lo marca
  * - recentReads → unión por id de cómic (remoto primero)
  * - resto (prefs, nombres…) → remoto gana si existe; si no, se conserva local
  */
-function mergeKeyMaps(localSnap, remoteSnap, opts = {}) {
-  const preferLocal = !!opts.preferLocal;
-  const lk = localSnap?.keys;
-  const rk = remoteSnap?.keys;
-  const local = lk && typeof lk === 'object' ? lk : {};
-  const remote = rk && typeof rk === 'object' ? rk : {};
-  const lts = localSnap?.ts && typeof localSnap.ts === 'object' ? localSnap.ts : {};
-  const rts = remoteSnap?.ts && typeof remoteSnap.ts === 'object' ? remoteSnap.ts : {};
+function mergeKeyMaps(localKeys, remoteKeys) {
+  const local = localKeys && typeof localKeys === 'object' ? localKeys : {};
+  const remote = remoteKeys && typeof remoteKeys === 'object' ? remoteKeys : {};
   const out = { ...local };
-  const outTs = { ...lts };
 
   const mergeRecent = (a, b) => {
     let la = [], lb = [];
@@ -245,24 +209,13 @@ function mergeKeyMaps(localSnap, remoteSnap, opts = {}) {
     const lv = out[k];
     if (lv == null || lv === '') {
       out[k] = rv;
-      if (rts[k]) outTs[k] = rts[k];
       continue;
     }
-    if (isTsKey(k)) {
-      const lt = Number(lts[k]) || 0;
-      const rt = Number(rts[k]) || 0;
-      if (lt && rt) {
-        // Ambos con marca: gana el más reciente (empate → local)
-        if (rt > lt) { out[k] = rv; outTs[k] = rt; } else out[k] = lv;
-      } else if (k.startsWith('page:')) {
-        out[k] = String(Math.max(Number(lv) || 0, Number(rv) || 0));
-        if (rt && !lt) outTs[k] = rt;
-      } else {
-        out[k] = (String(lv) === '1' || String(rv) === '1') ? '1' : String(rv);
-        if (rt && !lt) outTs[k] = rt;
-      }
-    } else if (k.startsWith('pages:')) {
-      out[k] = String(Math.max(Number(lv) || 0, Number(rv) || 0));
+    if (k.startsWith('page:') || k.startsWith('pages:')) {
+      const n = Math.max(Number(lv) || 0, Number(rv) || 0);
+      out[k] = String(n);
+    } else if (k.startsWith('read:')) {
+      out[k] = (String(lv) === '1' || String(rv) === '1') ? '1' : String(rv);
     } else if (k === 'recentReads') {
       out[k] = mergeRecent(lv, rv);
     } else if (k === 'lastRead') {
@@ -276,46 +229,18 @@ function mergeKeyMaps(localSnap, remoteSnap, opts = {}) {
       } catch (_) {
         out[k] = rv || lv;
       }
-    } else if (k === 'contentLocks') {
-      // Gana la versión con updatedAt más alto (no borrar locks de otro dispositivo)
-      try {
-        const L = JSON.parse(lv || '{}') || {};
-        const R = JSON.parse(rv || '{}') || {};
-        const la = Number(L.updatedAt) || 0;
-        const ra = Number(R.updatedAt) || 0;
-        if (ra > la) out[k] = rv;
-        else if (la > ra) out[k] = lv;
-        else {
-          // Empate o sin marca: unión de listas (más seguro que perder un bloqueo)
-          const union = (a, b) => [...new Set([...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])].map(String))];
-          out[k] = JSON.stringify({
-            groups: union(L.groups, R.groups),
-            channels: union(L.channels, R.channels),
-            series: union(L.series, R.series),
-            comics: union(L.comics, R.comics),
-            updatedAt: Math.max(la, ra, Date.now()),
-          });
-        }
-      } catch (_) {
-        out[k] = rv || lv;
-      }
     } else {
-      // prefs, renombres, etc.: al abrir gana la nube; al subir ganan los cambios locales
-      out[k] = preferLocal ? lv : rv;
+      // prefs, renombres, etc.: el remoto (nube) actualiza al abrir
+      out[k] = rv;
     }
   }
-  return { keys: out, ts: outTs };
+  return out;
 }
 
-/** Aplica el resultado de mergeKeyMaps ({keys, ts}) a localStorage. */
-function writeKeyMap(merged) {
-  const keys = merged?.keys || {};
+/** Aplica un mapa de claves ya fusionado a localStorage. */
+function writeKeyMap(keys) {
   try {
-    const t = { ...loadTs(), ...(merged?.ts || {}) };
-    localStorage.setItem(LS_TS, JSON.stringify(t));
-  } catch (_) {}
-  try {
-    for (const [k, v] of Object.entries(keys)) {
+    for (const [k, v] of Object.entries(keys || {})) {
       if (!k || k === 'tg_session' || k.startsWith('sync:')) continue;
       const allowed = SYNC_KEYS.includes(k) || SYNC_PREFIXES.some((p) => k.startsWith(p));
       if (!allowed) continue;
@@ -344,7 +269,6 @@ export function logout() {
   localStorage.removeItem(LS_USER);
   localStorage.removeItem(LS_PASS);
   localStorage.removeItem(LS_META);
-  localStorage.removeItem(LS_TS);
 }
 
 /** Fecha en horario de España: hh:mm:ss DD/MM/AAAA */
@@ -427,7 +351,7 @@ export async function login(username, password) {
     throw new Error('Usuario no encontrado. Crea una cuenta primero.');
   }
   const snap = await decryptPayload(u, password, row.payload);
-  writeKeyMap(mergeKeyMaps(collectSnapshot(), snap));
+  applySnapshot(snap);
   saveSession(u, password);
   setMeta(row.updated_at, snapshotByteSize());
   // Tras login, subir estado fusionado (local + remoto) con verificador correcto
@@ -454,9 +378,8 @@ export async function push() {
   const id = await userRowId(u);
   const row = await getRemote(id);
   if (row?.payload) {
-    // Prueba de contraseña + fusión: no sobrescribir progreso de otros equipos
-    const remoteSnap = await decryptPayload(u, p, row.payload);
-    writeKeyMap(mergeKeyMaps(collectSnapshot(), remoteSnap, { preferLocal: true }));
+    // Prueba de contraseña en cliente antes de tocar el servidor
+    await decryptPayload(u, p, row.payload);
   }
   const verifier = await passwordVerifier(u, p);
   const payload = await encryptPayload(u, p, collectSnapshot());
@@ -474,35 +397,12 @@ export async function pull() {
   if (!row?.payload) return false;
   const remoteSnap = await decryptPayload(u, p, row.payload);
   const localSnap = collectSnapshot();
+  const remoteKeys = remoteSnap?.keys && typeof remoteSnap.keys === 'object' ? remoteSnap.keys : {};
   const localKeys = localSnap?.keys && typeof localSnap.keys === 'object' ? localSnap.keys : {};
-  const merged = mergeKeyMaps(localSnap, remoteSnap);
-  const before = JSON.stringify(localKeys);
+  const merged = mergeKeyMaps(localKeys, remoteKeys);
   writeKeyMap(merged);
   setMeta(row.updated_at, snapshotByteSize());
-  if (JSON.stringify(collectSnapshot().keys) !== before) {
-    try { window.dispatchEvent(new CustomEvent('tg-sync-pulled')); } catch (_) {}
-  }
   return true;
-}
-
-let autoTimer = null;
-let autoBusy = false;
-/**
- * Sincronización casi inmediata: pull al volver a la pestaña/app y cada N segundos
- * mientras está visible. Emite 'tg-sync-pulled' solo si algo cambió.
- */
-export function startAutoPull(intervalMs = 15000) {
-  if (typeof window === 'undefined' || autoTimer) return;
-  const tick = async () => {
-    if (autoBusy || !isLoggedIn() || document.visibilityState !== 'visible') return;
-    if (pushTimer) return; // hay cambios locales pendientes: primero subirlos
-    autoBusy = true;
-    try { await pull(); } catch (e) { console.warn('[sync] auto-pull', e); } finally { autoBusy = false; }
-  };
-  autoTimer = setInterval(tick, intervalMs);
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') tick(); });
-  window.addEventListener('focus', tick);
-  window.addEventListener('online', tick);
 }
 
 let pushTimer = null;
@@ -586,7 +486,7 @@ export async function syncOnStartup() {
 }
 
 /** @deprecated usar syncOnStartup */
-function startBackgroundSync() {
+export function startBackgroundSync() {
   /* no-op */
 }
 

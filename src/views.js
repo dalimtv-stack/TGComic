@@ -1078,7 +1078,7 @@ function groupsView() {
           if (typeof parseComicCaption === 'function') {
             const p = parseComicCaption(caption || '') || {};
             const raw = p.writer || p.guionista || p.Guionista || '';
-            String(raw).split(/[,;\/&]+/).forEach((x) => {
+            String(raw).split(/[,;\/&|]+|\s+y\s+|\s+and\s+/i).forEach((x) => {
               const n = String(x || '').trim();
               if (n && n.length > 1) people.push(n);
             });
@@ -1087,7 +1087,7 @@ function groupsView() {
         } catch (_) {}
         const m = String(caption || '').match(/Guionista\s*:\s*([^\n]+)/i);
         if (m) {
-          m[1].split(/[,;\/&]+/).forEach((x) => {
+          m[1].split(/[,;\/&|]+|\s+y\s+|\s+and\s+/i).forEach((x) => {
             const n = String(x || '').trim();
             if (n && n.length > 1) people.push(n);
           });
@@ -1097,20 +1097,31 @@ function groupsView() {
 
       const seriesNameOf = (ch, f) => {
         try {
+          if (typeof getComicSeriesOverride === 'function') {
+            const ov = getComicSeriesOverride(ch, f);
+            if (ov != null && String(ov).trim()) return String(ov).trim();
+          }
+        } catch (_) {}
+        try {
+          // seriesOverrideFor(ch) devuelve (f)=>serie|null — no llamar como (ch,f)
           if (typeof seriesOverrideFor === 'function') {
-            const ov = seriesOverrideFor(ch, f);
-            if (ov && String(ov).trim()) return String(ov).trim();
+            const fn = seriesOverrideFor(ch);
+            if (typeof fn === 'function') {
+              const ov = fn(f);
+              if (ov != null && String(ov).trim()) return String(ov).trim();
+            }
           }
         } catch (_) {}
         try {
-          if (typeof groupSeries === 'function') {
-            const g = groupSeries(f?.name || '', ch?.name);
-            if (g && String(g).trim()) return String(g).trim();
-          }
-        } catch (_) {}
-        try {
-          const p = parseComicName?.(comicSourceName?.(f) || f?.name || '', ch?.name);
+          const src = (typeof comicSourceName === 'function' ? comicSourceName(f) : null) || f?.name || '';
+          const p = typeof parseComicName === 'function' ? parseComicName(src, ch?.name) : null;
           if (p?.series) return String(p.series).trim();
+        } catch (_) {}
+        try {
+          if (typeof seriesBase === 'function') {
+            const b = seriesBase(f?.name || '', ch?.name);
+            if (b && String(b).trim()) return String(b).trim();
+          }
         } catch (_) {}
         return '';
       };

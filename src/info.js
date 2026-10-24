@@ -39,6 +39,46 @@ export function createInfoEdit(d) {
   };
 
   // Aliases for helpers that may be on d as functions defined later
+  
+  /** Persistir portada custom en localStorage (base64) para sync multi-dispositivo. */
+  const COVER_SYNC_PREFIX = 'coverblob:';
+  async function persistCoverForSync(idbKey, blob) {
+    if (!idbKey || !blob) return;
+    try {
+      const buf = await blob.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      let bin = '';
+      const chunk = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunk) {
+        bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+      }
+      const b64 = btoa(bin);
+      const meta = JSON.stringify({
+        type: blob.type || 'image/jpeg',
+        b64,
+      });
+      // Limitar ~400KB en storage (portadas ya optimizadas)
+      if (meta.length > 450000) return;
+      localStorage.setItem(COVER_SYNC_PREFIX + idbKey, meta);
+      try { if (typeof sync !== 'undefined' && sync.schedulePush) sync.schedulePush(); } catch (_) {}
+    } catch (_) {}
+  }
+  async function restoreCoverFromSync(idbKey) {
+    if (!idbKey) return null;
+    try {
+      const raw = localStorage.getItem(COVER_SYNC_PREFIX + idbKey);
+      if (!raw) return null;
+      const o = JSON.parse(raw);
+      if (!o?.b64) return null;
+      const bin = atob(o.b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const blob = new Blob([bytes], { type: o.type || 'image/jpeg' });
+      await kv.set(idbKey, blob);
+      return blob;
+    } catch (_) { return null; }
+  }
+
   const channelCoverKey = (ch) => `cc:${ch.id}`;
   const seriesCoverKey = (ch, label) => `sc:${ch.id}:${String(label || '').toLowerCase()}`;
   const groupCoverKey = (name) => `gc:${artNorm(String(name || ''))}`;
@@ -1389,12 +1429,18 @@ async function getSeriesCoverBlob(ch, seriesLabel, files) {
 }
 async function setSeriesCoverBlob(ch, seriesLabel, blob) {
   if (!blob) return;
+  const key = seriesCoverKey(ch, seriesLabel);
   try {
     const opt = await optimizeImageBlob(blob, 320, 0.75);
-    await kv.set(seriesCoverKey(ch, seriesLabel), opt || blob);
+    const saved = opt || blob;
+    await kv.set(key, saved);
+    await persistCoverForSync(key, saved);
   } catch (e) {
     console.warn('series cover', e);
-    try { await kv.set(seriesCoverKey(ch, seriesLabel), blob); } catch (_) {}
+    try {
+      await kv.set(key, blob);
+      await persistCoverForSync(key, blob);
+    } catch (_) {}
   }
 }
 function seriesReadProgress(ch, files) {
@@ -1624,7 +1670,10 @@ function showSeriesCoverPicker(ch, seriesLabel, files, after) {
 
 async function getChannelCoverBlob(ch, files) {
   try {
-    const b = await kv.get(channelCoverKey(ch));
+    let b = await kv.get(channelCoverKey(ch));
+    if (!(b instanceof Blob && b.size)) {
+      b = await restoreCoverFromSync(channelCoverKey(ch));
+    }
     if (b instanceof Blob && b.size) return b;
   } catch (_) {}
   // Generar desde el primer cómic y GUARDAR (evita re-descargas de varios segundos)
@@ -1639,14 +1688,20 @@ async function getChannelCoverBlob(ch, files) {
   }
   return null;
 }
-async function setChannelCoverBlob(ch, blob) {
+async async function setChannelCoverBlob(ch, blob) {
   if (!blob) return;
+  const key = channelCoverKey(ch);
   try {
     const opt = await optimizeImageBlob(blob, 384, 0.75, { keepAlpha: true });
-    await kv.set(channelCoverKey(ch), opt || blob);
+    const saved = opt || blob;
+    await kv.set(key, saved);
+    await persistCoverForSync(key, saved);
   } catch (e) {
     console.warn('channel cover', e);
-    try { await kv.set(channelCoverKey(ch), blob); } catch (_) {}
+    try {
+      await kv.set(key, blob);
+      await persistCoverForSync(key, blob);
+    } catch (_) {}
   }
 }
 function channelReadProgress(ch, files) {
@@ -1794,13 +1849,19 @@ async function getGithubChannelArtBlob(ch, preferredUrl) {
 async function clearGroupCover(name) {
   try { await kv.del(groupCoverKey(name)); } catch (_) {}
 }
-async function setGroupCoverBlob(name, blob) {
+async async function setGroupCoverBlob(name, blob) {
   if (!blob) return;
+  const key = groupCoverKey(name);
   try {
     const opt = await optimizeImageBlob(blob, 384, 0.75, { keepAlpha: true });
-    await kv.set(groupCoverKey(name), opt || blob);
+    const saved = opt || blob;
+    await kv.set(key, saved);
+    await persistCoverForSync(key, saved);
   } catch (e) {
-    try { await kv.set(groupCoverKey(name), blob); } catch (_) {}
+    try {
+      await kv.set(key, blob);
+      await persistCoverForSync(key, blob);
+    } catch (_) {}
   }
 }
 async function getGithubGroupArtBlob(name, preferredUrl) {
@@ -1853,8 +1914,11 @@ function groupCoverNode(originalName) {
   host.append(letter);
   host._load = async () => {
     try {
-      const custom = await kv.get(groupCoverKey(originalName));
-      if (custom instanceof Blob) {
+      let custom = await kv.get(groupCoverKey(originalName));
+      if (!(custom instanceof Blob && custom.size)) {
+        custom = await restoreCoverFromSync(groupCoverKey(originalName));
+      }
+      if (custom instanceof Blob && custom.size) {
         const img = new Image();
         img.onload = () => {
           try {

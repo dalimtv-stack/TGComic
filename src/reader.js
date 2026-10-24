@@ -673,7 +673,13 @@ export function createReader(state, d) {
           } catch (_) {}
           if (scrollWhileDrag) {
             try { opts.onDragEnd?.(wasDrag, { dx, dy, vx, vy }); } catch (_) {}
-            return;
+            // Si había overflow y el usuario arrastró, solo pan (no cambiar página)
+            const axis0 = getAxis();
+            const hasOverflow = axis0 === 'y'
+              ? (rd.scrollHeight > rd.clientHeight + 4)
+              : (rd.scrollWidth > rd.clientWidth + 4);
+            if (wasDrag && hasOverflow) return;
+            // Sin overflow (modo pantalla) o tap: permitir swipe de página más abajo
           }
           const axis = getAxis();
           if (axis === 'x') {
@@ -681,6 +687,7 @@ export function createReader(state, d) {
             try { pokeUI(); } catch (_) {}
             if (dx < 0) goNext(); else goPrev();
           } else {
+            // En modo ancho el eje es Y: swipe vertical en extremos cambia página
             if (Math.abs(dy) < 70 || Math.abs(dy) < Math.abs(dx) * 1.15) return;
             try { pokeUI(); } catch (_) {}
             if (dy < 0) goNext(); else goPrev();
@@ -844,9 +851,13 @@ export function createReader(state, d) {
         };
         eL.onclick = () => turn(isSpread() ? prevSpread(n) : n - 1);
         eR.onclick = () => turn(isSpread() ? nextSpread(n) : n + 1);
-        bindMousePageDrag(() => 'x',
+        // En modo ancho permitir arrastrar para desplazar la página (eje Y);
+        // en pantalla completa el drag horizontal cambia de página.
+        bindMousePageDrag(
+          () => (pref('fit', 'screen') === 'width' ? 'y' : 'x'),
           () => turn(isSpread() ? prevSpread(n) : n - 1),
-          () => turn(isSpread() ? nextSpread(n) : n + 1)
+          () => turn(isSpread() ? nextSpread(n) : n + 1),
+          true
         );
 
 
@@ -1095,9 +1106,13 @@ export function createReader(state, d) {
         const onWheel = (e) => {
           const fitIsWidth = pref('fit', 'screen') === 'width';
           if (fitIsWidth) {
-            // Asegurar que #rd pueda hacer scroll con la rueda
-            if (getComputedStyle(rd).overflowY === 'hidden') rd.style.overflowY = 'auto';
-            const overflow = rd.scrollHeight > rd.clientHeight + 2;
+            // Asegurar scroll vertical cuando la hoja supera el alto
+            try {
+              rd.style.overflowY = 'auto';
+              rd.style.overflowX = 'hidden';
+            } catch (_) {}
+            const overflow = rd.scrollHeight > rd.clientHeight + 2
+              || (pageHost && pageHost.scrollHeight > pageHost.clientHeight + 2);
             if (overflow) {
               const atTop = rd.scrollTop <= 1;
               const atBottom = rd.scrollTop + rd.clientHeight >= rd.scrollHeight - 2;
