@@ -57,17 +57,34 @@ export function createViews(d) {
       localStorage.setItem(sortKey(scope, id), JSON.stringify(prefObj));
     } catch (_) {}
   };
-  const captionDateOf = (f) => {
+    const captionDateOf = (f) => {
     try {
-      const cap = typeof parseComicCaption === 'function' ? parseComicCaption(f?.caption || '') : null;
-      const raw = String(cap?.date || '').trim();
+      const rawCap = String(f?.caption || '').trim();
+      if (!rawCap) return null;
+      const cap = typeof parseComicCaption === 'function' ? parseComicCaption(rawCap) : null;
+      let raw = String(cap?.date || '').trim();
+      // Fallback: línea "Fecha..." si el parser no la mapeó
+      if (!raw) {
+        const lm = rawCap.match(/(?:^|\n)\s*Fecha(?:\s+de\s+publicaci[oó]n)?\s*[:：]\s*([^\n]+)/i);
+        if (lm) raw = lm[1].trim();
+      }
       if (!raw) return null;
-      let m = raw.match(/^(\d{1,2})\s*[\/\-]\s*(\d{4})$/);
+      // MM/AAAA o MM-AAAA
+      let m = raw.match(/^(\d{1,2})\s*[\/\-\.\s]\s*(\d{4})/);
       if (m) return Number(m[2]) * 100 + Number(m[1]);
-      m = raw.match(/^(\d{4})\s*[\/\-]\s*(\d{1,2})/);
+      // AAAA-MM / AAAA/MM
+      m = raw.match(/^(\d{4})\s*[\/\-\.\s]\s*(\d{1,2})/);
       if (m) return Number(m[1]) * 100 + Number(m[2]);
-      m = raw.match(/^(\d{4})$/);
+      // Solo año
+      m = raw.match(/^(\d{4})\b/);
       if (m) return Number(m[1]) * 100;
+      // "Month YYYY" inglés básico
+      m = raw.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+(\d{4})/i);
+      if (m) {
+        const months = { jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12 };
+        const mo = months[m[1].slice(0, 3).toLowerCase()] || 1;
+        return Number(m[2]) * 100 + mo;
+      }
       const t = Date.parse(raw);
       if (Number.isFinite(t)) {
         const dt = new Date(t);
@@ -76,7 +93,38 @@ export function createViews(d) {
     } catch (_) {}
     return null;
   };
-  const applySortList = (items, prefObj, getId, getLabel, getDate) => {
+
+  /** Fecha del "primer" cómic de una serie = el de menor número (#). */
+  const seriesFirstComicDate = (files, ch) => {
+    const list = Array.isArray(files) ? files.slice() : [];
+    if (!list.length) return null;
+    const numOf = (f) => {
+      try {
+        const src = (typeof comicSourceName === 'function' ? comicSourceName(f) : null) || f?.name || '';
+        const p = typeof parseComicName === 'function' ? parseComicName(src, ch?.name) : null;
+        if (p?.number != null && p.number !== '') {
+          const n = parseFloat(String(p.number).replace(/[^0-9.]/g, ''));
+          if (Number.isFinite(n)) return n;
+        }
+        const m = String(src).match(/#\s*([0-9]+(?:\.[0-9]+)?)/);
+        if (m) return parseFloat(m[1]);
+      } catch (_) {}
+      return 1e12;
+    };
+    list.sort((a, b) => {
+      const na = numOf(a), nb = numOf(b);
+      if (na !== nb) return na - nb;
+      return natural(String(a?.name || ''), String(b?.name || ''));
+    });
+    // Primer cómic con fecha; si ninguno, null
+    for (const f of list) {
+      const d = captionDateOf(f);
+      if (d != null) return d;
+    }
+    return null;
+  };
+
+const applySortList = (items, prefObj, getId, getLabel, getDate) => {
     const list = (items || []).slice();
     const mode = prefObj?.mode || 'name';
     if (mode === 'manual' && prefObj.order?.length) {
@@ -142,72 +190,46 @@ export function createViews(d) {
       const it = (items || []).find((x) => String(getId(x)) === String(sid));
       return it ? getLabel(it) : sid;
     };
+    const moveItem = (sid, dir) => {
+      const ids = stateOrder.slice();
+      const from = ids.indexOf(String(sid));
+      if (from < 0) return;
+      const to = from + dir;
+      if (to < 0 || to >= ids.length) return;
+      const tmp = ids[from];
+      ids[from] = ids[to];
+      ids[to] = tmp;
+      stateOrder.length = 0;
+      stateOrder.push(...ids);
+      paintManual();
+    };
     const paintManual = () => {
       ul.replaceChildren();
-      for (const sid of stateOrder) {
+      stateOrder.forEach((sid, idx) => {
         const li = el('li');
-        li.draggable = true;
         li.dataset.id = sid;
-        li.append(el('span', 'sort-handle', '☰'), el('span', '', labelOf(sid)));
+        const name = el('span', 'sort-manual-name', labelOf(sid));
+        const btns = el('div', 'sort-manual-btns');
+        const up = el('button', 'btn sort-move', '↑');
+        up.type = 'button';
+        up.disabled = idx === 0;
+        up.setAttribute('aria-label', 'Subir');
+        up.onclick = (ev) => { try { ev.preventDefault(); ev.stopPropagation(); } catch (_) {} moveItem(sid, -1); };
+        const down = el('button', 'btn sort-move', '↓');
+        down.type = 'button';
+        down.disabled = idx === stateOrder.length - 1;
+        down.setAttribute('aria-label', 'Bajar');
+        down.onclick = (ev) => { try { ev.preventDefault(); ev.stopPropagation(); } catch (_) {} moveItem(sid, 1); };
+        btns.append(up, down);
+        li.append(name, btns);
         ul.append(li);
-      }
+      });
     };
     paintManual();
-    manualHost.append(el('p', 'cover-pick-hint', 'Arrastra para reordenar:'), ul);
+    manualHost.append(el('p', 'cover-pick-hint', 'Usa ↑ / ↓ para reordenar:'), ul);
     body.append(manualHost);
 
-    let dragId = null;
-    ul.addEventListener('dragstart', (ev) => {
-      const li = ev.target.closest('li');
-      if (!li) return;
-      dragId = li.dataset.id;
-      li.classList.add('dragging');
-      try { ev.dataTransfer.setData('text/plain', dragId); ev.dataTransfer.effectAllowed = 'move'; } catch (_) {}
-    });
-    ul.addEventListener('dragend', (ev) => {
-      const li = ev.target.closest('li');
-      if (li) li.classList.remove('dragging');
-      dragId = null;
-    });
-    ul.addEventListener('dragover', (ev) => {
-      ev.preventDefault();
-      const li = ev.target.closest('li');
-      if (!li || !dragId || li.dataset.id === dragId) return;
-      const ids = stateOrder.slice();
-      const from = ids.indexOf(dragId);
-      const to = ids.indexOf(li.dataset.id);
-      if (from < 0 || to < 0) return;
-      ids.splice(from, 1);
-      ids.splice(to, 0, dragId);
-      stateOrder.length = 0;
-      stateOrder.push(...ids);
-      paintManual();
-    });
-    let touchLi = null;
-    ul.addEventListener('touchstart', (ev) => {
-      const li = ev.target.closest('li');
-      if (!li) return;
-      touchLi = li;
-    }, { passive: true });
-    ul.addEventListener('touchmove', (ev) => {
-      if (!touchLi || !ev.touches[0]) return;
-      const over = document.elementFromPoint(ev.touches[0].clientX, ev.touches[0].clientY)?.closest?.('li');
-      if (!over || over === touchLi || !ul.contains(over)) return;
-      const drag = touchLi.dataset.id;
-      const ids = stateOrder.slice();
-      const from = ids.indexOf(drag);
-      const to = ids.indexOf(over.dataset.id);
-      if (from < 0 || to < 0) return;
-      ids.splice(from, 1);
-      ids.splice(to, 0, drag);
-      stateOrder.length = 0;
-      stateOrder.push(...ids);
-      paintManual();
-      touchLi = ul.querySelector('li[data-id="' + drag.replace(/"/g, '') + '"]');
-    }, { passive: true });
-    ul.addEventListener('touchend', () => { touchLi = null; }, { passive: true });
-
-    const syncManualVis = () => { manualHost.hidden = !rMan.checked; };
+        const syncManualVis = () => { manualHost.hidden = !rMan.checked; };
     rName.onchange = rDate.onchange = rMan.onchange = syncManualVis;
 
     const act = el('div', 'edit-actions');
@@ -1224,6 +1246,9 @@ function groupsView() {
         if (item.sub) text.append(el('small', '', item.sub));
         btn.append(badge, text);
         btn.onclick = () => item.go?.();
+        if (typeof item.longPress === 'function' && typeof bindLongPress === 'function') {
+          bindLongPress(btn, () => item.longPress());
+        }
         listEl.append(btn);
       }
       if (list.length > 80) {
@@ -1282,6 +1307,15 @@ function groupsView() {
                 sub: (ch.name || '') + ' · ficha incompleta',
                 ch, f,
                 go: () => openComic(ch, f),
+                longPress: () => {
+                  try {
+                    sheet(label, comicSheetOpts(ch, f, label, () => {}).concat(
+                      lockToggleOpts('comic', { ch, f }, label, () => {})
+                    ));
+                  } catch (e) {
+                    try { appAlert(String(e?.message || e)); } catch (_) {}
+                  }
+                },
               });
             }
           }
@@ -1628,12 +1662,7 @@ function filesView(ch) {
           const seriesSearch = (seriesShown + ' ' + seriesLabel + ' ' + fs.map((f) => f.name).join(' ')).toLowerCase();
           const seriesRestricted = locks.isContentRestricted('series', { ch, seriesLabel });
           const seriesLockOpts = () => lockToggleOpts('series', { ch, seriesLabel }, seriesDisplayName(ch, seriesLabel), redraw);
-          let seriesDate = null;
-          for (const f of fs) {
-            const d = captionDateOf(f);
-            if (d == null) continue;
-            if (seriesDate == null || d < seriesDate) seriesDate = d;
-          }
+          const seriesDate = seriesFirstComicDate(fs, ch);
           items.push({
             kind: 'series',
             _sortId: 'series:' + String(seriesLabel),
