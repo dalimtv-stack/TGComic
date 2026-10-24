@@ -26,7 +26,7 @@ export function createViews(d) {
     go, show, stack,
     sheet, bindLongPress, grid,
     showGroupInfo, showEditGroup, showChannelInfo, showEditChannel,
-    showSeriesInfo, showEditSeries, showSeriesCvFillForm, showComicInfo, showEditComicTitle,
+    showSeriesInfo, showEditSeries, showSeriesCvFillForm, comicNeedsCvFill, showComicInfo, showEditComicTitle,
     showCoverFitEditor, showPickCoverFromComic, getCoverFit,
     ungroupMap, setUngroupMode, getComicSeriesOverride,
     firstAvailableCover, kv, natural,
@@ -37,6 +37,236 @@ export function createViews(d) {
     buildSearchIndex, filterSearchIndex,
   } = d;
   const openComic = (...a) => d.openComic(...a);
+
+  // ---- Ordenación de listados (editorial / canal / serie) ----
+  const sortKey = (scope, id) => 'sort:' + scope + ':' + String(id || '');
+  const getSortPref = (scope, id) => {
+    try {
+      const raw = localStorage.getItem(sortKey(scope, id));
+      if (!raw) return { mode: 'name' };
+      const o = JSON.parse(raw);
+      if (!o || typeof o !== 'object') return { mode: 'name' };
+      const mode = ['name', 'date', 'manual'].includes(o.mode) ? o.mode : 'name';
+      return { mode, order: Array.isArray(o.order) ? o.order.map(String) : [] };
+    } catch {
+      return { mode: 'name' };
+    }
+  };
+  const setSortPref = (scope, id, prefObj) => {
+    try {
+      localStorage.setItem(sortKey(scope, id), JSON.stringify(prefObj));
+    } catch (_) {}
+  };
+  const captionDateOf = (f) => {
+    try {
+      const cap = typeof parseComicCaption === 'function' ? parseComicCaption(f?.caption || '') : null;
+      const raw = String(cap?.date || '').trim();
+      if (!raw) return null;
+      let m = raw.match(/^(\d{1,2})\s*[\/\-]\s*(\d{4})$/);
+      if (m) return Number(m[2]) * 100 + Number(m[1]);
+      m = raw.match(/^(\d{4})\s*[\/\-]\s*(\d{1,2})/);
+      if (m) return Number(m[1]) * 100 + Number(m[2]);
+      m = raw.match(/^(\d{4})$/);
+      if (m) return Number(m[1]) * 100;
+      const t = Date.parse(raw);
+      if (Number.isFinite(t)) {
+        const dt = new Date(t);
+        return dt.getFullYear() * 100 + (dt.getMonth() + 1);
+      }
+    } catch (_) {}
+    return null;
+  };
+  const applySortList = (items, prefObj, getId, getLabel, getDate) => {
+    const list = (items || []).slice();
+    const mode = prefObj?.mode || 'name';
+    if (mode === 'manual' && prefObj.order?.length) {
+      const pos = new Map(prefObj.order.map((id, i) => [String(id), i]));
+      list.sort((a, b) => {
+        const ia = pos.has(String(getId(a))) ? pos.get(String(getId(a))) : 1e9;
+        const ib = pos.has(String(getId(b))) ? pos.get(String(getId(b))) : 1e9;
+        if (ia !== ib) return ia - ib;
+        return natural(String(getLabel(a)), String(getLabel(b)));
+      });
+      return list;
+    }
+    if (mode === 'date') {
+      list.sort((a, b) => {
+        const da = getDate(a);
+        const db = getDate(b);
+        if (da != null && db != null && da !== db) return da - db;
+        if (da != null && db == null) return -1;
+        if (da == null && db != null) return 1;
+        return natural(String(getLabel(a)), String(getLabel(b)));
+      });
+      return list;
+    }
+    list.sort((a, b) => natural(String(getLabel(a)), String(getLabel(b))));
+    return list;
+  };
+  const SORT_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 4v16"/><path d="M5 17l3 3 3-3"/><path d="M16 20V4"/><path d="M13 7l3-3 3 3"/></svg>`;
+
+  function showSortFrame({ title, scope, id, items, getId, getLabel, getDate, onDone }) {
+    document.querySelector('.info-frame.sort-frame')?.remove();
+    const cur = getSortPref(scope, id);
+    const frame = el('div', 'info-frame sort-frame');
+    const box = el('div', 'info-box');
+    const head = el('div', 'info-head');
+    head.append(el('span', '', 'Ordenar'));
+    const close = el('button', 'btn info-close', '×');
+    close.onclick = () => frame.remove();
+    head.append(close);
+    const body = el('div', 'info-body');
+    body.append(el('p', 'cover-pick-hint', title || 'Elige cómo ordenar este listado. Se guarda en este dispositivo.'));
+
+    const mkRadio = (mode, labelText) => {
+      const row = el('label', 'sort-opt');
+      const inp = el('input');
+      inp.type = 'radio';
+      inp.name = 'sort-mode';
+      inp.value = mode;
+      if (cur.mode === mode) inp.checked = true;
+      row.append(inp, document.createTextNode(' ' + labelText));
+      body.append(row);
+      return inp;
+    };
+    const rName = mkRadio('name', 'Por nombre (predeterminado)');
+    const rDate = mkRadio('date', 'Por fecha (caption Telegram)');
+    const rMan = mkRadio('manual', 'Manual (arrastrar)');
+
+    const manualHost = el('div');
+    manualHost.hidden = cur.mode !== 'manual';
+    const ul = el('ul', 'sort-manual-list');
+    const base = applySortList(items, cur.mode === 'manual' ? cur : { mode: 'name' }, getId, getLabel, getDate);
+    const stateOrder = base.map((it) => String(getId(it)));
+    const labelOf = (sid) => {
+      const it = (items || []).find((x) => String(getId(x)) === String(sid));
+      return it ? getLabel(it) : sid;
+    };
+    const paintManual = () => {
+      ul.replaceChildren();
+      for (const sid of stateOrder) {
+        const li = el('li');
+        li.draggable = true;
+        li.dataset.id = sid;
+        li.append(el('span', 'sort-handle', '☰'), el('span', '', labelOf(sid)));
+        ul.append(li);
+      }
+    };
+    paintManual();
+    manualHost.append(el('p', 'cover-pick-hint', 'Arrastra para reordenar:'), ul);
+    body.append(manualHost);
+
+    let dragId = null;
+    ul.addEventListener('dragstart', (ev) => {
+      const li = ev.target.closest('li');
+      if (!li) return;
+      dragId = li.dataset.id;
+      li.classList.add('dragging');
+      try { ev.dataTransfer.setData('text/plain', dragId); ev.dataTransfer.effectAllowed = 'move'; } catch (_) {}
+    });
+    ul.addEventListener('dragend', (ev) => {
+      const li = ev.target.closest('li');
+      if (li) li.classList.remove('dragging');
+      dragId = null;
+    });
+    ul.addEventListener('dragover', (ev) => {
+      ev.preventDefault();
+      const li = ev.target.closest('li');
+      if (!li || !dragId || li.dataset.id === dragId) return;
+      const ids = stateOrder.slice();
+      const from = ids.indexOf(dragId);
+      const to = ids.indexOf(li.dataset.id);
+      if (from < 0 || to < 0) return;
+      ids.splice(from, 1);
+      ids.splice(to, 0, dragId);
+      stateOrder.length = 0;
+      stateOrder.push(...ids);
+      paintManual();
+    });
+    let touchLi = null;
+    ul.addEventListener('touchstart', (ev) => {
+      const li = ev.target.closest('li');
+      if (!li) return;
+      touchLi = li;
+    }, { passive: true });
+    ul.addEventListener('touchmove', (ev) => {
+      if (!touchLi || !ev.touches[0]) return;
+      const over = document.elementFromPoint(ev.touches[0].clientX, ev.touches[0].clientY)?.closest?.('li');
+      if (!over || over === touchLi || !ul.contains(over)) return;
+      const drag = touchLi.dataset.id;
+      const ids = stateOrder.slice();
+      const from = ids.indexOf(drag);
+      const to = ids.indexOf(over.dataset.id);
+      if (from < 0 || to < 0) return;
+      ids.splice(from, 1);
+      ids.splice(to, 0, drag);
+      stateOrder.length = 0;
+      stateOrder.push(...ids);
+      paintManual();
+      touchLi = ul.querySelector('li[data-id="' + drag.replace(/"/g, '') + '"]');
+    }, { passive: true });
+    ul.addEventListener('touchend', () => { touchLi = null; }, { passive: true });
+
+    const syncManualVis = () => { manualHost.hidden = !rMan.checked; };
+    rName.onchange = rDate.onchange = rMan.onchange = syncManualVis;
+
+    const act = el('div', 'edit-actions');
+    const cancel = el('button', 'btn', 'Cancelar');
+    cancel.onclick = () => frame.remove();
+    const save = el('button', 'btn edit-save', 'Aplicar');
+    save.onclick = () => {
+      let mode = 'name';
+      if (rDate.checked) mode = 'date';
+      else if (rMan.checked) mode = 'manual';
+      const prefObj = { mode, order: mode === 'manual' ? stateOrder.slice() : [] };
+      setSortPref(scope, id, prefObj);
+      frame.remove();
+      try { onDone?.(prefObj); } catch (_) {}
+    };
+    act.append(cancel, save);
+    body.append(act);
+    box.append(head, body);
+    frame.append(box);
+    document.body.append(frame);
+  }
+
+  function mountSortButton(cfg) {
+    let btn = actions?.querySelector?.('.sort-btn');
+    if (!btn) {
+      btn = el('button', 'btn sort-btn');
+      btn.type = 'button';
+      btn.title = 'Ordenar';
+      btn.setAttribute('aria-label', 'Ordenar listado');
+      btn.innerHTML = SORT_ICON;
+      const menu = actions?.querySelector?.('.menu-btn');
+      if (menu) actions.insertBefore(btn, menu);
+      else if (actions) actions.append(btn);
+    }
+    btn.hidden = false;
+    btn.onclick = (ev) => {
+      try { ev.stopPropagation(); } catch (_) {}
+      const items = typeof cfg.getItems === 'function' ? cfg.getItems() : (cfg.items || []);
+      showSortFrame({
+        title: cfg.title,
+        scope: cfg.scope,
+        id: cfg.id,
+        items,
+        getId: cfg.getId,
+        getLabel: cfg.getLabel,
+        getDate: cfg.getDate,
+        onDone: cfg.onDone,
+      });
+    };
+    return btn;
+  }
+  function clearSortButton() {
+    try {
+      const btn = actions?.querySelector?.('.sort-btn');
+      if (btn) btn.hidden = true;
+    } catch (_) {}
+  }
+
+
   const setLastScrollY = (y) => {
     if (typeof d.setLastScrollY === 'function') d.setLastScrollY(y);
     else if (typeof d.lastScrollY !== 'undefined') { try { d.lastScrollY = y; } catch (_) {} }
@@ -411,6 +641,7 @@ function lockToggleOpts(kind, ref, label, redraw) {
 }
 
 function groupsView() {
+  clearSortButton();
   const LIB = libNow();
   const synced = syncedNow();
   if (!LIB.length) return msg(synced ? 'No se encontraron canales ...::Comics::tgstorage.' : 'Conectando…');
@@ -1015,6 +1246,49 @@ function groupsView() {
       homeBody.hidden = true;
       resultsHost.replaceChildren(el('p', 'home-search-empty', 'Buscando…'));
       timer = setTimeout(async () => {
+        const qNorm = q.trim().toLowerCase().replace(/\s+/g, ' ');
+        // Comando especial: listar/lista vine → cómics con ficha Telegram incompleta
+        if (qNorm === 'listar vine' || qNorm === 'lista vine') {
+          resultsHost.replaceChildren(el('p', 'home-search-empty', 'Buscando fichas incompletas…'));
+          const missing = [];
+          for (const ch of (LIB || [])) {
+            try {
+              if (locks.isContentRestricted('channel', ch)) continue;
+            } catch (_) {}
+            let files = [];
+            try { files = (await kv.get('f:' + ch.id)) || []; } catch (_) { files = []; }
+            for (const f of files) {
+              if (!f) continue;
+              try {
+                if (locks.isContentRestricted('comic', { ch, f })) continue;
+              } catch (_) {}
+              let needs = true;
+              try {
+                if (typeof comicNeedsCvFill === 'function') needs = !!comicNeedsCvFill(f, ch);
+                else {
+                  const cap = typeof parseComicCaption === 'function' ? parseComicCaption(f.caption || '') : {};
+                  needs = !String(cap?.originalTitle || '').trim()
+                    || !String(cap?.writer || '').trim()
+                    || !String(cap?.artist || '').trim()
+                    || !String(cap?.date || '').trim();
+                }
+              } catch (_) { needs = true; }
+              if (!needs) continue;
+              const label = comicDisplayName(ch, f, comicDisplay(comicSourceName(f), ch?.name) || f?.name || '');
+              missing.push({
+                type: 'comic',
+                typeLabel: 'cómic',
+                label,
+                sub: (ch.name || '') + ' · ficha incompleta',
+                ch, f,
+                go: () => openComic(ch, f),
+              });
+            }
+          }
+          missing.sort((a, b) => natural(a.label, b.label));
+          showResults(missing, q);
+          return;
+        }
         const idx = await ensureIndex();
         let hits = filterSearchIndex(idx, q);
         // Ocultar resultados de contenido bloqueado (candado cerrado)
@@ -1077,10 +1351,51 @@ function channelsView(g) {
       });
     };
 
+    const channelDate = async (ch) => {
+      try {
+        const files = (await kv.get('f:' + ch.id)) || [];
+        let best = null;
+        for (const f of files) {
+          const d = captionDateOf(f);
+          if (d == null) continue;
+          if (best == null || d < best) best = d;
+        }
+        return best;
+      } catch { return null; }
+    };
+    let channelDateCache = new Map();
+    const ensureChannelDates = async () => {
+      const prefObj = getSortPref('group-channels', g);
+      if (prefObj.mode !== 'date') return;
+      await Promise.all(chs.map(async (ch) => {
+        if (channelDateCache.has(String(ch.id))) return;
+        channelDateCache.set(String(ch.id), await channelDate(ch));
+      }));
+    };
+
     const build = async () => {
       if (!alive(e)) return;
+      await ensureChannelDates();
+      const prefObj = getSortPref('group-channels', g);
+      const sortedChs = applySortList(
+        chs,
+        prefObj,
+        (ch) => ch.id,
+        (ch) => channelDisplayName(ch),
+        (ch) => channelDateCache.get(String(ch.id)) ?? null
+      );
+      mountSortButton({
+        title: 'Ordenar canales de esta editorial',
+        scope: 'group-channels',
+        id: g,
+        getItems: () => chs,
+        getId: (ch) => ch.id,
+        getLabel: (ch) => channelDisplayName(ch),
+        getDate: (ch) => channelDateCache.get(String(ch.id)) ?? null,
+        onDone: async () => { await ensureChannelDates(); build(); },
+      });
       const gridItems = [];
-      for (const ch of chs) {
+      for (const ch of sortedChs) {
         const files = (await kv.get('f:' + ch.id)) || [];
         const n = files.length;
         const label = channelDisplayName(ch);
@@ -1251,6 +1566,8 @@ function filesView(ch) {
         return {
           // En la vista de series/canal, los cómics sueltos usan los ajustes de SERIES (misma portada y texto que el resto)
           kind: 'series',
+          _sortId: 'comic:' + String(f.id),
+          _sortDate: captionDateOf(f),
           label: comicRestricted ? '' : label,
           sub: comicRestricted ? '' : sizeLabel(f, ch),
           searchText: (label + ' ' + (f.name || '') + ' ' + (seriesLabel || '')).toLowerCase(),
@@ -1311,8 +1628,16 @@ function filesView(ch) {
           const seriesSearch = (seriesShown + ' ' + seriesLabel + ' ' + fs.map((f) => f.name).join(' ')).toLowerCase();
           const seriesRestricted = locks.isContentRestricted('series', { ch, seriesLabel });
           const seriesLockOpts = () => lockToggleOpts('series', { ch, seriesLabel }, seriesDisplayName(ch, seriesLabel), redraw);
+          let seriesDate = null;
+          for (const f of fs) {
+            const d = captionDateOf(f);
+            if (d == null) continue;
+            if (seriesDate == null || d < seriesDate) seriesDate = d;
+          }
           items.push({
             kind: 'series',
+            _sortId: 'series:' + String(seriesLabel),
+            _sortDate: seriesDate,
             label: seriesRestricted ? '' : seriesShown,
             sub: `${fs.length} números`,
             searchText: seriesSearch,
@@ -1333,9 +1658,34 @@ function filesView(ch) {
           });
         }
       }
-      // Orden alfabético por el nombre visible (incluye series renombradas)
-      items.sort((a, b) => natural(a.label, b.label));
-      grid(items, true, 'Buscar en este canal…', 'mixed');
+      // Orden según preferencia del canal (nombre / fecha / manual)
+      // Adjuntar clave y fecha para ordenar series y cómics sueltos
+      for (const it of items) {
+        if (it._sortId == null) {
+          // series card: label+kind; comic: use searchText hash fallback
+          it._sortId = it.kind + ':' + (it.label || it.searchText || Math.random());
+        }
+      }
+      // Rellenar fechas: series = min date of members; comics set in makeComicItem
+      const prefObj = getSortPref('channel', ch.id);
+      mountSortButton({
+        title: 'Ordenar series y cómics de este canal',
+        scope: 'channel',
+        id: ch.id,
+        getItems: () => items,
+        getId: (it) => it._sortId,
+        getLabel: (it) => it.label || it.searchText || '',
+        getDate: (it) => it._sortDate ?? null,
+        onDone: () => draw(cur),
+      });
+      const sorted = applySortList(
+        items,
+        prefObj,
+        (it) => it._sortId,
+        (it) => it.label || '',
+        (it) => it._sortDate ?? null
+      );
+      grid(sorted, true, 'Buscar en este canal…', 'mixed');
     };
     const cached = await kv.get('f:' + ch.id);
     if (cached) draw(cached); else msg('Cargando…');
@@ -1402,6 +1752,8 @@ function seriesView(ch, s, files) {
         };
         return {
           kind: 'comic',
+          _sortId: String(f.id),
+          _sortDate: captionDateOf(f),
           label: displayLabel,
           sub: sizeLabel(f, ch),
           searchText: (displayLabel + ' ' + (f.name || '')).toLowerCase(),
@@ -1417,7 +1769,25 @@ function seriesView(ch, s, files) {
           }).concat(lockToggleOpts('comic', { ch, f }, displayLabel, seriesRedraw))),
         };
       });
-      grid(items, true, 'Buscar en esta serie…', 'comics');
+      const prefObj = getSortPref('series', String(ch.id) + ':' + String(s));
+      mountSortButton({
+        title: 'Ordenar cómics de esta serie',
+        scope: 'series',
+        id: String(ch.id) + ':' + String(s),
+        getItems: () => items,
+        getId: (it) => it._sortId,
+        getLabel: (it) => it.label || '',
+        getDate: (it) => it._sortDate ?? null,
+        onDone: () => redraw(),
+      });
+      const sorted = applySortList(
+        items,
+        prefObj,
+        (it) => it._sortId,
+        (it) => it.label || '',
+        (it) => it._sortDate ?? null
+      );
+      grid(sorted, true, 'Buscar en esta serie…', 'comics');
     };
     redraw();
   });

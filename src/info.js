@@ -2737,8 +2737,11 @@ async function showPickCoverFromComic(ch, f, after) {
     gridEl.hidden = false;
 
     const loadOne = async (entry, idx) => {
+      // Misma estructura que el mosaico del lector (padding-bottom + ph absoluto)
       const cell = el('button', 'cover-pages-cell');
       cell.type = 'button';
+      const ph = el('div', 'cover-pages-ph');
+      cell.append(ph);
       cell.append(el('span', 'pg-n', String(idx + 1)));
       gridEl.append(cell);
       try {
@@ -2755,18 +2758,14 @@ async function showPickCoverFromComic(ch, f, after) {
         } catch (_) {}
         const img = new Image();
         img.onload = () => {
-          if (!cell.isConnected) return;
-          const n = cell.querySelector('.pg-n');
-          cell.replaceChildren(img);
-          if (n) cell.append(n);
+          if (!ph.isConnected) return;
+          ph.replaceChildren(img);
         };
         setBlobImg(img, thumb, cell);
         cell.onclick = async () => {
           try {
             cell.disabled = true;
             status.textContent = 'Guardando portada…';
-            // Guardar página completa (saveCoverBlob comprime como el resto)
-            // Primero se recuerda solo el nº de página (se sincroniza; Adaptar la vuelve a leer del cómic), recorte reiniciado
             setCoverAdapt(ch, f, { page: idx, mode: 'full', half: true });
             await saveCoverBlob(ch, f, blob, { custom: true });
             doClose(true);
@@ -2796,6 +2795,7 @@ async function showPickCoverFromComic(ch, f, after) {
     showCoverFitEditor,
     showPickCoverFromComic,
     showSeriesCvFillForm,
+    comicNeedsCvFill,
     showDescriptionPanel: typeof showDescriptionPanel === 'function' ? showDescriptionPanel : undefined,
     showCaptionEditor,
     showComicVinePicker,

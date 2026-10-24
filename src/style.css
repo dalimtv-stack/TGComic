@@ -16,6 +16,8 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
   position:relative;z-index:1;
 }
 #top.home #actions{position:absolute;right:.75rem;z-index:1}
+#actions{display:inline-flex;align-items:center;gap:6px;margin-left:auto}
+#top:not(.home) #actions{position:relative;right:auto;z-index:1}
 .btn{min-width:44px;height:44px;padding:0 .9rem;border:0;border-radius:12px;background:var(--card);color:inherit;font:inherit;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
 .btn:active{opacity:.6}
 #back{font-size:1.6rem;padding:0 .6rem}
@@ -162,44 +164,41 @@ html[data-grid-layout="fixed"] .grid:has(.cover-series):has(.cover-channel) > .c
 /* Elegir portada dentro del cómic */
 .cover-pages-grid{
   display:grid!important;
-  grid-template-columns:repeat(auto-fill,minmax(88px,1fr));
-  gap:10px;
+  grid-template-columns:repeat(auto-fill,minmax(90px,1fr));
+  gap:8px;
   margin:.5rem 0 1rem;
   max-height:min(55vh,420px);
   overflow:auto;
   -webkit-overflow-scrolling:touch;
   align-content:start;
+  align-items:start;
+  grid-auto-flow:row;
   width:100%;
   box-sizing:border-box;
 }
 .cover-pages-cell{
   position:relative;
-  display:block;
   width:100%;
-  min-width:0;
-  min-height:0;
-  aspect-ratio:2/3;
+  height:0;
+  padding:0 0 150% 0;
   border:0;
   border-radius:8px;
   background:#141518;
   overflow:hidden;
   cursor:pointer;
-  padding:0;
-  margin:0;
-  box-sizing:border-box;
-  flex:none;
-}
-.cover-pages-cell img,
-.cover-pages-cell canvas{
-  position:absolute;
-  inset:0;
-  width:100%;
-  height:100%;
-  object-fit:cover;
+  isolation:isolate;
   display:block;
   margin:0;
-  border:0;
-  pointer-events:none;
+  box-sizing:border-box;
+}
+.cover-pages-ph{
+  position:absolute;inset:0;overflow:hidden;
+  display:flex;align-items:center;justify-content:center;background:#141518;
+}
+.cover-pages-ph img,.cover-pages-ph canvas,
+.cover-pages-cell img,.cover-pages-cell canvas{
+  position:absolute;inset:0;width:100%;height:100%;
+  object-fit:cover;display:block;margin:0;border:0;pointer-events:none;
 }
 .cover-pages-cell .pg-n{
   position:absolute;
@@ -1016,3 +1015,17 @@ textarea.meta-desc-lg.edit-input{
   display:inline-flex;align-items:center;justify-content:center;
 }
 .home-refresh-btn svg{width:22px;height:22px;display:block}
+
+.sort-btn{min-width:44px;width:44px;padding:0}
+.sort-btn svg{width:22px;height:22px;display:block}
+.sort-frame .sort-opt{display:flex;align-items:center;gap:.6rem;padding:.65rem .2rem;cursor:pointer}
+.sort-frame .sort-opt input{accent-color:var(--acc)}
+.sort-manual-list{list-style:none;margin:.5rem 0 0;padding:0;max-height:min(50vh,360px);overflow:auto}
+.sort-manual-list li{
+  display:flex;align-items:center;gap:.5rem;
+  padding:.7rem .75rem;margin:0 0 6px;border-radius:10px;
+  background:#1c1d22;cursor:grab;user-select:none;
+  border:1px solid #ffffff10;
+}
+.sort-manual-list li.dragging{opacity:.55}
+.sort-manual-list .sort-handle{opacity:.45;font-size:1.1rem;line-height:1}
