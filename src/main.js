@@ -627,7 +627,7 @@ homeRefreshBtn.onclick = async () => {
   } finally {
     homeRefreshBtn.dataset.busy = '0';
     homeRefreshBtn.disabled = false;
-    titleEl.textContent = prevTitle || 'TGComics 0.0.1b';
+    titleEl.textContent = prevTitle || 'TGComics 0.0.1c';
   }
   try { refreshView(); } catch (_) { try { groupsView(); } catch (_) {} }
 };
@@ -2078,7 +2078,7 @@ async function migrateCacheImages() {
     }, true);
   } catch (_) {}
   try { initBalance(document.querySelector('#app')); } catch (_) {}
-  stack.push({ title: 'TGComics 0.0.1b', render: groupsView });
+  stack.push({ title: 'TGComics 0.0.1c', render: groupsView });
   show();
   // Optimizar caché antigua en segundo plano (WebP + menos resolución)
   migrateCacheImages();
