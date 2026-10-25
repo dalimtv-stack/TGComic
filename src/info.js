@@ -154,9 +154,19 @@ export function createInfoEdit(d) {
       } else if (src.t === 'comic') {
         let list = Array.isArray(files) ? files : [];
         if (!list.length) { try { list = (await kv.get('f:' + ch.id)) || []; } catch (_) {} }
-        const f = list.find((x) => String(x.id) === String(src.id));
+        // Incluir variants (calidad WebP, etc.)
+        const flat = [];
+        for (const x of list) {
+          if (!x) continue;
+          flat.push(x);
+          if (Array.isArray(x.variants)) for (const v of x.variants) if (v) flat.push(v);
+        }
+        const f = flat.find((x) => String(x.id) === String(src.id));
         if (!f) return;
-        const b = await getCover(ch, f);
+        let b = await getCover(ch, f);
+        if (!(b instanceof Blob && b.size)) {
+          try { b = await getCover(ch, f, { force: true }); } catch (_) {}
+        }
         if (!(b instanceof Blob && b.size)) return;
         await store(b);
       } else if (src.t === 'url') {
@@ -1491,7 +1501,44 @@ async function firstAvailableCover(ch, files) {
   if (!list.length && ch?.id) {
     try { list = await fetchFiles(ch); } catch (_) { list = []; }
   }
+  // Aplanar variantes [WebP] y ordenar por nº de issue (0 / #00 antes que #01)
+  const flat = [];
   for (const f of list) {
+    if (!f) continue;
+    flat.push(f);
+    if (Array.isArray(f.variants)) {
+      for (const v of f.variants) if (v?.id) flat.push(v);
+    }
+  }
+  const issueKey = (f) => {
+    try {
+      const src = typeof comicSourceName === 'function' ? comicSourceName(f) : (f?.name || '');
+      const p = typeof parseComicName === 'function' ? parseComicName(src, ch?.name) : null;
+      if (p && p.number != null && p.number !== '') {
+        const n = parseFloat(String(p.number).replace(',', '.'));
+        if (Number.isFinite(n)) return n;
+      }
+    } catch (_) {}
+    // Fallback: buscar #00 / #0 / #01 en el nombre
+    try {
+      const m = String(f?.name || '').match(/#\s*(\d+(?:[.,]\d+)?)/);
+      if (m) {
+        const n = parseFloat(m[1].replace(',', '.'));
+        if (Number.isFinite(n)) return n;
+      }
+    } catch (_) {}
+    return Number.POSITIVE_INFINITY;
+  };
+  flat.sort((a, b) => {
+    const ka = issueKey(a), kb = issueKey(b);
+    if (ka !== kb) return ka - kb;
+    // Preferir CBZ (portada generable sin unrar) ante el mismo número
+    const ea = /\.cbz$/i.test(a?.name || '') ? 0 : 1;
+    const eb = /\.cbz$/i.test(b?.name || '') ? 0 : 1;
+    if (ea !== eb) return ea - eb;
+    return String(a?.name || '').localeCompare(String(b?.name || ''), undefined, { numeric: true });
+  });
+  for (const f of flat) {
     if (!f?.id) continue;
     try {
       const b = await getCover(ch, f);
@@ -1889,17 +1936,36 @@ function channelCoverNode(ch, files) {
   };
 
   host._load = async () => {
-    // 1) Portada manual del canal (reaplica antes el origen elegido en otro dispositivo)
-    try { await applyCoverSource(channelCoverKey(ch), ch, files, 'channel'); } catch (_) {}
+    const key = channelCoverKey(ch);
+    // 1) Reaplicar origen sincronizado (GitHub alt / cómic / URL) desde otro dispositivo
+    try { await applyCoverSource(key, ch, files, 'channel'); } catch (_) {}
+    // Si aún no hay listado, cargar f: y reintentar (portada desde cómic necesita los archivos)
     try {
-      const custom = await kv.get(channelCoverKey(ch));
+      const src = getCoverSrc(key);
+      if (src) {
+        let list = Array.isArray(files) ? files : [];
+        if (!list.length && ch?.id) {
+          try { list = (await kv.get('f:' + ch.id)) || []; } catch (_) {}
+        }
+        if (list.length) {
+          try { await applyCoverSource(key, ch, list, 'channel'); } catch (_) {}
+        }
+      }
+    } catch (_) {}
+    try {
+      const custom = await kv.get(key);
       if (custom instanceof Blob && custom.size) {
         showOnHost(custom);
         return;
       }
     } catch (_) {}
 
-    // 2) Arte GitHub / public/channels
+    // Origen personalizado pendiente (red / listado): no sustituir por GitHub ni por el 1.er cómic
+    try {
+      if (getCoverSrc(key)) return;
+    } catch (_) {}
+
+    // 2) Arte GitHub / public/channels (solo si no hay origen personalizado)
     try {
       const gh = await getGithubChannelArtBlob(ch);
       if (gh instanceof Blob && gh.size) {
@@ -1908,7 +1974,7 @@ function channelCoverNode(ch, files) {
       }
     } catch (_) {}
 
-    // 3) Primer cómic del canal con portada → cachear en cc: para la próxima vez
+    // 3) Primer cómic del canal (orden por issue: #00 antes que #01)
     try {
       const comic = await firstAvailableCover(ch, files);
       if (comic) {
