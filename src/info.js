@@ -44,6 +44,8 @@ export function createInfoEdit(d) {
   const COVER_SYNC_PREFIX = 'coverblob:';
   async function persistCoverForSync(idbKey, blob) {
     if (!idbKey || !blob) return;
+    // Portadas de canal/serie: se sincroniza solo el ORIGEN (coverSrc:), nunca la imagen
+    if (/^(cc|sc):/.test(idbKey)) return;
     try {
       const buf = await blob.arrayBuffer();
       const bytes = new Uint8Array(buf);
@@ -77,6 +79,94 @@ export function createInfoEdit(d) {
       await kv.set(idbKey, blob);
       return blob;
     } catch (_) { return null; }
+  }
+
+  /** Origen de la portada elegida (sincronizado): {t:'gh',url} | {t:'comic',id} | {t:'url',url}. '0' = por defecto. */
+  const coverSrcLs = (key) => 'coverSrc:' + key;
+  const coverAppliedLs = (key) => 'device:coverSrcApplied:' + key;
+  function getCoverSrc(key) {
+    try {
+      const raw = localStorage.getItem(coverSrcLs(key));
+      if (!raw || raw === '0') return null;
+      return JSON.parse(raw);
+    } catch (_) { return null; }
+  }
+  /** Registrar el origen elegido (null = volver a por defecto). Llamar ANTES de guardar el blob. */
+  function setCoverSrc(key, src) {
+    try {
+      if (src) localStorage.setItem(coverSrcLs(key), JSON.stringify(src));
+      else if (localStorage.getItem(coverSrcLs(key)) != null) localStorage.setItem(coverSrcLs(key), '0');
+      localStorage.setItem(coverAppliedLs(key), src ? JSON.stringify(src) : '');
+      sync.schedulePush?.();
+    } catch (_) {}
+  }
+  /** Imagen del dispositivo: solo local. No toca el origen sincronizado ni se vuelve a reaplicar. */
+  function markCoverLocalOnly(key) {
+    try {
+      const raw = localStorage.getItem(coverSrcLs(key));
+      localStorage.setItem(coverAppliedLs(key), !raw || raw === '0' ? '' : raw);
+    } catch (_) {}
+  }
+  /** Descarga una imagen desde una URL (necesita CORS en el servidor de la imagen). */
+  async function fetchImageUrlBlob(url) {
+    const res = await fetch(url, { mode: 'cors', cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const b = await res.blob();
+    if (!b.size || !/^image\//i.test(b.type || 'image/jpeg')) throw new Error('La URL no es una imagen');
+    return b;
+  }
+  /** Pide una URL de imagen; devuelve la URL validada o null. */
+  async function askCoverUrl() {
+    const raw = await appPrompt('URL de la imagen (https://…). Se guarda solo la URL y se sincroniza entre dispositivos.', 'Portada desde URL', '');
+    const url = String(raw || '').trim();
+    if (!url) return null;
+    if (!/^https?:\/\//i.test(url)) { await appAlert('La URL debe empezar por http:// o https://'); return null; }
+    return url;
+  }
+  /**
+   * Si otro dispositivo cambió el origen de la portada, reaplicarlo aquí.
+   * kind: 'channel' | 'series'.
+   */
+  async function applyCoverSource(key, ch, files, kind) {
+    let raw = null, applied = '';
+    try {
+      raw = localStorage.getItem(coverSrcLs(key));
+      applied = localStorage.getItem(coverAppliedLs(key)) || '';
+    } catch (_) {}
+    if (raw == null) return;
+    const want = raw === '0' ? '' : raw;
+    if (want === applied) return;
+    let src = null;
+    try { src = want ? JSON.parse(want) : null; } catch (_) { return; }
+    const store = async (b) => {
+      await kv.del(key);
+      if (kind === 'channel') await setChannelCoverBlob(ch, b);
+      else await setSeriesCoverBlob(ch, kind.label, b);
+    };
+    try {
+      if (!src) {
+        await kv.del(key); // vuelve a por defecto (arte GitHub / primer cómic)
+      } else if (src.t === 'gh' && kind === 'channel') {
+        const b = await getGithubChannelArtBlob(ch, src.url);
+        if (!(b instanceof Blob && b.size)) return;
+        await store(b);
+        try { await kv.set(`art:channels:${artNorm((ch.name || '').normalize('NFC').trim())}`, { blob: b, url: src.url, optimized: true }); } catch (_) {}
+      } else if (src.t === 'comic') {
+        let list = Array.isArray(files) ? files : [];
+        if (!list.length) { try { list = (await kv.get('f:' + ch.id)) || []; } catch (_) {} }
+        const f = list.find((x) => String(x.id) === String(src.id));
+        if (!f) return;
+        const b = await getCover(ch, f);
+        if (!(b instanceof Blob && b.size)) return;
+        await store(b);
+      } else if (src.t === 'url') {
+        const b = await fetchImageUrlBlob(src.url);
+        await store(b);
+      } else {
+        return;
+      }
+      localStorage.setItem(coverAppliedLs(key), want);
+    } catch (e) { console.warn('[cover src]', e); }
   }
 
   const channelCoverKey = (ch) => `cc:${ch.id}`;
@@ -1411,6 +1501,7 @@ async function firstAvailableCover(ch, files) {
 }
 
 async function getSeriesCoverBlob(ch, seriesLabel, files) {
+  try { await applyCoverSource(seriesCoverKey(ch, seriesLabel), ch, files, { label: seriesLabel }); } catch (_) {}
   try {
     const b = await kv.get(seriesCoverKey(ch, seriesLabel));
     if (b instanceof Blob && b.size) return b;
@@ -1600,7 +1691,7 @@ function showSeriesCoverPicker(ch, seriesLabel, files, after) {
   head.append(close);
   const body = el('div', 'info-body');
   body.append(el('div', 'info-sec', title));
-  body.append(el('p', 'cover-pick-hint', 'Elige la portada de un número de la serie o una imagen del dispositivo.'));
+  body.append(el('p', 'cover-pick-hint', 'Elige la portada de un número de la serie, una URL de imagen (se sincroniza) o una imagen del dispositivo (solo en este dispositivo).'));
 
   const pickFile = el('button', 'btn cover-pick-device', '📁  Desde fotos o archivos');
   const fileInput = el('input');
@@ -1612,6 +1703,7 @@ function showSeriesCoverPicker(ch, seriesLabel, files, after) {
     const file = fileInput.files?.[0];
     if (!file) return;
     try {
+      markCoverLocalOnly(seriesCoverKey(ch, seriesLabel));
       await setSeriesCoverBlob(ch, seriesLabel, file);
       frame.remove();
       after?.();
@@ -1619,7 +1711,21 @@ function showSeriesCoverPicker(ch, seriesLabel, files, after) {
       appAlert('No se pudo usar la imagen: ' + (e?.message || e));
     }
   };
-  body.append(pickFile, fileInput);
+  const pickUrl = el('button', 'btn cover-pick-device', '🔗  Desde URL de imagen');
+  pickUrl.onclick = async () => {
+    const url = await askCoverUrl();
+    if (!url) return;
+    try {
+      const b = await fetchImageUrlBlob(url);
+      setCoverSrc(seriesCoverKey(ch, seriesLabel), { t: 'url', url });
+      await setSeriesCoverBlob(ch, seriesLabel, b);
+      frame.remove();
+      after?.();
+    } catch (e) {
+      appAlert('No se pudo cargar la imagen (¿el servidor bloquea CORS?): ' + (e?.message || e));
+    }
+  };
+  body.append(pickFile, fileInput, pickUrl);
 
   const grid = el('div', 'cover-pick-grid');
   body.append(el('div', 'info-sec', 'Números de la serie'));
@@ -1632,6 +1738,7 @@ function showSeriesCoverPicker(ch, seriesLabel, files, after) {
         appAlert('Este cómic aún no tiene portada en caché. Ábrelo una vez e inténtalo de nuevo.');
         return;
       }
+      setCoverSrc(seriesCoverKey(ch, seriesLabel), { t: 'comic', id: f.id });
       await setSeriesCoverBlob(ch, seriesLabel, b);
       frame.remove();
       after?.();
@@ -1669,11 +1776,9 @@ function showSeriesCoverPicker(ch, seriesLabel, files, after) {
 }
 
 async function getChannelCoverBlob(ch, files) {
+  try { await applyCoverSource(channelCoverKey(ch), ch, files, 'channel'); } catch (_) {}
   try {
     let b = await kv.get(channelCoverKey(ch));
-    if (!(b instanceof Blob && b.size)) {
-      b = await restoreCoverFromSync(channelCoverKey(ch));
-    }
     if (b instanceof Blob && b.size) return b;
   } catch (_) {}
   // Generar desde el primer cómic y GUARDAR (evita re-descargas de varios segundos)
@@ -1750,7 +1855,8 @@ function channelCoverNode(ch, files) {
   };
 
   host._load = async () => {
-    // 1) Portada manual del canal
+    // 1) Portada manual del canal (reaplica antes el origen elegido en otro dispositivo)
+    try { await applyCoverSource(channelCoverKey(ch), ch, files, 'channel'); } catch (_) {}
     try {
       const custom = await kv.get(channelCoverKey(ch));
       if (custom instanceof Blob && custom.size) {
@@ -2292,7 +2398,7 @@ function showChannelCoverPicker(ch, files, after) {
   head.append(close);
   const body = el('div', 'info-body');
   body.append(el('div', 'info-sec', title));
-  body.append(el('p', 'cover-pick-hint', 'Elige GitHub, un cómic del canal o una imagen del dispositivo.'));
+  body.append(el('p', 'cover-pick-hint', 'Elige GitHub, un cómic del canal, una URL de imagen (se sincroniza) o una imagen del dispositivo (solo en este dispositivo).'));
 
   const pickFile = el('button', 'btn cover-pick-device', '📁  Desde fotos o archivos');
   const fileInput = el('input');
@@ -2304,6 +2410,7 @@ function showChannelCoverPicker(ch, files, after) {
     const file = fileInput.files?.[0];
     if (!file) return;
     try {
+      markCoverLocalOnly(channelCoverKey(ch));
       await setChannelCoverBlob(ch, file);
       frame.remove();
       after?.();
@@ -2311,7 +2418,22 @@ function showChannelCoverPicker(ch, files, after) {
       appAlert('No se pudo usar la imagen: ' + (e?.message || e));
     }
   };
-  body.append(pickFile, fileInput);
+  const pickUrl = el('button', 'btn cover-pick-device', '🔗  Desde URL de imagen');
+  pickUrl.onclick = async () => {
+    const url = await askCoverUrl();
+    if (!url) return;
+    try {
+      const b = await fetchImageUrlBlob(url);
+      await clearChannelCover(ch);
+      setCoverSrc(channelCoverKey(ch), { t: 'url', url });
+      await setChannelCoverBlob(ch, b);
+      frame.remove();
+      after?.();
+    } catch (e) {
+      appAlert('No se pudo cargar la imagen (¿el servidor bloquea CORS?): ' + (e?.message || e));
+    }
+  };
+  body.append(pickFile, fileInput, pickUrl);
 
   const grid = el('div', 'cover-pick-grid');
   body.append(el('div', 'info-sec', 'Opciones'));
@@ -2348,6 +2470,7 @@ function showChannelCoverPicker(ch, files, after) {
       return getGithubChannelArtBlob(ch, v.url);
     }, async () => {
       await clearChannelCover(ch);
+      setCoverSrc(channelCoverKey(ch), { t: 'gh', url: v.url, file: v.file });
       try {
         let b = v.blob || null;
         if (!b) b = await getGithubChannelArtBlob(ch, v.url);
@@ -2374,6 +2497,7 @@ function showChannelCoverPicker(ch, files, after) {
     if (!ghVariants.length) {
       addCell('GitHub / predeterminada', () => getGithubChannelArtBlob(ch), async () => {
         await clearChannelCover(ch);
+        setCoverSrc(channelCoverKey(ch), null);
         try {
           const b = await getGithubChannelArtBlob(ch);
           if (b) await setChannelCoverBlob(ch, b);
@@ -2406,6 +2530,7 @@ function showChannelCoverPicker(ch, files, after) {
           appAlert('Este cómic aún no tiene portada en caché. Ábrelo una vez e inténtalo de nuevo.');
           return;
         }
+        setCoverSrc(channelCoverKey(ch), { t: 'comic', id: f.id });
         await setChannelCoverBlob(ch, b);
         frame.remove();
         after?.();

@@ -14,6 +14,7 @@ const LS_META = 'sync:meta';
 
 const SYNC_PREFIXES = [
   'coverblob:',
+  'coverSrc:',
   'pref:',
   'page:',
   'pages:',

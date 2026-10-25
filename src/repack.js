@@ -499,6 +499,27 @@ export function createRepackTool(d) {
     }
   }
 
+  /** Serie efectiva de un archivo (override manual o parseo del nombre, con renombre). */
+  function candidateSeries(ch, f) {
+    let raw = '';
+    try {
+      const ov = typeof getComicSeriesOverride === 'function' ? getComicSeriesOverride(ch, f) : '';
+      if (ov && String(ov).trim()) raw = String(ov).trim();
+    } catch (_) {}
+    if (!raw) {
+      try {
+        const p = typeof parseComicName === 'function' ? parseComicName(f.name || '', ch.name) : null;
+        if (p?.series) raw = String(p.series).trim();
+      } catch (_) {}
+    }
+    if (!raw) return '';
+    try {
+      const shown = typeof seriesDisplayName === 'function' ? seriesDisplayName(ch, raw) : '';
+      if (shown && String(shown).trim()) return String(shown).trim();
+    } catch (_) {}
+    return raw;
+  }
+
   async function collectCandidates() {
     await getReady();
     const list = [];
@@ -515,6 +536,7 @@ export function createRepackTool(d) {
         list.push({
           ch,
           f,
+          series: candidateSeries(ch, f),
           reasons: [cbr ? 'CBR' : null, fwd ? 'Reenviado' : null].filter(Boolean),
         });
       }
@@ -994,7 +1016,11 @@ export function createRepackTool(d) {
     const edLab = el('label', 'sync-label', 'Editorial');
     const chLab = el('label', 'sync-label', 'Canal');
     chLab.hidden = true;
-    body.append(edLab, edSel, chLab, chSel);
+    const seSel = el('select', 'edit-input upload-select');
+    seSel.hidden = true;
+    const seLab = el('label', 'sync-label', 'Serie');
+    seLab.hidden = true;
+    body.append(edLab, edSel, chLab, chSel, seLab, seSel);
 
     const listHost = el('div', 'repack-list');
     body.append(listHost);
@@ -1030,7 +1056,46 @@ export function createRepackTool(d) {
       edSel.value = '';
       chSel.hidden = true;
       chLab.hidden = true;
+      rebuildSeries();
       applyFilter();
+    };
+
+    const NO_SERIES = '\u0000none';
+    const rebuildSeries = () => {
+      const g = edSel.value;
+      const cid = chSel.value;
+      seSel.replaceChildren();
+      const oAll = el('option');
+      oAll.value = '';
+      oAll.textContent = 'Todas';
+      seSel.append(oAll);
+      if (!g || !cid) {
+        seSel.hidden = true;
+        seLab.hidden = true;
+        return;
+      }
+      const set = new Set();
+      let none = false;
+      for (const x of allCandidates) {
+        if ((x.ch.group || 'Sin editorial') !== g || String(x.ch.id) !== cid) continue;
+        if (x.series) set.add(x.series); else none = true;
+      }
+      for (const sName of [...set].sort((a, b) => String(a).localeCompare(String(b)))) {
+        const o = el('option');
+        o.value = sName;
+        o.textContent = sName;
+        seSel.append(o);
+      }
+      if (none) {
+        const o = el('option');
+        o.value = NO_SERIES;
+        o.textContent = '(Sin serie)';
+        seSel.append(o);
+      }
+      seSel.value = '';
+      const show = set.size > 0 || none;
+      seSel.hidden = !show;
+      seLab.hidden = !show;
     };
 
     const rebuildChannels = () => {
@@ -1067,6 +1132,9 @@ export function createRepackTool(d) {
       candidates = allCandidates.filter((x) => {
         if (g && (x.ch.group || 'Sin editorial') !== g) return false;
         if (cid && String(x.ch.id) !== cid) return false;
+        const sv = seSel.value;
+        if (sv === NO_SERIES) { if (x.series) return false; }
+        else if (sv && x.series !== sv) return false;
         return true;
       });
       paintList();
@@ -1107,9 +1175,14 @@ export function createRepackTool(d) {
 
     edSel.onchange = () => {
       rebuildChannels();
+      rebuildSeries();
       applyFilter();
     };
-    chSel.onchange = applyFilter;
+    chSel.onchange = () => {
+      rebuildSeries();
+      applyFilter();
+    };
+    seSel.onchange = applyFilter;
 
     btnAll.onclick = () => checks.forEach((c) => { c.checked = true; });
     btnNone.onclick = () => checks.forEach((c) => { c.checked = false; });
