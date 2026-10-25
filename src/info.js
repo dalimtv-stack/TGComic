@@ -1502,17 +1502,34 @@ async function firstAvailableCover(ch, files) {
 }
 
 async function getSeriesCoverBlob(ch, seriesLabel, files) {
-  try { await applyCoverSource(seriesCoverKey(ch, seriesLabel), ch, files, { label: seriesLabel }); } catch (_) {}
+  const key = seriesCoverKey(ch, seriesLabel);
+  try { await applyCoverSource(key, ch, files, { label: seriesLabel }); } catch (_) {}
   try {
-    const b = await kv.get(seriesCoverKey(ch, seriesLabel));
+    const b = await kv.get(key);
     if (b instanceof Blob && b.size) return b;
   } catch (_) {}
-  // Generar desde el primer cómic y GUARDAR en caché (evita re-descargas)
+  // Origen elegido en otro dispositivo aún no aplicable (sin listado): no pisar con el 1.er cómic
+  try {
+    if (getCoverSrc(key)) {
+      let list = Array.isArray(files) ? files : [];
+      if (!list.length) {
+        try { list = (await kv.get('f:' + ch.id)) || []; } catch (_) {}
+      }
+      if (list.length) {
+        try { await applyCoverSource(key, ch, list, { label: seriesLabel }); } catch (_) {}
+        try {
+          const b2 = await kv.get(key);
+          if (b2 instanceof Blob && b2.size) return b2;
+        } catch (_) {}
+      }
+      return null;
+    }
+  } catch (_) {}
   const generated = await firstAvailableCover(ch, files);
   if (generated instanceof Blob && generated.size) {
     try { await setSeriesCoverBlob(ch, seriesLabel, generated); } catch (_) {}
     try {
-      const cached = await kv.get(seriesCoverKey(ch, seriesLabel));
+      const cached = await kv.get(key);
       if (cached instanceof Blob && cached.size) return cached;
     } catch (_) {}
     return generated;
@@ -1777,17 +1794,33 @@ function showSeriesCoverPicker(ch, seriesLabel, files, after) {
 }
 
 async function getChannelCoverBlob(ch, files) {
-  try { await applyCoverSource(channelCoverKey(ch), ch, files, 'channel'); } catch (_) {}
+  const key = channelCoverKey(ch);
+  try { await applyCoverSource(key, ch, files, 'channel'); } catch (_) {}
   try {
-    let b = await kv.get(channelCoverKey(ch));
+    const b = await kv.get(key);
     if (b instanceof Blob && b.size) return b;
   } catch (_) {}
-  // Generar desde el primer cómic y GUARDAR (evita re-descargas de varios segundos)
+  try {
+    if (getCoverSrc(key)) {
+      let list = Array.isArray(files) ? files : [];
+      if (!list.length) {
+        try { list = (await kv.get('f:' + ch.id)) || []; } catch (_) {}
+      }
+      if (list.length) {
+        try { await applyCoverSource(key, ch, list, 'channel'); } catch (_) {}
+        try {
+          const b2 = await kv.get(key);
+          if (b2 instanceof Blob && b2.size) return b2;
+        } catch (_) {}
+      }
+      return null;
+    }
+  } catch (_) {}
   const generated = await firstAvailableCover(ch, files);
   if (generated instanceof Blob && generated.size) {
     try { await setChannelCoverBlob(ch, generated); } catch (_) {}
     try {
-      const cached = await kv.get(channelCoverKey(ch));
+      const cached = await kv.get(key);
       if (cached instanceof Blob && cached.size) return cached;
     } catch (_) {}
     return generated;
