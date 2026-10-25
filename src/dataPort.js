@@ -2,16 +2,18 @@
  * Importar / exportar renombres, desagrupaciones y portadas custom (JSON).
  */
 const LS_PREFIXES = [
-  'ungroup:', 'seriesName:', 'comicName:', 'comicSeries:',
+  'ungroup:', 'seriesName:', 'comicName:', 'comicSeries:', 'coverFit:',
 ];
-const LS_KEYS_EXACT = ['channelNames', 'groupNames'];
+const LS_KEYS_EXACT = ['channelNames', 'groupNames', 'contentLocks'];
+// Nunca se exportan ni se importan (sesión de Telegram y credenciales de sincronización)
+const isPrivateKey = (k) => k === 'tg_session' || k.startsWith('sync:');
 
 function lsKeysOfInterest() {
   const out = [];
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (!k) continue;
+      if (!k || isPrivateKey(k)) continue;
       if (LS_KEYS_EXACT.includes(k) || LS_PREFIXES.some((p) => k.startsWith(p))) out.push(k);
       // meta.js keys
       if (/^(ug:|sn:|cn:|gn:|chn:|cov:)/.test(k)) out.push(k);
@@ -30,7 +32,7 @@ export async function exportLibraryData({ kv, includeCovers = true }) {
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
       if (!k) continue;
-      if (/rename|ungroup|display|override/i.test(k) && !(k in local)) {
+      if (/rename|ungroup|display|override/i.test(k) && !(k in local) && !isPrivateKey(k)) {
         local[k] = localStorage.getItem(k);
       }
     }
@@ -73,7 +75,7 @@ export async function importLibraryData(data, { kv } = {}) {
   const local = data.localStorage || data.keys || {};
   let nLs = 0;
   for (const [k, v] of Object.entries(local)) {
-    if (!k || k === 'tg_session') continue;
+    if (!k || isPrivateKey(k)) continue;
     try {
       if (v == null) localStorage.removeItem(k);
       else localStorage.setItem(k, String(v));
