@@ -151,6 +151,24 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
     list.sort((a, b) => natural(String(getLabel(a)), String(getLabel(b))));
     return list;
   };
+  /** Ordena los cómics de una serie igual que la vista de la serie (nombre / fecha / manual).
+   *  También lo usa el visor (resolveQueue) cuando abre sin cola, p. ej. desde "Seguir leyendo". */
+  const sortSeriesFiles = (ch, s, fs) => {
+    const items = (fs || []).map((f) => {
+      let label = '';
+      try {
+        const p = parseComicName(comicSourceName(f), ch.name);
+        const baseLabel = (p && String(p.series || '').toLowerCase() === String(s).toLowerCase())
+          ? issueDisplay(p)
+          : issueLabel(s, f, ch.name);
+        label = comicDisplayName(ch, f, baseLabel);
+      } catch (_) { label = String(f?.name || ''); }
+      return { _f: f, _sortId: String(f.id), _sortDate: captionDateOf(f), label };
+    });
+    return applySortList(items, getSortPref('series', String(ch.id) + ':' + String(s)),
+      (it) => it._sortId, (it) => it.label || '', (it) => it._sortDate ?? null).map((it) => it._f);
+  };
+  try { globalThis.__tgSortSeriesFiles = sortSeriesFiles; } catch (_) {}
   const SORT_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 4v16"/><path d="M5 17l3 3 3-3"/><path d="M16 20V4"/><path d="M13 7l3-3 3 3"/></svg>`;
 
   function showSortFrame({ title, scope, id, items, getId, getLabel, getDate, onDone }) {
@@ -1708,6 +1726,7 @@ function filesView(ch) {
     e._uploadCtx = { editorial: ch.group || 'Sin editorial', channel: ch };
     e._chId = ch.id;
     let cur = [];
+    let channelQueue = []; // cómics en el orden visible del canal
     const draw = (files) => {
       if (!alive(e)) return;
       cur = files;
@@ -1727,6 +1746,7 @@ function filesView(ch) {
         return {
           // En la vista de series/canal, los cómics sueltos usan los ajustes de SERIES (misma portada y texto que el resto)
           kind: 'series',
+          _f: f,
           _sortId: 'comic:' + String(f.id),
           _sortDate: captionDateOf(f),
           label: comicRestricted ? '' : label,
@@ -1737,7 +1757,7 @@ function filesView(ch) {
           hiddenMeta: comicRestricted,
           go: () => {
             if (!locks.guardRestricted('comic', { ch, f }, label)) return;
-            openComic(ch, f, cur);
+            openComic(ch, f, channelQueue.length ? channelQueue : cur);
           },
           longPress: () => sheet(label, comicSheetOpts(ch, f, label, redraw, sheetCtx).concat(
             lockToggleOpts('comic', { ch, f }, label, redraw)
@@ -1841,6 +1861,7 @@ function filesView(ch) {
         (it) => it.label || '',
         (it) => it._sortDate ?? null
       );
+      channelQueue = sorted.filter((it) => it._f).map((it) => it._f);
       grid(sorted, true, 'Buscar en este canal…', 'mixed');
     };
     const cached = await kv.get('f:' + ch.id);
@@ -1895,6 +1916,7 @@ function seriesView(ch, s, files) {
         if (titleEl) titleEl.textContent = t;
       } catch (_) {}
       const seriesUnread = fs.some((x) => !isComicRead(ch.id, x.id));
+      let seriesQueue = fs;
       const items = fs.map((f) => {
         const p = parseComicName(comicSourceName(f), ch.name);
         const baseLabel = (p && String(p.series || '').toLowerCase() === String(s).toLowerCase())
@@ -1908,6 +1930,7 @@ function seriesView(ch, s, files) {
         };
         return {
           kind: 'comic',
+          _f: f,
           _sortId: String(f.id),
           _sortDate: captionDateOf(f),
           label: displayLabel,
@@ -1916,7 +1939,7 @@ function seriesView(ch, s, files) {
           isUnread: unread,
           cover: () => locks.isContentRestricted('comic', { ch, f }) ? locks.lockedCoverNode(ART) : comicCover(ch, f),
           hiddenMeta: locks.isContentRestricted('comic', { ch, f }),
-          go: () => openComic(ch, f, fs),
+          go: () => openComic(ch, f, seriesQueue),
           longPress: () => sheet(displayLabel, comicSheetOpts(ch, f, displayLabel, seriesRedraw, {
             seriesLabel: s,
             seriesFiles: fs,
@@ -1943,6 +1966,7 @@ function seriesView(ch, s, files) {
         (it) => it.label || '',
         (it) => it._sortDate ?? null
       );
+      seriesQueue = sorted.map((it) => it._f).filter(Boolean);
       grid(sorted, true, 'Buscar en esta serie…', 'comics');
     };
     redraw();

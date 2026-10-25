@@ -1118,7 +1118,7 @@ textarea.meta-desc-lg.edit-input{
 }
 #rd.page.fit-width .page-host img{
   flex:0 0 auto!important;
-  align-self:center;
+  align-self:flex-start!important; /* antes 'center': centraba en vertical y el principio de la hoja quedaba inaccesible */
   margin-top:0!important;
   margin-bottom:0!important;
   max-height:none!important;

@@ -89,8 +89,13 @@ export function createReader(state, d) {
     try {
       let files = (await kv.get('f:' + ch.id)) || [];
       if (!files.length) files = await fetchFiles(ch);
-      for (const { files: fs } of groupSeries(files, ch.name, seriesOverrideFor(ch))) {
+      for (const { files: fs, label } of groupSeries(files, ch.name, seriesOverrideFor(ch))) {
         if (fs.some((x) => String(x.id) === String(f.id))) {
+          // Mismo orden que la vista de la serie (preferencia nombre / fecha / manual del usuario)
+          try {
+            const sorter = globalThis.__tgSortSeriesFiles;
+            if (typeof sorter === 'function') return sorter(ch, label, fs);
+          } catch (_) {}
           // Siempre cola de la serie (aunque tenga 1): evita saltar a otro cómic del canal.
           // Mismo orden que groupSeries (el de la vista de la serie): no reordenar por nº de '#',
           // porque los cómics sin '#' en el nombre acababan al final y se saltaban números.
@@ -111,6 +116,7 @@ export function createReader(state, d) {
       msg('Abriendo…');
       try {
         const status = (t) => { if (!cancelled(ac) && alive(e)) msg(t); };
+        // La cola llega ya en el orden visible (nombre / fecha / manual) desde la vista; no reordenar aquí.
         const list = queue && queue.length ? queue : await resolveQueue(ch, f);
         // Si f es una versión oculta (p. ej. desde "Seguir leyendo"), usar la entrada principal que la agrupa
         try {
@@ -122,7 +128,7 @@ export function createReader(state, d) {
           }
         } catch (_) {}
         setLastRead(ch, f);
-        const idx = Math.max(0, list.findIndex((x) => x.id === f.id));
+        const idx = Math.max(0, list.findIndex((x) => String(x.id) === String(f.id)));
         // Preferir entrada fresca del listado (tamaño puede haber cambiado al resubir en Telegram)
         try {
           const fresh = list.find((x) => String(x.id) === String(f.id));
@@ -738,6 +744,20 @@ export function createReader(state, d) {
         setRdClass('page fit-' + pref('fit', 'screen') + (pref('spread', '0') === '1' ? ' spread' : ''));
         const fit = el('button', 'btn');
         const pageHost = el('div', 'page-host');
+        // Página+Ancho: con flex centrado, una imagen más alta que la pantalla desborda por arriba
+        // y esa parte no es alcanzable con scroll. Anclamos arriba y centramos solo en horizontal.
+        const applyWidthAnchor = () => {
+          const w = pref('fit', 'screen') === 'width';
+          pageHost.style.alignItems = w ? 'flex-start' : '';
+          pageHost.style.justifyContent = w ? 'flex-start' : '';
+          pageHost.style.alignContent = w ? 'flex-start' : '';
+          pageHost.style.overflowY = w ? 'auto' : '';
+          for (const im of pageHost.querySelectorAll('img')) {
+            im.style.margin = w ? '0 auto' : '';
+            im.style.alignSelf = w ? 'flex-start' : '';
+          }
+          if (w) pageHost.scrollTop = 0;
+        };
         let img = el('img');
         pageHost.append(img);
         const fitLabel = () => {
@@ -753,6 +773,7 @@ export function createReader(state, d) {
           setRdClass(rd.className.replace(/fit-\w+/, 'fit-' + pref('fit', 'screen')));
           if (pref('spread', '0') === '1') rd.classList.add('spread');
           else rd.classList.remove('spread');
+          try { applyWidthAnchor(); } catch (_) {}
           fitLabel();
           updateStatus();
           pokeUI();
@@ -854,11 +875,7 @@ export function createReader(state, d) {
             rd.scrollTo(0, 0);
             try {
               // Página+Ancho: imagen alta anclada arriba (no centrada → no se pierde el inicio)
-              if (pref('fit', 'screen') === 'width') {
-                pageHost.style.alignItems = 'flex-start';
-              } else {
-                pageHost.style.alignItems = '';
-              }
+              applyWidthAnchor();
               pageHost.scrollTop = 0;
               pageHost.scrollLeft = 0;
               requestAnimationFrame(() => {
