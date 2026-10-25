@@ -627,7 +627,7 @@ homeRefreshBtn.onclick = async () => {
   } finally {
     homeRefreshBtn.dataset.busy = '0';
     homeRefreshBtn.disabled = false;
-    titleEl.textContent = prevTitle || 'TGComics';
+    titleEl.textContent = prevTitle || 'TGComics 0.0.1';
   }
   try { refreshView(); } catch (_) { try { groupsView(); } catch (_) {} }
 };
