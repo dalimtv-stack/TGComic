@@ -89,10 +89,30 @@ export function createReader(state, d) {
     try {
       let files = (await kv.get('f:' + ch.id)) || [];
       if (!files.length) files = await fetchFiles(ch);
+      const byIssue = (a, b) => {
+        const key = (x) => {
+          try {
+            const nm = String(x?.name || '');
+            const d = typeof comicDisplay === 'function' ? comicDisplay(nm, ch.name) : nm;
+            const m = String(d).match(/#\s*(\d+(?:[.,]\d+)?)/) || nm.match(/#\s*(\d+(?:[.,]\d+)?)/);
+            if (m) {
+              const n = parseFloat(m[1].replace(',', '.'));
+              if (Number.isFinite(n)) return n;
+            }
+          } catch (_) {}
+          return Number.POSITIVE_INFINITY;
+        };
+        const ka = key(a), kb = key(b);
+        if (ka !== kb) return ka - kb;
+        return String(a?.name || '').localeCompare(String(b?.name || ''), undefined, { numeric: true });
+      };
       for (const { files: fs } of groupSeries(files, ch.name, seriesOverrideFor(ch))) {
-        if (fs.some((x) => x.id === f.id)) return fs.length > 1 ? fs : files;
+        if (fs.some((x) => String(x.id) === String(f.id))) {
+          // Siempre cola de la serie (aunque tenga 1): evita saltar a otro cómic del canal
+          return fs.slice().sort(byIssue);
+        }
       }
-      return files;
+      return files.slice().sort(byIssue);
     } catch { return [f]; }
   }
 
@@ -487,6 +507,8 @@ export function createReader(state, d) {
           const dx = t.clientX - ebx;
           const dy = t.clientY - eby;
           ebx = null;
+          // Android: el gesto del sistema ya hace history.back(); duplicarlo cierra visor + carpeta
+          if (isAndroid) return;
           if (dx > 48 && Math.abs(dy) < 110) history.back();
         }, { passive: true });
         rd.append(edgeBack);
@@ -536,7 +558,14 @@ export function createReader(state, d) {
         pokeUI();
         document.querySelectorAll('.mosaic').forEach((x) => x.remove());
         const overlay = el('div', 'mosaic');
-        overlay.style.cssText = 'position:fixed;inset:0;z-index:200;';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:200;touch-action:none;';
+        let cellsLive = false;
+        setTimeout(() => { cellsLive = true; }, 320);
+        const blockGhost = (e) => {
+          if (!cellsLive) { try { e.preventDefault(); e.stopPropagation(); } catch (_) {} }
+        };
+        overlay.addEventListener('touchstart', blockGhost, { capture: true, passive: false });
+        overlay.addEventListener('click', blockGhost, { capture: true });
         const head = el('div', 'mosaic-head');
         head.append(el('span', '', 'Páginas'), el('button', 'btn', 'Cerrar'));
         head.querySelector('button').onclick = (e) => {
@@ -556,7 +585,8 @@ export function createReader(state, d) {
           const ph = el('div', 'mosaic-ph');
           cell.append(ph);
           cell.onclick = (e) => {
-            try { e.stopPropagation(); } catch (_) {}
+            try { e.preventDefault(); e.stopPropagation(); } catch (_) {}
+            if (!cellsLive) return;
             overlay.remove();
             try { goToPage(i); } catch (_) {}
           };
@@ -567,6 +597,10 @@ export function createReader(state, d) {
         overlay.addEventListener('click', (ev2) => { if (ev2.target === overlay) overlay.remove(); });
         // body: funciona en Página y en Vertical/Horizontal (absolute dentro de #rd fallaba al hacer scroll)
         document.body.append(overlay);
+        try {
+          const cur = thumbs.find((t) => t.i === hiR) || thumbs.find((t) => t.i === hiL);
+          if (cur?.cell) requestAnimationFrame(() => { try { cur.cell.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (_) {} });
+        } catch (_) {}
         (async () => {
           for (const { i, ph } of thumbs) {
             if (!overlay.isConnected) return;
@@ -833,7 +867,19 @@ export function createReader(state, d) {
               img = im;
             }
             rd.scrollTo(0, 0);
-            try { pageHost.scrollTop = 0; pageHost.scrollLeft = 0; } catch (_) {} // página alta (ajuste Ancho): empieza desde arriba
+            try {
+              // Página+Ancho: imagen alta anclada arriba (no centrada → no se pierde el inicio)
+              if (pref('fit', 'screen') === 'width') {
+                pageHost.style.alignItems = 'flex-start';
+              } else {
+                pageHost.style.alignItems = '';
+              }
+              pageHost.scrollTop = 0;
+              pageHost.scrollLeft = 0;
+              requestAnimationFrame(() => {
+                try { pageHost.scrollTop = 0; pageHost.scrollLeft = 0; } catch (_) {}
+              });
+            } catch (_) {}
             const keep = networkPreloadRadius() + 2;
             for (const i2 of [...urls.keys()]) if (i2 < n - keep || i2 > n + keep + 1) drop(i2);
             await preloadAround(n, token, mine);
