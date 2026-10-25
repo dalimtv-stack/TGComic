@@ -89,30 +89,15 @@ export function createReader(state, d) {
     try {
       let files = (await kv.get('f:' + ch.id)) || [];
       if (!files.length) files = await fetchFiles(ch);
-      const byIssue = (a, b) => {
-        const key = (x) => {
-          try {
-            const nm = String(x?.name || '');
-            const d = typeof comicDisplay === 'function' ? comicDisplay(nm, ch.name) : nm;
-            const m = String(d).match(/#\s*(\d+(?:[.,]\d+)?)/) || nm.match(/#\s*(\d+(?:[.,]\d+)?)/);
-            if (m) {
-              const n = parseFloat(m[1].replace(',', '.'));
-              if (Number.isFinite(n)) return n;
-            }
-          } catch (_) {}
-          return Number.POSITIVE_INFINITY;
-        };
-        const ka = key(a), kb = key(b);
-        if (ka !== kb) return ka - kb;
-        return String(a?.name || '').localeCompare(String(b?.name || ''), undefined, { numeric: true });
-      };
       for (const { files: fs } of groupSeries(files, ch.name, seriesOverrideFor(ch))) {
         if (fs.some((x) => String(x.id) === String(f.id))) {
-          // Siempre cola de la serie (aunque tenga 1): evita saltar a otro cómic del canal
-          return fs.slice().sort(byIssue);
+          // Siempre cola de la serie (aunque tenga 1): evita saltar a otro cómic del canal.
+          // Mismo orden que groupSeries (el de la vista de la serie): no reordenar por nº de '#',
+          // porque los cómics sin '#' en el nombre acababan al final y se saltaban números.
+          return fs.slice();
         }
       }
-      return files.slice().sort(byIssue);
+      return files.slice(); // ya ordenado por nombre (natural) al listar el canal
     } catch { return [f]; }
   }
 
