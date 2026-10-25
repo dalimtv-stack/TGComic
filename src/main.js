@@ -2078,7 +2078,7 @@ async function migrateCacheImages() {
     }, true);
   } catch (_) {}
   try { initBalance(document.querySelector('#app')); } catch (_) {}
-  stack.push({ title: 'TGComics', render: groupsView });
+  stack.push({ title: 'TGComics 0.0.1', render: groupsView });
   show();
   // Optimizar caché antigua en segundo plano (WebP + menos resolución)
   migrateCacheImages();
