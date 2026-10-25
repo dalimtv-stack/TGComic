@@ -1107,41 +1107,30 @@ textarea.meta-desc-lg.edit-input{
 }
 
 
-/* ---- Modo Página + Ancho: la hoja alta se alinea arriba y se desplaza dentro de .page-host ---- */
-#rd.page.fit-width .page-host{
-  align-items:flex-start!important;
-  justify-content:center;
-  overflow-x:hidden;
-  overflow-y:auto;
-  overscroll-behavior:contain;
-}
-#rd.page.fit-width .page-host img{flex:0 0 auto}
+/* ---- PC: al desplegar "Autores" aparecía la barra de scroll y las portadas cambiaban de tamaño.
+        Se reserva siempre el hueco de la barra para que el ancho útil no varíe. ---- */
+html{scrollbar-gutter:stable}
 
-/* ---- Menú principal ☰: por encima de la cola de tareas (panel z 80, chip z 81) ---- */
-.app-menu{z-index:95!important}
+/* ---- Botón "Agrupar por series" (vista de autor) ---- */
+.group-btn{min-width:44px;width:44px;padding:0}
+.group-btn svg{width:22px;height:22px;display:block}
+.group-btn.on{background:var(--acc);color:#111}
 
-/* ---- Visor: Play / ajustes (izquierda) y calidad (derecha) algo más pequeños y más juntos ----
-   La distancia al botón de doble página (8px) no cambia; entre sí quedan a 4px. */
-#rd .play-fab,
-#rd .auto-cfg-fab,
-#rd .q-group .btn,
-#rd .q-group button{
-  width:40px!important;
-  height:40px!important;
-  min-width:40px!important;
-  min-height:40px!important;
-  max-width:40px!important;
-  max-height:40px!important;
-  border-radius:12px!important;
+/* ---- Ficha Telegram: marco fijo; solo se desplaza el contenido, los botones quedan siempre a la vista ---- */
+.info-frame.caption-editor{overflow:hidden}
+.info-frame.caption-editor .info-box{
+  display:flex;flex-direction:column;overflow:hidden;
+  max-height:calc(100vh - var(--sat) - var(--sab) - 1.5rem);
+  max-height:calc(100dvh - var(--sat) - var(--sab) - 1.5rem);
 }
-#rd .play-fab,
-#rd .auto-cfg-fab,
-#rd .q-group{
-  bottom:calc(env(safe-area-inset-bottom,0px) + 62px)!important; /* centrados en vertical con el de doble página (48px) */
+.info-frame.caption-editor .info-head{position:static;flex:0 0 auto}
+.info-frame.caption-editor .info-body{
+  flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;
+  -webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y;
 }
-#rd .play-fab{ left:calc(50% - 24px - 8px - 40px)!important; }
-#rd .auto-cfg-fab{ left:calc(50% - 24px - 8px - 40px - 4px - 40px)!important; }
-#rd .q-group{ gap:4px!important; left:calc(50% + 24px + 8px)!important; }
-#rd .play-fab svg,
-#rd .auto-cfg-fab svg,
-#rd .q-group .q-btn svg{ width:20px!important; height:20px!important; }
+.info-frame.caption-editor .caption-editor-footer{
+  flex:0 0 auto;margin:0;display:flex;gap:.5rem;
+  padding:.65rem 1rem calc(.65rem + var(--sab));
+  border-top:1px solid #ffffff10;background:var(--card);
+}
+.info-frame.caption-editor .caption-editor-footer .btn{flex:1}

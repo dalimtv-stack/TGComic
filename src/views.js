@@ -253,6 +253,7 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
   }
 
   function mountSortButton(cfg) {
+    hideGroupButton(); // solo la vista de autor lo vuelve a mostrar
     let btn = actions?.querySelector?.('.sort-btn');
     if (!btn) {
       btn = el('button', 'btn sort-btn');
@@ -286,6 +287,39 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
       const btn = actions?.querySelector?.('.sort-btn');
       if (btn) btn.hidden = true;
     } catch (_) {}
+    hideGroupButton();
+  }
+
+  // Botón "Agrupar por series" (solo en la vista de un autor), a la izquierda del de ordenar
+  const GROUP_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>`;
+  function hideGroupButton() {
+    try {
+      const gb = actions?.querySelector?.('.group-btn');
+      if (gb) gb.hidden = true;
+    } catch (_) {}
+  }
+  function mountGroupButton({ active, onToggle }) {
+    let btn = actions?.querySelector?.('.group-btn');
+    if (!btn) {
+      btn = el('button', 'btn group-btn');
+      btn.type = 'button';
+      btn.innerHTML = GROUP_ICON;
+      const sortBtn = actions?.querySelector?.('.sort-btn');
+      const menu = actions?.querySelector?.('.menu-btn');
+      if (sortBtn) actions.insertBefore(btn, sortBtn);
+      else if (menu) actions.insertBefore(btn, menu);
+      else if (actions) actions.append(btn);
+    }
+    btn.hidden = false;
+    btn.classList.toggle('on', !!active);
+    btn.title = active ? 'Ver cómics sueltos' : 'Agrupar por series';
+    btn.setAttribute('aria-label', btn.title);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    btn.onclick = (ev) => {
+      try { ev.stopPropagation(); } catch (_) {}
+      try { onToggle?.(); } catch (e) { console.warn('[group]', e); }
+    };
+    return btn;
   }
 
 
@@ -1126,49 +1160,131 @@ function groupsView() {
         return '';
       };
 
-      const openAuthorView = (authorName, items) => {
-        const title = authorName || 'Autor';
+      const openAuthorView = (authorName, items, vopts = {}) => {
+        const title = vopts.title || authorName || 'Autor';
         go(title, async () => {
           h1.textContent = title;
-          const list = (items || []).slice().sort((a, b) => {
-            const ca = String(a.ch?.name || '');
-            const cb = String(b.ch?.name || '');
-            let c = ca.localeCompare(cb, undefined, { numeric: true, sensitivity: 'base' });
-            if (c) return c;
-            const sa = seriesNameOf(a.ch, a.f);
-            const sb = seriesNameOf(b.ch, b.f);
-            c = sa.localeCompare(sb, undefined, { numeric: true, sensitivity: 'base' });
-            if (c) return c;
-            const la = comicDisplayName(a.ch, a.f, comicDisplay(comicSourceName(a.f), a.ch?.name) || a.f?.name || '');
-            const lb = comicDisplayName(b.ch, b.f, comicDisplay(comicSourceName(b.f), b.ch?.name) || b.f?.name || '');
-            return natural(la, lb);
-          });
-          const redraw = () => openAuthorView(authorName, items);
-          const itemsForGrid = list.map(({ ch, f }) => {
-            const label = comicDisplayName(ch, f, comicDisplay(comicSourceName(f), ch?.name) || f?.name || '');
-            const ser = seriesNameOf(ch, f);
-            const sub = [ch?.name, ser].filter(Boolean).join(' · ');
-            const comicRestricted = (() => {
-              try { return locks.isContentRestricted('comic', { ch, f }); } catch (_) { return false; }
+          // Cada vista (autor / autor·serie) guarda su propio orden
+          const baseId = String(vopts.title || authorName || '');
+          const groupKey = 'authorGroup:' + String(authorName || '');
+          const NAT = { numeric: true, sensitivity: 'base' };
+          const labelOf = (ch, f) => comicDisplayName(ch, f, comicDisplay(comicSourceName(f), ch?.name) || f?.name || '');
+          const comics = (items || []).map(({ ch, f }) => ({
+            ch, f, label: labelOf(ch, f), series: seriesNameOf(ch, f), date: captionDateOf(f),
+          }));
+
+          const renderComics = () => {
+            const gi = comics.map((c) => {
+              const { ch, f, label, series } = c;
+              const sub = [ch?.name, series].filter(Boolean).join(' · ');
+              const restricted = (() => {
+                try { return locks.isContentRestricted('comic', { ch, f }); } catch (_) { return false; }
+              })();
+              return {
+                kind: 'comic',
+                _sortId: String(ch.id) + ':' + String(f.id),
+                _sortLabel: label,
+                _sortDate: c.date,
+                _ch: String(ch?.name || ''),
+                _series: String(series || ''),
+                label: restricted ? '' : label,
+                sub: restricted ? '' : sub,
+                cover: () => restricted ? locks.lockedCoverNode(ART) : comicCover(ch, f),
+                hiddenMeta: restricted,
+                go: () => {
+                  if (!locks.guardRestricted('comic', { ch, f }, label)) return;
+                  openComic(ch, f);
+                },
+                longPress: () => sheet(label, comicSheetOpts(ch, f, label, render).concat(
+                  lockToggleOpts('comic', { ch, f }, label, render)
+                )),
+              };
+            });
+            mountSortButton({
+              title: 'Ordenar cómics de este autor',
+              scope: 'author',
+              id: baseId,
+              getItems: () => gi,
+              getId: (it) => it._sortId,
+              getLabel: (it) => it._sortLabel || '',
+              getDate: (it) => it._sortDate ?? null,
+              onDone: () => render(),
+            });
+            const prefObj = getSortPref('author', baseId);
+            const sorted = prefObj.mode === 'name'
+              // Nombre (predeterminado): canal → serie → nombre
+              ? gi.slice().sort((a, b) => a._ch.localeCompare(b._ch, undefined, NAT)
+                || a._series.localeCompare(b._series, undefined, NAT)
+                || natural(String(a._sortLabel), String(b._sortLabel)))
+              : applySortList(gi, prefObj, (it) => it._sortId, (it) => it._sortLabel || '', (it) => it._sortDate ?? null);
+            grid(sorted, false, '', 'comics');
+          };
+
+          const renderGrouped = () => {
+            const groups = new Map();
+            for (const c of comics) {
+              const key = String(c.ch.id) + '\u0001' + (c.series || '');
+              let g = groups.get(key);
+              if (!g) { g = { ch: c.ch, series: c.series || '', list: [] }; groups.set(key, g); }
+              g.list.push(c);
+            }
+            const gi = [...groups.entries()].map(([key, g]) => {
+              const fs = g.list.map((c) => c.f);
+              let shown = '(Sin serie)';
+              if (g.series) {
+                try { shown = seriesDisplayName(g.ch, g.series) || g.series; } catch (_) { shown = g.series; }
+              }
+              return {
+                kind: 'series',
+                _sortId: 'g:' + key,
+                _sortLabel: (g.ch?.name || '') + ' · ' + shown,
+                _sortDate: seriesFirstComicDate(fs, g.ch),
+                _ch: String(g.ch?.name || ''),
+                _series: String(shown),
+                label: shown,
+                sub: `${g.ch?.name || ''} · ${fs.length} cómic${fs.length === 1 ? '' : 's'}`,
+                cover: () => seriesCoverNode(g.ch, g.series || shown, fs, fs.length),
+                go: () => openAuthorView(
+                  authorName,
+                  g.list.map(({ ch, f }) => ({ ch, f })),
+                  { title: `${authorName} · ${shown}`, noGroup: true }
+                ),
+              };
+            });
+            mountSortButton({
+              title: 'Ordenar series de este autor',
+              scope: 'authorSeries',
+              id: baseId,
+              getItems: () => gi,
+              getId: (it) => it._sortId,
+              getLabel: (it) => it._sortLabel || '',
+              getDate: (it) => it._sortDate ?? null,
+              onDone: () => render(),
+            });
+            const prefObj = getSortPref('authorSeries', baseId);
+            const sorted = prefObj.mode === 'name'
+              ? gi.slice().sort((a, b) => a._ch.localeCompare(b._ch, undefined, NAT)
+                || a._series.localeCompare(b._series, undefined, NAT))
+              : applySortList(gi, prefObj, (it) => it._sortId, (it) => it._sortLabel || '', (it) => it._sortDate ?? null);
+            grid(sorted, false, '', 'series');
+          };
+
+          const render = () => {
+            const grouped = !vopts.noGroup && (() => {
+              try { return localStorage.getItem(groupKey) === '1'; } catch (_) { return false; }
             })();
-            return {
-              kind: 'comic',
-              label: comicRestricted ? '' : label,
-              sub: comicRestricted ? '' : sub,
-              cover: () => comicRestricted
-                ? locks.lockedCoverNode(ART)
-                : comicCover(ch, f),
-              hiddenMeta: comicRestricted,
-              go: () => {
-                if (!locks.guardRestricted('comic', { ch, f }, label)) return;
-                openComic(ch, f);
-              },
-              longPress: () => sheet(label, comicSheetOpts(ch, f, label, redraw).concat(
-                lockToggleOpts('comic', { ch, f }, label, redraw)
-              )),
-            };
-          });
-          grid(itemsForGrid, false, '', 'comics');
+            if (grouped) renderGrouped(); else renderComics();
+            if (!vopts.noGroup) {
+              mountGroupButton({
+                active: grouped,
+                onToggle: () => {
+                  try { localStorage.setItem(groupKey, grouped ? '0' : '1'); } catch (_) {}
+                  render();
+                },
+              });
+            }
+          };
+          render();
         });
       };
 

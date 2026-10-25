@@ -614,8 +614,9 @@ function showCaptionEditor(ch, f, after, opts = {}) {
     }
   };
   actions.append(cancel, save);
-  body.append(actions);
-  box.append(head, body);
+  // Marco fijo: cabecera y botones siempre visibles; solo se desplaza el contenido (body)
+  actions.classList.add('caption-editor-footer');
+  box.append(head, body, actions);
   frame.append(box);
   document.body.append(frame);
 
