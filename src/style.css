@@ -1105,3 +1105,43 @@ textarea.meta-desc-lg.edit-input{
   z-index:14!important;
   margin:0!important;
 }
+
+
+/* ---- Modo Página + Ancho: la hoja alta se alinea arriba y se desplaza dentro de .page-host ---- */
+#rd.page.fit-width .page-host{
+  align-items:flex-start!important;
+  justify-content:center;
+  overflow-x:hidden;
+  overflow-y:auto;
+  overscroll-behavior:contain;
+}
+#rd.page.fit-width .page-host img{flex:0 0 auto}
+
+/* ---- Menú principal ☰: por encima de la cola de tareas (panel z 80, chip z 81) ---- */
+.app-menu{z-index:95!important}
+
+/* ---- Visor: Play / ajustes (izquierda) y calidad (derecha) algo más pequeños y más juntos ----
+   La distancia al botón de doble página (8px) no cambia; entre sí quedan a 4px. */
+#rd .play-fab,
+#rd .auto-cfg-fab,
+#rd .q-group .btn,
+#rd .q-group button{
+  width:40px!important;
+  height:40px!important;
+  min-width:40px!important;
+  min-height:40px!important;
+  max-width:40px!important;
+  max-height:40px!important;
+  border-radius:12px!important;
+}
+#rd .play-fab,
+#rd .auto-cfg-fab,
+#rd .q-group{
+  bottom:calc(env(safe-area-inset-bottom,0px) + 62px)!important; /* centrados en vertical con el de doble página (48px) */
+}
+#rd .play-fab{ left:calc(50% - 24px - 8px - 40px)!important; }
+#rd .auto-cfg-fab{ left:calc(50% - 24px - 8px - 40px - 4px - 40px)!important; }
+#rd .q-group{ gap:4px!important; left:calc(50% + 24px + 8px)!important; }
+#rd .play-fab svg,
+#rd .auto-cfg-fab svg,
+#rd .q-group .q-btn svg{ width:20px!important; height:20px!important; }

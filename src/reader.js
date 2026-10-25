@@ -604,14 +604,16 @@ export function createReader(state, d) {
         let raf = 0;
         let pending = null;
         let samples = [];
+        // Elemento que realmente hace scroll (modo página: .page-host; vertical/horizontal: #rd)
+        const scr = () => (typeof opts.scroller === 'function' ? (opts.scroller() || rd) : rd);
         const onDown = (e) => {
           if (e.button !== 0) return;
           if (e.target.closest?.('.bar, .edge, .mosaic, .btn, .spread-fab, .play-fab, .auto-cfg-fab, .q-group, input, textarea')) return;
           start = {
             x: e.clientX,
             y: e.clientY,
-            sl: rd.scrollLeft,
-            st: rd.scrollTop,
+            sl: scr().scrollLeft,
+            st: scr().scrollTop,
           };
           dragging = false;
           samples = [{ t: performance.now(), x: e.clientX, y: e.clientY }];
@@ -625,8 +627,8 @@ export function createReader(state, d) {
           if (!start || !pending || !scrollWhileDrag) return;
           const { dx, dy } = pending;
           const axis = getAxis();
-          if (axis === 'x') rd.scrollLeft = start.sl - dx;
-          else rd.scrollTop = start.st - dy;
+          if (axis === 'x') scr().scrollLeft = start.sl - dx;
+          else scr().scrollTop = start.st - dy;
         };
         const onMove = (e) => {
           if (!start) return;
@@ -675,9 +677,10 @@ export function createReader(state, d) {
             try { opts.onDragEnd?.(wasDrag, { dx, dy, vx, vy }); } catch (_) {}
             // Si había overflow y el usuario arrastró, solo pan (no cambiar página)
             const axis0 = getAxis();
+            const sc0 = scr();
             const hasOverflow = axis0 === 'y'
-              ? (rd.scrollHeight > rd.clientHeight + 4)
-              : (rd.scrollWidth > rd.clientWidth + 4);
+              ? (sc0.scrollHeight > sc0.clientHeight + 4)
+              : (sc0.scrollWidth > sc0.clientWidth + 4);
             if (wasDrag && hasOverflow) return;
             // Sin overflow (modo pantalla) o tap: permitir swipe de página más abajo
           }
@@ -807,6 +810,7 @@ export function createReader(state, d) {
             if (typeof zoomLevel !== 'undefined') zoomLevel = 1;
             rd.classList.remove('zoom');
             rd.scrollTo(0, 0);
+            pageHost.scrollTop = 0; pageHost.scrollLeft = 0;
           } catch (_) {}
           const mine = ++token;
           try {
@@ -829,6 +833,7 @@ export function createReader(state, d) {
               img = im;
             }
             rd.scrollTo(0, 0);
+            try { pageHost.scrollTop = 0; pageHost.scrollLeft = 0; } catch (_) {} // página alta (ajuste Ancho): empieza desde arriba
             const keep = networkPreloadRadius() + 2;
             for (const i2 of [...urls.keys()]) if (i2 < n - keep || i2 > n + keep + 1) drop(i2);
             await preloadAround(n, token, mine);
@@ -839,9 +844,9 @@ export function createReader(state, d) {
         // Play: página alta (ajuste Ancho) → primero se recorre hacia abajo; después, siguiente página/doble página
         autoStep = async () => {
           if (rd.classList.contains('zoom')) return true;
-          const canY = rd.scrollHeight > rd.clientHeight + 6;
-          if (canY && rd.scrollTop + rd.clientHeight < rd.scrollHeight - 8) {
-            await animateScroll(rd, 'scrollTop', Math.min(rd.scrollTop + rd.clientHeight * 0.9, rd.scrollHeight - rd.clientHeight));
+          const canY = pageHost.scrollHeight > pageHost.clientHeight + 6;
+          if (canY && pageHost.scrollTop + pageHost.clientHeight < pageHost.scrollHeight - 8) {
+            await animateScroll(pageHost, 'scrollTop', Math.min(pageHost.scrollTop + pageHost.clientHeight * 0.9, pageHost.scrollHeight - pageHost.clientHeight));
             return true;
           }
           const nxt = isSpread() ? nextSpread(n) : n + 1;
@@ -857,7 +862,8 @@ export function createReader(state, d) {
           () => (pref('fit', 'screen') === 'width' ? 'y' : 'x'),
           () => turn(isSpread() ? prevSpread(n) : n - 1),
           () => turn(isSpread() ? nextSpread(n) : n + 1),
-          true
+          true,
+          { scroller: () => pageHost }
         );
 
 
@@ -1085,10 +1091,6 @@ export function createReader(state, d) {
               history.back();
               return;
             }
-            if (dy > 90 && dy > 1.6 * Math.abs(dx)) {
-              history.back();
-              return;
-            }
             if (Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy)) {
               turn(dx < 0 ? (isSpread() ? nextSpread(n) : n + 1) : (isSpread() ? prevSpread(n) : n - 1));
             }
@@ -1101,36 +1103,31 @@ export function createReader(state, d) {
         }, { passive: true });
 
         document.onkeydown = (e) => { if (e.key === 'ArrowRight') turn(isSpread() ? nextSpread(n) : n + 1); if (e.key === 'ArrowLeft') turn(isSpread() ? prevSpread(n) : n - 1); };
-        // Página + Ancho: rueda hace scroll en la hoja; solo al borde cambia de página.
+        // Página + Ancho: rueda hace scroll en la hoja (.page-host); solo al llegar al borde cambia de página.
         // Página + Pantalla: sin cambios (siempre cabe → rueda cambia página).
         const onWheel = (e) => {
+          if (rd.classList.contains('zoom')) return;
           const fitIsWidth = pref('fit', 'screen') === 'width';
           if (fitIsWidth) {
-            // Asegurar scroll vertical cuando la hoja supera el alto
-            try {
-              rd.style.overflowY = 'auto';
-              rd.style.overflowX = 'hidden';
-            } catch (_) {}
-            const overflow = rd.scrollHeight > rd.clientHeight + 2
-              || (pageHost && pageHost.scrollHeight > pageHost.clientHeight + 2);
+            const sc = pageHost;
+            const overflow = sc.scrollHeight > sc.clientHeight + 2;
             if (overflow) {
-              const atTop = rd.scrollTop <= 1;
-              const atBottom = rd.scrollTop + rd.clientHeight >= rd.scrollHeight - 2;
-              if (e.deltaY > 10) {
-                if (!atBottom) {
-                  // No preventDefault → el navegador hace scroll en la hoja
-                  return;
-                }
-                e.preventDefault();
-                turn(isSpread() ? nextSpread(n) : n + 1);
+              const dy = e.deltaMode === 1 ? e.deltaY * 16 : (e.deltaMode === 2 ? e.deltaY * sc.clientHeight : e.deltaY);
+              const atTop = sc.scrollTop <= 1;
+              const atBottom = sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 2;
+              if (dy > 0 && !atBottom) {
+                // Sobre la hoja el navegador ya hace scroll; sobre los laterales (.edge) lo hacemos a mano
+                if (!sc.contains(e.target)) { e.preventDefault(); sc.scrollTop += dy; }
                 return;
               }
-              if (e.deltaY < -10) {
-                if (!atTop) return;
-                e.preventDefault();
-                turn(isSpread() ? prevSpread(n) : n - 1);
+              if (dy < 0 && !atTop) {
+                if (!sc.contains(e.target)) { e.preventDefault(); sc.scrollTop += dy; }
                 return;
               }
+              // En el borde: cambiar de página (con un gesto claro)
+              e.preventDefault();
+              if (dy > 10) turn(isSpread() ? nextSpread(n) : n + 1);
+              else if (dy < -10) turn(isSpread() ? prevSpread(n) : n - 1);
               return;
             }
           }

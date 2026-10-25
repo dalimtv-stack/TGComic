@@ -152,10 +152,55 @@ export function createRepackTool(d) {
     return n + '.cbz';
   }
 
-  function suggestUploadName(ch, f, includeChannel = true) {
+  const SPECIAL_RE = /\b(especial|special|extra|anual|annual|one[\s-]?shot|prólogo|prologo|epílogo|epilogo|spin[\s-]?off)\b(?:\s*#?\s*(\d+))?/i;
+
+  /** "[serie] #[número/especial/extra…]" (sin título). Devuelve '' si no se puede formar. */
+  function formattedBaseName(ch, f) {
     const raw = f?.name || 'comic.cbr';
     const cleaned = cleanFileBase(raw);
     const chName = (ch?.name || '').trim();
+    let parsed = null;
+    try {
+      if (typeof parseComicName === 'function') {
+        parsed = parseComicName(cleaned + '.cbz', chName) || parseComicName(raw, chName);
+      }
+    } catch (_) {}
+    let series = '';
+    try {
+      if (typeof getComicSeriesOverride === 'function') {
+        const ov = getComicSeriesOverride(ch, f);
+        if (ov && String(ov).trim()) series = String(ov).trim();
+      }
+    } catch (_) {}
+    if (!series && parsed?.series) series = String(parsed.series).trim();
+    try {
+      if (series && typeof seriesDisplayName === 'function') {
+        const shown = seriesDisplayName(ch, series);
+        if (shown && String(shown).trim()) series = String(shown).trim();
+      }
+    } catch (_) {}
+    let num = parsed?.number != null ? String(parsed.number).replace(/^#\s*/, '').trim() : '';
+    if (!num) {
+      const hay = [parsed?.info, cleaned].filter(Boolean).join(' ');
+      const m = hay.match(SPECIAL_RE);
+      if (m) {
+        const w = m[1].replace(/\s+/g, ' ');
+        num = w.charAt(0).toUpperCase() + w.slice(1).toLowerCase() + (m[2] ? ' ' + m[2] : '');
+      }
+    }
+    return series && num ? `${series} #${num}` : '';
+  }
+
+  function suggestUploadName(ch, f, includeChannel = true, formatted = false) {
+    const raw = f?.name || 'comic.cbr';
+    const cleaned = cleanFileBase(raw);
+    const chName = (ch?.name || '').trim();
+
+    // 0) Nombres formateados: "serie #número" (si no hay datos suficientes, se usa el nombre de siempre)
+    if (formatted) {
+      const fb = formattedBaseName(ch, f);
+      if (fb) return includeChannel ? ensureChannelInName(fb, chName) : stripChannelFromName(fb, chName);
+    }
 
     // 1) Título de cómic editado a mano (prioridad total sobre el parseo)
     try {
@@ -907,19 +952,28 @@ export function createRepackTool(d) {
     includeChRow.append(includeChChk, document.createTextNode(' Incluir nombre del canal en los archivos'));
     body.append(includeChRow);
 
+    // Nombres formateados: "serie #número/especial/extra…" (desmarcado = nombres completos como antes)
+    const fmtChk = el('input');
+    fmtChk.type = 'checkbox';
+    fmtChk.checked = true;
+    const fmtRow = el('label', 'repack-check');
+    fmtRow.append(fmtChk, document.createTextNode(' Nombres formateados'));
+    body.append(fmtRow);
+
     const inputs = [];
     const applyNames = () => {
       const withCh = !!includeChChk.checked;
+      const fmt = !!fmtChk.checked;
       for (const inp of inputs) {
         if (inp._manual) continue;
-        let name = suggestUploadName(inp._item.ch, inp._item.f, withCh);
+        let name = suggestUploadName(inp._item.ch, inp._item.f, withCh, fmt);
         if (asWebp) name = withQualityTags(name, { webp: true, resize: rz });
         inp.value = name;
       }
     };
 
     for (const item of selected) {
-      const suggested = suggestUploadName(item.ch, item.f, true);
+      const suggested = suggestUploadName(item.ch, item.f, true, true);
       const row = el('div', 'repack-name-row');
       row.append(el('div', 'repack-name-from', item.f.name || ''));
       const inp = el('input', 'edit-input repack-name-input');
@@ -935,6 +989,7 @@ export function createRepackTool(d) {
       body.append(row);
     }
     includeChChk.onchange = applyNames;
+    fmtChk.onchange = applyNames;
 
     const actions = el('div', 'edit-actions');
     const cancel = el('button', 'btn', 'Cancelar');
@@ -944,7 +999,7 @@ export function createRepackTool(d) {
       const withCh = !!includeChChk.checked;
       const ready = inputs.map((inp) => {
         let name = String(inp.value || '').trim();
-        if (!name) name = suggestUploadName(inp._item.ch, inp._item.f, withCh);
+        if (!name) name = suggestUploadName(inp._item.ch, inp._item.f, withCh, !!fmtChk.checked);
         name = name.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
         if (!/\.cbz$/i.test(name)) name = name.replace(/\.cb[zr]$/i, '') + '.cbz';
         if (!/\.cbz$/i.test(name)) name += '.cbz';
