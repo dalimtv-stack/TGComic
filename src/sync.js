@@ -25,8 +25,27 @@ const SYNC_PREFIXES = [
   'comicSeries:',
   'ungroup:',
   'read:',
+  'coverFit:',
 ];
-const SYNC_KEYS = ['channelNames', 'groupNames', 'lastRead', 'recentReads', 'contentLocks'];
+const KEY_TIMES = 'keyTimes';
+const SYNC_KEYS = ['channelNames', 'groupNames', 'lastRead', 'recentReads', 'contentLocks', KEY_TIMES];
+
+function readKeyTimes(raw) {
+  try {
+    const o = JSON.parse(raw ?? localStorage.getItem(KEY_TIMES) ?? '{}');
+    return o && typeof o === 'object' && !Array.isArray(o) ? o : {};
+  } catch { return {}; }
+}
+
+/** Anota cuándo se cambió una clave en este dispositivo: al fusionar gana el cambio más reciente. */
+export function touchKey(key) {
+  if (!key) return;
+  try {
+    const m = readKeyTimes();
+    m[key] = Date.now();
+    localStorage.setItem(KEY_TIMES, JSON.stringify(m));
+  } catch (_) {}
+}
 
 function configured() {
   return !!(SUPABASE_URL && SUPABASE_ANON);
@@ -184,10 +203,14 @@ export function applySnapshot(snap) {
  * - recentReads → unión por id de cómic (remoto primero)
  * - resto (prefs, nombres…) → remoto gana si existe; si no, se conserva local
  */
-function mergeKeyMaps(localKeys, remoteKeys) {
+function mergeKeyMaps(localKeys, remoteKeys, preferLocal = false) {
   const local = localKeys && typeof localKeys === 'object' ? localKeys : {};
   const remote = remoteKeys && typeof remoteKeys === 'object' ? remoteKeys : {};
   const out = { ...local };
+  const lt = readKeyTimes(local[KEY_TIMES] || '{}');
+  const rt = readKeyTimes(remote[KEY_TIMES] || '{}');
+  const times = { ...lt };
+  for (const [k, t] of Object.entries(rt)) times[k] = Math.max(Number(times[k]) || 0, Number(t) || 0);
 
   const mergeRecent = (a, b) => {
     let la = [], lb = [];
@@ -207,8 +230,15 @@ function mergeKeyMaps(localKeys, remoteKeys) {
   };
 
   for (const [k, rv] of Object.entries(remote)) {
-    if (!k) continue;
+    if (!k || k === KEY_TIMES) continue;
     const lv = out[k];
+    // Si algún dispositivo anotó cuándo cambió la clave, gana el cambio más reciente
+    // (así "marcar como no leído" o volver a empezar un cómic no se deshace).
+    const tl = Number(lt[k]) || 0, tr = Number(rt[k]) || 0;
+    if (tl || tr) {
+      out[k] = tr > tl ? rv : (lv ?? rv);
+      continue;
+    }
     if (lv == null || lv === '') {
       out[k] = rv;
       continue;
@@ -232,10 +262,11 @@ function mergeKeyMaps(localKeys, remoteKeys) {
         out[k] = rv || lv;
       }
     } else {
-      // prefs, renombres, etc.: el remoto (nube) actualiza al abrir
-      out[k] = rv;
+      // prefs, renombres, etc.: al abrir gana la nube; al subir, lo de este dispositivo
+      out[k] = preferLocal ? lv : rv;
     }
   }
+  out[KEY_TIMES] = JSON.stringify(times);
   return out;
 }
 
@@ -380,8 +411,11 @@ export async function push() {
   const id = await userRowId(u);
   const row = await getRemote(id);
   if (row?.payload) {
-    // Prueba de contraseña en cliente antes de tocar el servidor
-    await decryptPayload(u, p, row.payload);
+    // Prueba de contraseña en cliente antes de tocar el servidor, y fusión con lo que
+    // otros dispositivos hayan subido mientras tanto (antes se sobrescribía su progreso).
+    const remoteSnap = await decryptPayload(u, p, row.payload);
+    const remoteKeys = remoteSnap?.keys && typeof remoteSnap.keys === 'object' ? remoteSnap.keys : {};
+    writeKeyMap(mergeKeyMaps(collectSnapshot().keys, remoteKeys, true));
   }
   const verifier = await passwordVerifier(u, p);
   const payload = await encryptPayload(u, p, collectSnapshot());
@@ -469,6 +503,7 @@ function hideBootOverlay() {
  */
 export async function syncOnStartup() {
   if (!configured() || !isLoggedIn()) return { synced: false };
+  startAutoPull();
   showBootOverlay('Descargando datos de la nube…');
   try {
     await pull();
@@ -485,6 +520,18 @@ export async function syncOnStartup() {
   } finally {
     hideBootOverlay();
   }
+}
+
+let autoPullTimer = null;
+/** Trae cada cierto tiempo lo que suban otros dispositivos (solo con la app visible). */
+export function startAutoPull(ms = 15000) {
+  if (autoPullTimer || typeof window === 'undefined') return;
+  autoPullTimer = setInterval(() => {
+    if (!isLoggedIn() || document.visibilityState !== 'visible' || pushTimer) return;
+    pull().then((ok) => {
+      if (ok) window.dispatchEvent(new CustomEvent('sync-pulled'));
+    }).catch((e) => console.warn('[sync] auto-pull', e));
+  }, ms);
 }
 
 /** @deprecated usar syncOnStartup */
