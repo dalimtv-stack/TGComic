@@ -26,7 +26,7 @@ export function createViews(d) {
     go, show, stack,
     sheet, bindLongPress, grid,
     showGroupInfo, showEditGroup, showChannelInfo, showEditChannel,
-    showSeriesInfo, showEditSeries, showEditSeriesName, showSeriesCoverPicker, showSeriesCvFillForm, comicNeedsCvFill, showComicInfo, showEditComicTitle,
+    showSeriesInfo, showEditSeries, showEditSeriesName, showSeriesCoverPicker, showSeriesBulkCaptionEditor, showSeriesCvFillForm, comicNeedsCvFill, showComicInfo, showEditComicTitle,
     showCoverFitEditor, showPickCoverFromComic, getCoverFit,
     ungroupMap, setUngroupMode, getComicSeriesOverride,
     firstAvailableCover, kv, natural,
@@ -564,6 +564,13 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
         const editOpts = [
           ['Editar nombre de la serie a la que pertenece', () => showEditSeriesName(ch, seriesLabel, files, openEdit)],
           ['Seleccionar portada de la serie', () => showSeriesCoverPicker(ch, seriesLabel, files, openEdit)],
+          ['Editar datos generales de TODA la serie', () => {
+            if (typeof showSeriesBulkCaptionEditor === 'function') {
+              showSeriesBulkCaptionEditor(ch, seriesLabel, files, openEdit);
+            } else {
+              appAlert('Función no disponible');
+            }
+          }],
           ['Recargar fichas Telegram (Cómic Vine)', () => {
             if (typeof showSeriesCvFillForm === 'function') {
               showSeriesCvFillForm(ch, seriesLabel, files, { overwrite: true, onBack: openEdit });
@@ -624,6 +631,13 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
               const seriesEditOpts = [
                 ['Editar nombre de la serie a la que pertenece', () => showEditSeriesName(ch, seriesLabel, files, openSeriesEdit)],
                 ['Seleccionar portada de la serie', () => showSeriesCoverPicker(ch, seriesLabel, files, openSeriesEdit)],
+                ['Editar datos generales de TODA la serie', () => {
+                  if (typeof showSeriesBulkCaptionEditor === 'function') {
+                    showSeriesBulkCaptionEditor(ch, seriesLabel, files, openSeriesEdit);
+                  } else {
+                    appAlert('Función no disponible');
+                  }
+                }],
                 ['Recargar fichas Telegram (Cómic Vine)', () => {
                   if (typeof showSeriesCvFillForm === 'function') {
                     showSeriesCvFillForm(ch, seriesLabel, files, { overwrite: true, onBack: openSeriesEdit });

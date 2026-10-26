@@ -1692,6 +1692,7 @@ const showSeriesCvFillForm = infoApi.showSeriesCvFillForm || (() => {});
 const comicNeedsCvFill = infoApi.comicNeedsCvFill || (() => true);
 const showEditSeriesName = infoApi.showEditSeriesName || (() => {});
 const showSeriesCoverPicker = infoApi.showSeriesCoverPicker || (() => {});
+const showSeriesBulkCaptionEditor = infoApi.showSeriesBulkCaptionEditor || (() => {});
 const seriesCoverNode = infoApi.seriesCoverNode || ((ch, lab, files) => el('div', 'cover'));
 const channelCoverNode = infoApi.channelCoverNode || ((ch) => el('div', 'cover'));
 const groupCoverNode = infoApi.groupCoverNode || ((n) => el('div', 'cover square'));
@@ -1781,7 +1782,7 @@ const viewsApi = createViews({
   get openComic() { return openComic; },
   sheet, bindLongPress, grid,
   showGroupInfo, showEditGroup, showChannelInfo, showEditChannel,
-  showSeriesInfo, showEditSeries, showEditSeriesName, showSeriesCoverPicker, showSeriesCvFillForm, comicNeedsCvFill, showComicInfo, showEditComicTitle,
+  showSeriesInfo, showEditSeries, showEditSeriesName, showSeriesCoverPicker, showSeriesBulkCaptionEditor, showSeriesCvFillForm, comicNeedsCvFill, showComicInfo, showEditComicTitle,
   showCoverFitEditor, showPickCoverFromComic, getCoverFit,
   getContinueList, readProgress, isComicRead, markComicRead, markComicUnread,
   markSeriesRead, markSeriesUnread, getPageIndex, getPagesTotal,

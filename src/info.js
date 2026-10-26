@@ -611,21 +611,26 @@ function showCaptionEditor(ch, f, after, opts = {}) {
     try {
       save.disabled = true;
       await updateTelegramCaption(ch, f, caption);
-      frame.remove();
-      const editWasOpen = !!document.querySelector('.info-frame.edit-comic');
-      document.querySelector('.info-frame.edit-comic')?.remove();
-      document.querySelector('.info-frame.comic-info')?.remove();
-      try { after?.(); } catch (_) {}
+      // Tras guardar no cerrar: el usuario puede seguir editando o ir al siguiente
+      try {
+        // Actualizar f local por si se reabre Identificar
+        f.caption = caption;
+      } catch (_) {}
       try {
         const top = stack[stack.length - 1];
         if (top && !top._isComic && !document.getElementById('rd')) {
           top.scrollY = window.scrollY || document.documentElement.scrollTop || 0;
-          show();
+          // no show() completo: evita cerrar el editor
         }
       } catch (_) {}
-      if (editWasOpen || opts.reopenEdit) {
-        showEditComicTitle(ch, f, opts.currentLabel || '', after);
-      }
+      try {
+        const h = head.querySelector('span');
+        if (h) {
+          const prev = h.textContent;
+          h.textContent = 'Guardado ✓';
+          setTimeout(() => { try { h.textContent = prev; } catch (_) {} }, 1400);
+        }
+      } catch (_) {}
     } catch (e) {
       appAlert('No se pudo guardar el caption: ' + (e?.message || e));
     } finally {
@@ -3177,6 +3182,153 @@ async function showPickCoverFromComic(ch, f, after) {
   }
 }
 
+
+
+/** Editar Serie / Guionista / Dibujante / Editorial en todos los cómics de la serie (caption Telegram). */
+function showSeriesBulkCaptionEditor(ch, seriesLabel, files, onBack) {
+  document.querySelector('.info-frame.series-bulk-cap')?.remove();
+  const list = Array.isArray(files) ? files.slice() : [];
+  const frame = el('div', 'info-frame series-bulk-cap');
+  const box = el('div', 'info-box');
+  const head = el('div', 'info-head');
+  head.append(el('span', '', 'Datos generales de la serie'));
+  const close = el('button', 'btn info-close', '×');
+  const goBack = () => {
+    frame.remove();
+    try { onBack?.(); } catch (_) {}
+  };
+  close.onclick = goBack;
+  head.append(close);
+  const body = el('div', 'info-body');
+  body.append(el('p', 'cover-pick-hint',
+    'Se aplican a los ' + list.length + ' cómic(s) de «' + (seriesDisplayName(ch, seriesLabel) || seriesLabel || '') + '». ' +
+    'Solo se actualizan los campos que rellenes; los vacíos no se tocan.'
+  ));
+
+  const commonField = (key) => {
+    let val = null;
+    for (const f of list) {
+      const cap = parseComicCaption(f?.caption || '');
+      const v = String(cap?.[key] || '').trim();
+      if (val === null) val = v;
+      else if (val !== v) return '';
+    }
+    return val || '';
+  };
+
+  const mkInp = (lab, val, ph) => {
+    body.append(el('label', 'sync-label', lab));
+    const inp = el('input', 'edit-input');
+    inp.type = 'text';
+    inp.autocomplete = 'off';
+    if (ph) inp.placeholder = ph;
+    inp.value = val || '';
+    body.append(inp);
+    return inp;
+  };
+
+  const seriesInp = mkInp('Serie', commonField('series') || seriesDisplayName(ch, seriesLabel) || seriesLabel || '', 'Nombre de serie en el caption');
+  const writerInp = mkInp('Guionista', commonField('writer'), 'Varios: separados por |');
+  const artistInp = mkInp('Dibujante', commonField('artist'), 'Varios: separados por |');
+  const pubInp = mkInp('Editorial', commonField('publisher') || (ch?.group && ch.group !== 'Sin editorial' ? (typeof groupDisplayName === 'function' ? groupDisplayName(ch.group) : ch.group) : ''), '');
+
+  const actions = el('div', 'edit-actions');
+  const backBtn = el('button', 'btn', 'Volver');
+  backBtn.onclick = goBack;
+  const saveBtn = el('button', 'btn edit-save', 'Guardar');
+  saveBtn.onclick = async () => {
+    const patch = {
+      series: String(seriesInp.value || '').trim(),
+      writer: String(writerInp.value || '').trim(),
+      artist: String(artistInp.value || '').trim(),
+      publisher: String(pubInp.value || '').trim(),
+    };
+    if (!patch.series && !patch.writer && !patch.artist && !patch.publisher) {
+      await appAlert('Rellena al menos un campo para aplicar a toda la serie.');
+      return;
+    }
+    frame.remove();
+
+    const progFrame = el('div', 'info-frame series-cv-prog');
+    const progBox = el('div', 'info-box');
+    const progHead = el('div', 'info-head');
+    progHead.append(el('span', '', 'Guardando fichas de la serie'));
+    progBox.append(progHead);
+    const progBody = el('div', 'info-body');
+    const status = el('p', 'cover-pick-hint', 'Preparando…');
+    const bar = el('div', 'repack-panel-bar');
+    const fill = el('div', 'repack-panel-fill');
+    fill.style.width = '0%';
+    bar.append(fill);
+    const count = el('p', 'cover-pick-hint', '');
+    progBody.append(status, bar, count);
+    progBox.append(progBody);
+    progFrame.append(progBox);
+    document.body.append(progFrame);
+
+    const setProg = (done, total, msg) => {
+      if (msg) status.textContent = msg;
+      const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+      fill.style.width = pct + '%';
+      count.textContent = total ? `${done} / ${total} (${pct}%)` : '';
+    };
+
+    let ok = 0, fail = 0;
+    const total = list.length;
+    try {
+      for (let i = 0; i < list.length; i++) {
+        const f = list[i];
+        setProg(i, total, 'Guardando «' + (f?.name || f?.id) + '»…');
+        try {
+          const prev = parseComicCaption(f?.caption || '');
+          const next = {
+            fileName: prev.fileName || f?.name || '',
+            titleEs: prev.titleEs || '',
+            originalTitle: prev.originalTitle || '',
+            series: patch.series || prev.series || '',
+            writer: patch.writer || prev.writer || '',
+            artist: patch.artist || prev.artist || '',
+            publisher: patch.publisher || prev.publisher || '',
+            date: prev.date || '',
+            description: prev.description || '',
+          };
+          // Si el usuario rellenó el campo, se aplica (aunque sea distinto)
+          if (patch.series) next.series = patch.series;
+          if (patch.writer) next.writer = patch.writer;
+          if (patch.artist) next.artist = patch.artist;
+          if (patch.publisher) next.publisher = patch.publisher;
+          const caption = buildComicCaption(next);
+          if (caption.length > 1024) {
+            fail++;
+            console.warn('[bulk-cap] caption > 1024', f?.name);
+            continue;
+          }
+          await editCaptionWithFloodWait(ch, f, caption, (m) => {
+            setProg(i, total, m || ('Guardando «' + (f?.name || '') + '»…'));
+          });
+          ok++;
+        } catch (e) {
+          fail++;
+          console.warn('[bulk-cap]', f?.name, e);
+          status.textContent = 'Error en «' + (f?.name || '') + '»: ' + (e?.message || e);
+        }
+        setProg(i + 1, total, status.textContent);
+        // Pequeña pausa entre mensajes para reducir FLOOD_WAIT
+        if (i < list.length - 1) await new Promise((r) => setTimeout(r, 350));
+      }
+      setProg(total, total, 'Listo. OK: ' + ok + (fail ? (' · Fallos: ' + fail) : ''));
+      await new Promise((r) => setTimeout(r, 900));
+    } finally {
+      progFrame.remove();
+      try { onBack?.(); } catch (_) {}
+    }
+  };
+  actions.append(backBtn, saveBtn);
+  body.append(actions);
+  box.append(head, body);
+  frame.append(box);
+  document.body.append(frame);
+}
 
   return {
     showComicInfo,
