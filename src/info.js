@@ -305,6 +305,7 @@ function showComicInfo(ch, f, displayTitle) {
     const prevBtn = mkNav('‹', 'Cómic anterior');
     const nextBtn = mkNav('›', 'Cómic siguiente');
     const mid = el('div', 'info-nav-mid');
+    // Ver descripción (si hay) + siempre Ficha Telegram
     if (hasAnyFicha && cap.description) {
       const descBtn = el('button', 'btn cover-pick-device', 'Ver descripción');
       descBtn.type = 'button';
@@ -314,13 +315,11 @@ function showComicInfo(ch, f, displayTitle) {
       };
       mid.append(descBtn);
     }
-    // Rellenar disponible si no hay ficha completa (p. ej. solo "Nombre de archivo")
-    if (!hasExtraFicha) {
-      const fillBtn = el('button', 'btn cover-pick-device', 'Rellenar Ficha Telegram');
+    {
+      const fillBtn = el('button', 'btn cover-pick-device', 'Ficha Telegram');
       fillBtn.type = 'button';
       fillBtn.onclick = () => {
         frame.remove();
-        // Al terminar (guardar, cancelar o cerrar) se vuelve a Información
         const back = () => showComicInfo(ch, f, displayTitle);
         showCaptionEditor(ch, f, back, { onClose: back });
       };
@@ -578,7 +577,17 @@ function showCaptionEditor(ch, f, after, opts = {}) {
     }
   };
 
-  const actions = el('div', 'edit-actions');
+  const actions = el('div', 'edit-actions info-navrow');
+  const mkCapNav = (txt, label) => {
+    const b = el('button', 'btn info-nav-btn', txt);
+    b.type = 'button';
+    b.title = label;
+    b.setAttribute('aria-label', label);
+    b.disabled = true;
+    return b;
+  };
+  const prevCapBtn = mkCapNav('‹', 'Cómic anterior');
+  const nextCapBtn = mkCapNav('›', 'Cómic siguiente');
   const cancel = el('button', 'btn', 'Cancelar');
   cancel.onclick = closeEditor;
   const save = el('button', 'btn edit-save', 'Guardar en Telegram');
@@ -623,7 +632,50 @@ function showCaptionEditor(ch, f, after, opts = {}) {
       save.disabled = false;
     }
   };
-  actions.append(cancel, save);
+  // [‹] [Cancelar] [Guardar en Telegram] [›]
+  const midActs = el('div', 'info-nav-mid');
+  midActs.append(cancel, save);
+  midActs.style.display = 'flex';
+  midActs.style.gap = '8px';
+  midActs.style.flex = '1';
+  midActs.style.minWidth = '0';
+  cancel.style.flex = '1';
+  save.style.flex = '1';
+  actions.append(prevCapBtn, midActs, nextCapBtn);
+  if (ch && f) {
+    comicNeighbors(ch, f).then(({ prev, next }) => {
+      const openNeighbor = (target) => {
+        if (!target) return;
+        frame.remove();
+        showCaptionEditor(ch, target, () => showComicInfo(ch, target, ''), {
+          ...opts,
+          onClose: () => showComicInfo(ch, target, ''),
+        });
+      };
+      if (prev) {
+        prevCapBtn.disabled = false;
+        prevCapBtn.onclick = () => openNeighbor(prev);
+      } else {
+        prevCapBtn.hidden = true;
+      }
+      if (next) {
+        nextCapBtn.disabled = false;
+        nextCapBtn.onclick = () => openNeighbor(next);
+      } else {
+        nextCapBtn.hidden = true;
+      }
+      if (!prev && !next) {
+        prevCapBtn.hidden = true;
+        nextCapBtn.hidden = true;
+      }
+    }).catch(() => {
+      prevCapBtn.hidden = true;
+      nextCapBtn.hidden = true;
+    });
+  } else {
+    prevCapBtn.hidden = true;
+    nextCapBtn.hidden = true;
+  }
   // Marco fijo: cabecera y botones siempre visibles; solo se desplaza el contenido (body)
   actions.classList.add('caption-editor-footer');
   box.append(head, body, actions);
