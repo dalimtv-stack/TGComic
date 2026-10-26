@@ -1107,6 +1107,11 @@ textarea.meta-desc-lg.edit-input{
 }
 
 
+/* ---- PC: al desplegar "Autores" aparecía la barra de scroll y las portadas cambiaban de tamaño.
+        Se reserva siempre el hueco de la barra para que el ancho útil no varíe. ---- */
+html{scrollbar-gutter:stable}
+
+
 /* ---- Modo Página + Ancho: hoja alta alineada ARRIBA; scroll solo en .page-host ---- */
 #rd.page.fit-width .page-host{
   align-items:flex-start!important;
