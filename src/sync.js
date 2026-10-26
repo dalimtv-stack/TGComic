@@ -424,6 +424,7 @@ export async function push() {
   return true;
 }
 
+let lastPullChanged = false;
 export async function pull() {
   const u = localStorage.getItem(LS_USER);
   const p = localStorage.getItem(LS_PASS);
@@ -436,6 +437,12 @@ export async function pull() {
   const remoteKeys = remoteSnap?.keys && typeof remoteSnap.keys === 'object' ? remoteSnap.keys : {};
   const localKeys = localSnap?.keys && typeof localSnap.keys === 'object' ? localSnap.keys : {};
   const merged = mergeKeyMaps(localKeys, remoteKeys);
+  // ¿Ha cambiado algo visible? (para refrescar la pantalla solo cuando haga falta)
+  lastPullChanged = false;
+  for (const k of new Set([...Object.keys(localKeys), ...Object.keys(merged)])) {
+    if (k === KEY_TIMES) continue;
+    if (String(localKeys[k] ?? '') !== String(merged[k] ?? '')) { lastPullChanged = true; break; }
+  }
   writeKeyMap(merged);
   setMeta(row.updated_at, snapshotByteSize());
   return true;
@@ -529,7 +536,7 @@ export function startAutoPull(ms = 15000) {
   autoPullTimer = setInterval(() => {
     if (!isLoggedIn() || document.visibilityState !== 'visible' || pushTimer) return;
     pull().then((ok) => {
-      if (ok) window.dispatchEvent(new CustomEvent('sync-pulled'));
+      if (ok && lastPullChanged) window.dispatchEvent(new CustomEvent('tg-sync-pulled'));
     }).catch((e) => console.warn('[sync] auto-pull', e));
   }, ms);
 }

@@ -312,6 +312,8 @@ function showDescriptionPanel(text) {
 }
 
 
+const normQ = (x) => String(x || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
 function grid(items, withSearch, searchPlaceholder, gridKind) {
   // gridKind: 'comics' | 'series' | 'channels' | 'mixed'
   // Tipo de rejilla según lo que contiene de verdad (no según la pista del llamador)
@@ -321,8 +323,8 @@ function grid(items, withSearch, searchPlaceholder, gridKind) {
   const g = el('div', 'grid grid-' + kind), nodes = [];
   const matchItem = (i, q) => {
     if (!q) return true;
-    if ((i.label || '').toLowerCase().includes(q)) return true;
-    if (i.searchText && i.searchText.includes(q)) return true;
+    if (normQ(i.label).includes(q)) return true;
+    if (i.searchText && normQ(i.searchText).includes(q)) return true;
     return false;
   };
   const draw = (q = '') => {
@@ -372,7 +374,7 @@ function grid(items, withSearch, searchPlaceholder, gridKind) {
     clear.setAttribute('aria-label', 'Limpiar búsqueda');
     clear.onclick = () => { s.value = ''; clear.hidden = true; draw(''); s.focus(); };
     s.oninput = () => {
-      const q = s.value.toLowerCase().trim();
+      const q = normQ(s.value).trim();
       clear.hidden = !s.value;
       draw(q);
     };

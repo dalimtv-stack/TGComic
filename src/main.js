@@ -1743,6 +1743,7 @@ const readerApi = createReader(
     show, go,
     modeBtn,
     pageCache,
+    getCover,
   }
 );
 const { openComic: openComicRaw } = readerApi;
@@ -2049,8 +2050,15 @@ async function migrateCacheImages() {
     window.addEventListener('tg-sync-pulled', () => {
       try {
         if (document.querySelector('.info-frame, .sheet, .app-dialog')) return;
+        // No interrumpir si está escribiendo (p. ej. en el buscador)
+        const ae = document.activeElement;
+        if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return;
         const e = stack[stack.length - 1];
-        if (e && !e._isComic) refreshView();
+        if (e && !e._isComic) {
+          // Mantener la posición de desplazamiento al redibujar
+          e.scrollY = window.scrollY || document.documentElement.scrollTop || 0;
+          refreshView();
+        }
       } catch (_) {}
     });
   } catch (_) {}

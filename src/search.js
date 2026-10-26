@@ -107,13 +107,34 @@ export async function buildSearchIndex(deps) {
   return items;
 }
 
-/** Filtra el índice (AND de palabras). */
+/** Minúsculas y sin acentos/diacríticos ("Acción" → "accion"). */
+export function normSearch(s) {
+  return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+const TYPE_RANK = { series: 0, comic: 1, channel: 2, group: 3 };
+
+/** Filtra el índice (AND de palabras, sin distinguir acentos) y ordena por relevancia. */
 export function filterSearchIndex(index, query) {
-  const q = String(query || '').toLowerCase().trim();
+  const q = normSearch(query).trim();
   if (!q) return [];
   const parts = q.split(/\s+/).filter(Boolean);
-  return (index || []).filter((item) => {
-    const t = item.searchText || item.label?.toLowerCase() || '';
-    return parts.every((p) => t.includes(p));
+  const out = [];
+  (index || []).forEach((item, pos) => {
+    if (item._norm == null) item._norm = normSearch(item.searchText || item.label || '');
+    const t = item._norm;
+    if (!parts.every((p) => t.includes(p))) return;
+    if (item._normLabel == null) item._normLabel = normSearch(item.label || '');
+    const l = item._normLabel;
+    // 0: título empieza por la búsqueda · 1: alguna palabra del título empieza así · 2: título la contiene · 3: resto
+    let score = 3;
+    if (l.startsWith(q)) score = 0;
+    else if ((' ' + l).includes(' ' + parts[0])) score = 1;
+    else if (l.includes(parts[0])) score = 2;
+    out.push({ item, score, pos });
   });
+  out.sort((a, b) => a.score - b.score
+    || (TYPE_RANK[a.item.type] ?? 9) - (TYPE_RANK[b.item.type] ?? 9)
+    || a.pos - b.pos);
+  return out.map((x) => x.item);
 }

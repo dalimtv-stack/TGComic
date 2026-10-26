@@ -18,6 +18,7 @@ export function createReader(state, d) {
     show, go,
     modeBtn,
     pageCache,
+    getCover,
   } = d;
   const QSET = ['high', 'mid', 'low'];
   const FALLBACK = { high: ['high', 'mid', 'low'], mid: ['mid', 'high', 'low'], low: ['low', 'mid', 'high'] };
@@ -195,7 +196,7 @@ export function createReader(state, d) {
   function reader(f, pages, zr, ctx) {
     const chId = ctx?.ch?.id;
     const srcId = ctx?.src?.id ?? f.id; // caché de páginas: por versión (las imágenes difieren)
-    const savePage = (i) => { if (chId != null) { setPageIndex(chId, f.id, i); try { setLastRead(ctx.ch, f); } catch (_) {} } }; // progreso: unificado por la entrada principal
+    const savePage = (i) => { try { maybePreloadNext(i); } catch (_) {} if (chId != null) { setPageIndex(chId, f.id, i); try { setLastRead(ctx.ch, f); } catch (_) {} } }; // progreso: unificado por la entrada principal
     const qVariants = f.variants && Object.keys(f.variants).length > 1 ? f.variants : null;
     if (chId != null) {
       setPagesTotal(chId, f.id, pages.length);
@@ -259,7 +260,98 @@ export function createReader(state, d) {
     const openNext = () => {
       if (!hasNext) return;
       savePage(pages.length - 1);
+      closeNextCard();
       openComic(ctx.ch, ctx.list[ctx.idx + 1], ctx.list, { replace: true });
+    };
+
+    // ── Pantalla final: portada + título del siguiente, botón y avance automático ──
+    const NEXT_SECS = 8;
+    let nextCard = null, nextCardT = 0;
+    const closeNextCard = () => {
+      clearInterval(nextCardT); nextCardT = 0;
+      try { nextCard?.remove(); } catch (_) {}
+      nextCard = null;
+    };
+    const nextCardOpen = () => !!nextCard;
+    const showNextCard = () => {
+      if (!hasNext || nextCard) return;
+      const host = document.getElementById('rd');
+      if (!host) return openNext();
+      const nf = ctx.list[ctx.idx + 1];
+      const title = comicDisplayName(ctx.ch, nf, comicDisplay(nf.name, ctx.ch.name) || stripExt(nf.name));
+      const ov = el('div', 'next-card');
+      const box = el('div', 'next-card-box');
+      const cov = el('div', 'next-card-cover');
+      box.append(el('div', 'next-card-lbl', 'Siguiente'), cov, el('div', 'next-card-title', title));
+      const go = el('button', 'btn next-btn', 'Leer ahora');
+      const stay = el('button', 'btn next-card-stay', 'Quedarme aquí');
+      const cnt = el('div', 'next-card-count');
+      box.append(go, stay, cnt);
+      ov.append(box);
+      ['click', 'pointerdown', 'pointerup', 'touchstart', 'touchmove', 'touchend', 'wheel', 'mousedown', 'mouseup'].forEach((t) =>
+        ov.addEventListener(t, (ev) => ev.stopPropagation(), { passive: t !== 'click' && t !== 'wheel' ? true : false }));
+      ov.addEventListener('click', (ev) => { if (ev.target === ov) closeNextCard(); });
+      go.onclick = (ev) => { ev.stopPropagation(); openNext(); };
+      stay.onclick = (ev) => { ev.stopPropagation(); closeNextCard(); };
+      host.append(ov);
+      nextCard = ov;
+      try { go.focus({ preventScroll: true }); } catch (_) {}
+      if (typeof getCover === 'function') {
+        Promise.resolve(getCover(ctx.ch, nf)).then((b) => {
+          if (!b || nextCard !== ov) return;
+          const im = el('img'); im.alt = ''; im.draggable = false;
+          const u = URL.createObjectURL(b);
+          im.onload = im.onerror = () => setTimeout(() => { try { URL.revokeObjectURL(u); } catch (_) {} }, 1000);
+          im.src = u; cov.append(im); cov.classList.add('has');
+        }).catch(() => {});
+      }
+      let left = NEXT_SECS;
+      cnt.textContent = 'Empieza en ' + left + ' s';
+      nextCardT = setInterval(() => {
+        if (nextCard !== ov) return;
+        if (document.visibilityState !== 'visible') return; // no avanzar con la app en segundo plano
+        left -= 1;
+        if (left <= 0) { openNext(); return; }
+        cnt.textContent = 'Empieza en ' + left + ' s';
+      }, 1000);
+    };
+
+    // ── Cargar por adelantado las primeras páginas del siguiente cómic ──
+    let nextPreloaded = false;
+    const preloadNextComic = async () => {
+      if (nextPreloaded || !hasNext || !pageCache || chId == null) return;
+      if (networkPreloadRadius() < 2) return; // con conexión lenta o ahorro de datos, no
+      nextPreloaded = true;
+      try {
+        const nf = ctx.list[ctx.idx + 1];
+        const nsrc = variantFile(nf, pickQuality(nf, pref('quality', 'high')));
+        // RAR/CBR obliga a descargar el archivo entero: no adelantar
+        if (/\.(cbr|rar)$/i.test(String(nsrc.name || nf.name || ''))) return;
+        const startAt = Math.max(0, getPageIndex(chId, nf.id) || 0);
+        const want = [startAt, startAt + 1, startAt + 2];
+        const missing = [];
+        for (const i of want) {
+          try { if (!(await pageCache.get(chId, nsrc.id, i))) missing.push(i); } catch (_) { missing.push(i); }
+        }
+        if (!missing.length) return;
+        const m0 = await getMsg(ctx.ch, nsrc, {});
+        let size = Number(nsrc.size) || 0;
+        try { if (m0?.document?.size != null) size = Number(m0.document.size.toString()) || size; } catch (_) {}
+        const ac2 = { cancelled: false };
+        const arc2 = await openPages(m0, size, () => {}, ac2);
+        try {
+          for (const i of missing) {
+            if (i >= arc2.pages.length) break;
+            const b = await pageBlob(arc2.pages[i]);
+            if (b) await pageCache.set(chId, nsrc.id, i, b);
+          }
+        } finally {
+          try { Promise.resolve(arc2.close()).catch(() => {}); } catch (_) {}
+        }
+      } catch (e) { console.warn('[visor] precarga siguiente', e?.message || e); }
+    };
+    const maybePreloadNext = (i) => {
+      if (hasNext && i >= pages.length - 3) setTimeout(() => { preloadNextComic(); }, 1500);
     };
 
     const mount = () => {
@@ -269,7 +361,7 @@ export function createReader(state, d) {
       const vert = mode === 'vertical';
       const horiz = mode === 'horizontal';
       const continuous = vert || horiz;
-      let token = 0, observers = [];
+      let token = 0, observers = [], footObs = null;
       const rd = el('div'); rd.id = 'rd';
       try { window.dispatchEvent(new CustomEvent('tgcomic:reader', { detail: { open: true } })); } catch (_) {}
       // Barra superior: título + estado de modo
@@ -837,7 +929,8 @@ export function createReader(state, d) {
           else setCount();
         };
         const turn = async (i) => {
-          if (i > pages.length - 1) { if (hasNext) openNext(); return; }
+          if (i > pages.length - 1) { if (hasNext) { if (nextCardOpen()) openNext(); else showNextCard(); } return; }
+          closeNextCard();
           if (i < 0) return;
           let right = Math.max(0, Math.min(pages.length - 1, i));
           if (isSpread()) right = toSpreadRight(right);
@@ -1268,8 +1361,22 @@ export function createReader(state, d) {
         const foot = el('div', 'next-comic');
         if (hasNext) {
           const nb = el('button', 'btn next-btn', 'Siguiente número →');
-          nb.onclick = (ev) => { ev.stopPropagation(); openNext(); };
+          nb.onclick = (ev) => { ev.stopPropagation(); if (horiz) showNextCard(); else openNext(); };
           foot.append(nb);
+          if (horiz) {
+            // Horizontal: al llegar al final, mostrar la pantalla del siguiente
+            let wasIn = false;
+            const footIO = new IntersectionObserver((es) => {
+              es.forEach((x) => {
+                const inView = x.isIntersecting && x.intersectionRatio >= 0.6;
+                if (inView && !wasIn) showNextCard();
+                if (!x.isIntersecting && wasIn) closeNextCard();
+                wasIn = inView || (wasIn && x.isIntersecting);
+              });
+            }, { root: rd, threshold: [0, 0.6] });
+            setTimeout(() => { try { footIO.observe(foot); } catch (_) {} }, 600);
+            footObs = footIO;
+          }
         } else {
           foot.append(el('div', 'next-end', 'Fin'));
         }
@@ -1574,6 +1681,7 @@ export function createReader(state, d) {
         }, { root: rd, rootMargin: horiz ? '0px 80%' : '80% 0px' });
         slots.forEach((s) => loadIO.observe(s));
         observers = [loadIO];
+        if (footObs) observers.push(footObs);
         observers._scroll = onScroll;
 
         rd.onclick = (ev) => {
@@ -1805,6 +1913,7 @@ export function createReader(state, d) {
       }
       setCount();
       return () => {
+        closeNextCard();
         clearTimeout(uiTimer);
         clearTimeout(autoT);
         try { autoCancelAnim(); } catch (_) {}
@@ -1840,6 +1949,7 @@ export function createReader(state, d) {
     };
     let unmount = mount();
     return () => {
+      closeNextCard();
       try { unmount(); } catch (_) {}
       try { dropAll(); } catch (_) {}
       try { Promise.resolve(zr.close()).catch(() => {}); } catch (_) {}
