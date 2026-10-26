@@ -193,6 +193,9 @@ export function createReader(state, d) {
     }
   }
 
+  // Play activo al saltar al siguiente cómic desde la pantalla final → seguir reproduciendo
+  let autoCarryNext = false;
+
   function reader(f, pages, zr, ctx) {
     const chId = ctx?.ch?.id;
     const srcId = ctx?.src?.id ?? f.id; // caché de páginas: por versión (las imágenes difieren)
@@ -273,7 +276,7 @@ export function createReader(state, d) {
       nextCard = null;
     };
     const nextCardOpen = () => !!nextCard;
-    const showNextCard = () => {
+    const showNextCard = (opts = {}) => {
       if (!hasNext || nextCard) return;
       const host = document.getElementById('rd');
       if (!host) return openNext();
@@ -291,7 +294,7 @@ export function createReader(state, d) {
       ['click', 'pointerdown', 'pointerup', 'touchstart', 'touchmove', 'touchend', 'wheel', 'mousedown', 'mouseup'].forEach((t) =>
         ov.addEventListener(t, (ev) => ev.stopPropagation(), { passive: t !== 'click' && t !== 'wheel' ? true : false }));
       ov.addEventListener('click', (ev) => { if (ev.target === ov) closeNextCard(); });
-      go.onclick = (ev) => { ev.stopPropagation(); openNext(); };
+      go.onclick = (ev) => { ev.stopPropagation(); if (opts.auto) autoCarryNext = true; openNext(); };
       stay.onclick = (ev) => { ev.stopPropagation(); closeNextCard(); };
       host.append(ov);
       nextCard = ov;
@@ -305,13 +308,13 @@ export function createReader(state, d) {
           im.src = u; cov.append(im); cov.classList.add('has');
         }).catch(() => {});
       }
-      let left = NEXT_SECS;
+      let left = opts.secs || NEXT_SECS;
       cnt.textContent = 'Empieza en ' + left + ' s';
       nextCardT = setInterval(() => {
         if (nextCard !== ov) return;
         if (document.visibilityState !== 'visible') return; // no avanzar con la app en segundo plano
         left -= 1;
-        if (left <= 0) { openNext(); return; }
+        if (left <= 0) { if (opts.auto) autoCarryNext = true; openNext(); return; }
         cnt.textContent = 'Empieza en ' + left + ' s';
       }, 1000);
     };
@@ -503,7 +506,11 @@ export function createReader(state, d) {
         let more = true;
         try { more = (await autoStep?.()) !== false; } catch (e) { console.warn('[autoplay]', e); }
         if (!autoOn) return;
-        if (!more) { autoStop(); return; } // fin del cómic
+        if (!more) { // fin del cómic: pantalla final como al pasar a mano; sin tocar nada, a los 3 s sigue
+          autoStop();
+          if (hasNext) { closeNextCard(); showNextCard({ auto: true, secs: 3 }); }
+          return;
+        }
         autoSchedule();
       };
       const autoStart = () => { autoOn = true; paintPlay(); autoSchedule(); };
@@ -516,6 +523,7 @@ export function createReader(state, d) {
         if (autoOn) autoStop(); else autoStart();
       };
       paintPlay();
+      if (autoCarryNext) { autoCarryNext = false; setTimeout(() => { if (document.getElementById('rd')) autoStart(); }, 0); }
 
       // Ajustes de reproducción automática (engranaje a la izquierda del Play)
       const COG_D = 'M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.94C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.94L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z';
@@ -1361,10 +1369,10 @@ export function createReader(state, d) {
         const foot = el('div', 'next-comic');
         if (hasNext) {
           const nb = el('button', 'btn next-btn', 'Siguiente número →');
-          nb.onclick = (ev) => { ev.stopPropagation(); if (horiz) showNextCard(); else openNext(); };
+          nb.onclick = (ev) => { ev.stopPropagation(); showNextCard(); };
           foot.append(nb);
-          if (horiz) {
-            // Horizontal: al llegar al final, mostrar la pantalla del siguiente
+          {
+            // Vertical y Horizontal: al llegar al final, mostrar la pantalla del siguiente (igual que en Página)
             let wasIn = false;
             const footIO = new IntersectionObserver((es) => {
               es.forEach((x) => {
