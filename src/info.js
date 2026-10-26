@@ -3202,7 +3202,18 @@ function showSeriesBulkCaptionEditor(ch, seriesLabel, files, onBack) {
   const body = el('div', 'info-body');
   body.append(el('p', 'cover-pick-hint',
     'Se aplican a los ' + list.length + ' cómic(s) de «' + (seriesDisplayName(ch, seriesLabel) || seriesLabel || '') + '». ' +
-    'Solo se actualizan los campos que rellenes; los vacíos no se tocan.'
+    'Solo se actualizan los campos que rellenes en el formulario.'
+  ));
+
+  const onlyEmptyRow = el('label', 'sort-opt');
+  onlyEmptyRow.style.margin = '0.35rem 0 0.75rem';
+  const onlyEmptyChk = el('input');
+  onlyEmptyChk.type = 'checkbox';
+  onlyEmptyChk.checked = true;
+  onlyEmptyRow.append(onlyEmptyChk, document.createTextNode(' Rellenar solo campos vacíos'));
+  body.append(onlyEmptyRow);
+  body.append(el('p', 'cover-pick-hint',
+    'Marcado: no se sobrescribe un campo si el cómic ya lo tiene en el caption. Desmarcado: se aplica lo escrito a todos.'
   ));
 
   const commonField = (key) => {
@@ -3281,22 +3292,25 @@ function showSeriesBulkCaptionEditor(ch, seriesLabel, files, onBack) {
         setProg(i, total, 'Guardando «' + (f?.name || f?.id) + '»…');
         try {
           const prev = parseComicCaption(f?.caption || '');
+          const onlyEmpty = !!onlyEmptyChk.checked;
+          const pick = (patchVal, prevVal) => {
+            const p = String(patchVal || '').trim();
+            const cur = String(prevVal || '').trim();
+            if (!p) return cur; // formulario vacío → no tocar
+            if (onlyEmpty && cur) return cur; // ya tiene dato → no sobrescribir
+            return p;
+          };
           const next = {
             fileName: prev.fileName || f?.name || '',
             titleEs: prev.titleEs || '',
             originalTitle: prev.originalTitle || '',
-            series: patch.series || prev.series || '',
-            writer: patch.writer || prev.writer || '',
-            artist: patch.artist || prev.artist || '',
-            publisher: patch.publisher || prev.publisher || '',
+            series: pick(patch.series, prev.series),
+            writer: pick(patch.writer, prev.writer),
+            artist: pick(patch.artist, prev.artist),
+            publisher: pick(patch.publisher, prev.publisher),
             date: prev.date || '',
             description: prev.description || '',
           };
-          // Si el usuario rellenó el campo, se aplica (aunque sea distinto)
-          if (patch.series) next.series = patch.series;
-          if (patch.writer) next.writer = patch.writer;
-          if (patch.artist) next.artist = patch.artist;
-          if (patch.publisher) next.publisher = patch.publisher;
           const caption = buildComicCaption(next);
           if (caption.length > 1024) {
             fail++;
