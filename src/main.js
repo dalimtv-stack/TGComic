@@ -1781,7 +1781,7 @@ const viewsApi = createViews({
   get openComic() { return openComic; },
   sheet, bindLongPress, grid,
   showGroupInfo, showEditGroup, showChannelInfo, showEditChannel,
-  showSeriesInfo, showEditSeries, showSeriesCvFillForm, comicNeedsCvFill, showComicInfo, showEditComicTitle,
+  showSeriesInfo, showEditSeries, showEditSeriesName, showSeriesCoverPicker, showSeriesCvFillForm, comicNeedsCvFill, showComicInfo, showEditComicTitle,
   showCoverFitEditor, showPickCoverFromComic, getCoverFit,
   getContinueList, readProgress, isComicRead, markComicRead, markComicUnread,
   markSeriesRead, markSeriesUnread, getPageIndex, getPagesTotal,

@@ -26,7 +26,7 @@ export function createViews(d) {
     go, show, stack,
     sheet, bindLongPress, grid,
     showGroupInfo, showEditGroup, showChannelInfo, showEditChannel,
-    showSeriesInfo, showEditSeries, showSeriesCvFillForm, comicNeedsCvFill, showComicInfo, showEditComicTitle,
+    showSeriesInfo, showEditSeries, showEditSeriesName, showSeriesCoverPicker, showSeriesCvFillForm, comicNeedsCvFill, showComicInfo, showEditComicTitle,
     showCoverFitEditor, showPickCoverFromComic, getCoverFit,
     ungroupMap, setUngroupMode, getComicSeriesOverride,
     firstAvailableCover, kv, natural,
@@ -560,19 +560,19 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
       ['Información', () => showSeriesInfo(ch, seriesLabel, files)],
       ['Editar', () => {
         const openRoot = () => sheet(seriesDisplayName(ch, seriesLabel), seriesSheetOpts(ch, seriesLabel, files, redraw, { groupState, afterBack }));
+        const openEdit = () => sheet('Editar', editOpts, { cancelLabel: 'Volver', onCancel: openRoot });
         const editOpts = [
-          ['Editar TODA la serie', () => showEditSeries(ch, seriesLabel, files, redraw,
-            () => sheet('Editar', editOpts, { cancelLabel: 'Volver', onCancel: openRoot }))],
+          ['Editar nombre de la serie a la que pertenece', () => showEditSeriesName(ch, seriesLabel, files, openEdit)],
+          ['Seleccionar portada de la serie', () => showSeriesCoverPicker(ch, seriesLabel, files, openEdit)],
           ['Recargar fichas Telegram (Cómic Vine)', () => {
             if (typeof showSeriesCvFillForm === 'function') {
-              showSeriesCvFillForm(ch, seriesLabel, files, { overwrite: true,
-                onBack: () => sheet('Editar', editOpts, { cancelLabel: 'Volver', onCancel: openRoot }) });
+              showSeriesCvFillForm(ch, seriesLabel, files, { overwrite: true, onBack: openEdit });
             } else {
               appAlert('Función no disponible');
             }
           }],
         ];
-        sheet('Editar', editOpts, { cancelLabel: 'Volver', onCancel: openRoot });
+        openEdit();
       }],
       ['Marcar', () => {
         const openRoot = () => sheet(seriesDisplayName(ch, seriesLabel), seriesSheetOpts(ch, seriesLabel, files, redraw, { groupState, afterBack }));
@@ -615,17 +615,27 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
             ['Editar datos del cómic', () => showEditComicTitle(ch, f, label, redraw)],
           ];
           if (seriesLabel) {
-            editOpts.push(['Editar TODA la serie', () => showEditSeries(ch, seriesLabel, seriesFiles || [f], redraw, openEditMenu)]);
+            // Submenú de serie (nombre / portada / recargar fichas) — no duplicar a nivel de cómic
+            editOpts.push(['Editar TODA la serie', () => {
+              const files = seriesFiles || [f];
+              const openSeriesEdit = () => sheet('Editar TODA la serie', seriesEditOpts, {
+                cancelLabel: 'Volver',
+                onCancel: openEditMenu,
+              });
+              const seriesEditOpts = [
+                ['Editar nombre de la serie a la que pertenece', () => showEditSeriesName(ch, seriesLabel, files, openSeriesEdit)],
+                ['Seleccionar portada de la serie', () => showSeriesCoverPicker(ch, seriesLabel, files, openSeriesEdit)],
+                ['Recargar fichas Telegram (Cómic Vine)', () => {
+                  if (typeof showSeriesCvFillForm === 'function') {
+                    showSeriesCvFillForm(ch, seriesLabel, files, { overwrite: true, onBack: openSeriesEdit });
+                  } else {
+                    appAlert('Función no disponible');
+                  }
+                }],
+              ];
+              openSeriesEdit();
+            }]);
           }
-          editOpts.push(['Recargar fichas Telegram (Cómic Vine)', async () => {
-            if (typeof showSeriesCvFillForm !== 'function') return appAlert('Función no disponible');
-            const files = (await kv.get('f:' + ch.id)) || seriesFiles || [f];
-            const groups = groupSeries(files.length ? files : [f], ch.name, seriesOverrideFor?.(ch));
-            const group = groups.find((g) => g.files.some((member) => String(member.id) === String(f.id)));
-            showSeriesCvFillForm(ch, group?.label || seriesLabel || label, group?.files || seriesFiles || [f], {
-              overwrite: true, onBack: openEditMenu,
-            });
-          }]);
           editOpts.push(['Adaptar portada', () => {
             if (typeof showCoverFitEditor === 'function') {
               showCoverFitEditor(ch, f, () => { try { redraw?.(); } catch (_) {} openEditMenu(); });
