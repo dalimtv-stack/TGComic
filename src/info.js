@@ -3344,6 +3344,7 @@ function showSeriesBulkCaptionEditor(ch, seriesLabel, files, onBack) {
     showEditSeries,
     showEditSeriesName,
     showSeriesCoverPicker,
+    showSeriesBulkCaptionEditor,
     seriesCoverNode,
     channelCoverNode,
     groupCoverNode,
