@@ -324,7 +324,9 @@ function grid(items, withSearch, searchPlaceholder, gridKind) {
   const matchItem = (i, q) => {
     if (!q) return true;
     if (normQ(i.label).includes(q)) return true;
+    if (i.top && normQ(i.top).includes(q)) return true;
     if (i.searchText && normQ(i.searchText).includes(q)) return true;
+
     return false;
   };
   const draw = (q = '') => {
@@ -355,7 +357,10 @@ function grid(items, withSearch, searchPlaceholder, gridKind) {
     if (i.longPress) bindLongPress(t, i.longPress);
     name.append(t);
     const metaBox = el('div', 'meta');
+    // Línea superior opcional (p. ej. el canal sobre el título de la serie)
+    if (i.top) metaBox.append(el('div', 'card-top', i.top));
     metaBox.append(name);
+
     if (i.sub) metaBox.append(el('small', '', i.sub));
     c.append(hit, metaBox);
     return c;

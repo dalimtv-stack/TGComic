@@ -95,35 +95,59 @@ export function createViews(d) {
     return null;
   };
 
-  /** Fecha del "primer" cómic de una serie = el de menor número (#). */
-  const seriesFirstComicDate = (files, ch) => {
-    const list = Array.isArray(files) ? files.slice() : [];
-    if (!list.length) return null;
-    const numOf = (f) => {
-      try {
-        const src = (typeof comicSourceName === 'function' ? comicSourceName(f) : null) || f?.name || '';
-        const p = typeof parseComicName === 'function' ? parseComicName(src, ch?.name) : null;
-        if (p?.number != null && p.number !== '') {
-          const n = parseFloat(String(p.number).replace(/[^0-9.]/g, ''));
-          if (Number.isFinite(n)) return n;
-        }
-        const m = String(src).match(/#\s*([0-9]+(?:\.[0-9]+)?)/);
-        if (m) return parseFloat(m[1]);
-      } catch (_) {}
-      return 1e12;
-    };
-    list.sort((a, b) => {
-      const na = numOf(a), nb = numOf(b);
+  /** Número de cómic (#) a partir del nombre; 1e12 si no lo tiene. */
+  const comicNumberOf = (f, ch) => {
+    try {
+      const src = (typeof comicSourceName === 'function' ? comicSourceName(f) : null) || f?.name || '';
+      const p = typeof parseComicName === 'function' ? parseComicName(src, ch?.name) : null;
+      if (p?.number != null && p.number !== '') {
+        const n = parseFloat(String(p.number).replace(/[^0-9.]/g, ''));
+        if (Number.isFinite(n)) return n;
+      }
+      const m = String(src).match(/#\s*([0-9]+(?:\.[0-9]+)?)/);
+      if (m) return parseFloat(m[1]);
+    } catch (_) {}
+    return 1e12;
+  };
+
+  /** Cómics ordenados por número (#) y luego por nombre. */
+  const orderByComicNumber = (files, ch) => (Array.isArray(files) ? files.slice() : [])
+    .sort((a, b) => {
+      const na = comicNumberOf(a, ch), nb = comicNumberOf(b, ch);
       if (na !== nb) return na - nb;
       return natural(String(a?.name || ''), String(b?.name || ''));
     });
+
+  /** Fecha del "primer" cómic de una serie = el de menor número (#). */
+  const seriesFirstComicDate = (files, ch) => {
     // Primer cómic con fecha; si ninguno, null
-    for (const f of list) {
+    for (const f of orderByComicNumber(files, ch)) {
       const d = captionDateOf(f);
       if (d != null) return d;
     }
     return null;
   };
+
+  /** Años del primer y del último cómic de una serie (por número). */
+  const seriesYearSpan = (files, ch) => {
+    let first = null, last = null;
+    for (const f of orderByComicNumber(files, ch)) {
+      const d = captionDateOf(f);
+      if (d == null) continue;
+      const y = Math.floor(d / 100);
+      if (first == null) first = y;
+      last = y;
+    }
+    return first == null ? null : { first, last };
+  };
+
+  /** "2024" si todos los cómics comparten año, "2024-2026" si abarcan varios, '' si no hay fechas. */
+  const seriesYearLabel = (files, ch) => {
+    const span = seriesYearSpan(files, ch);
+    if (!span) return '';
+    return span.first === span.last ? String(span.first) : `${span.first}-${span.last}`;
+  };
+
 
 const applySortList = (items, prefObj, getId, getLabel, getDate) => {
     const list = (items || []).slice();
@@ -1265,15 +1289,22 @@ function groupsView() {
               if (g.series) {
                 try { shown = seriesDisplayName(g.ch, g.series) || g.series; } catch (_) { shown = g.series; }
               }
+              const years = seriesYearLabel(fs, g.ch);
+              const count = `${fs.length} cómic${fs.length === 1 ? '' : 's'}`;
               return {
+
+
                 kind: 'series',
                 _sortId: 'g:' + key,
                 _sortLabel: (g.ch?.name || '') + ' · ' + shown,
                 _sortDate: seriesFirstComicDate(fs, g.ch),
                 _ch: String(g.ch?.name || ''),
                 _series: String(shown),
+                top: g.ch?.name || '',
                 label: shown,
-                sub: `${g.ch?.name || ''} · ${fs.length} cómic${fs.length === 1 ? '' : 's'}`,
+                sub: years ? `${years} · ${count}` : count,
+
+
                 cover: () => seriesCoverNode(g.ch, g.series || shown, fs, fs.length),
                 go: () => openAuthorView(
                   authorName,

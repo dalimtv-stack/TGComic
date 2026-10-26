@@ -54,7 +54,9 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
 .cover.cover-channel{width:100%;max-width:100%}
 /* Meta centrada bajo la portada, mismo ancho, sin sobresalir */
 .card .name,
-.card small{
+.card small,
+.card .card-top{
+
   box-sizing:border-box;width:100%;max-width:100%;
   margin-left:0;margin-right:0;padding:0 2px;text-align:center;
   overflow:hidden;
@@ -73,6 +75,15 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,
   color:var(--mut);display:block;font-size:.78rem;max-width:100%;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
+/* Línea superior de la tarjeta (p. ej. el canal sobre el título de la serie) */
+.card .card-top{
+  color:#7dd3fc;display:block;font-size:var(--res-small,var(--small-fs,.78rem));max-width:100%;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  line-height:1.25;
+}
+.card:has(.card-top) .card-top{margin-top:.5rem}
+.card:has(.card-top) .name{margin-top:.1rem}
+
 .card:has(.cover-comic) b{font-size:var(--text-comic,15px)!important}
 .card:has(.cover-comic) small{font-size:calc(var(--text-comic,15px) * .88)!important}
 .card:has(.cover-series) b{font-size:var(--text-series,15px)!important}
@@ -89,7 +100,9 @@ html[data-grid-layout="fixed"] .cover.cover-comic{width:min(100%,var(--cover-w-c
 html[data-grid-layout="fixed"] .cover.cover-series{width:min(100%,var(--cover-w-series,150px))}
 html[data-grid-layout="fixed"] .cover.cover-channel{width:min(100%,var(--cover-w-channel,150px))}
 html[data-grid-layout="fixed"] .card .name,
-html[data-grid-layout="fixed"] .card small{width:min(100%,var(--meta-w,100%));margin-left:auto;margin-right:auto}
+html[data-grid-layout="fixed"] .card small,
+html[data-grid-layout="fixed"] .card .card-top{width:min(100%,var(--meta-w,100%));margin-left:auto;margin-right:auto}
+
 html[data-grid-layout="fixed"] .card:has(.cover-comic){--meta-w:var(--cover-w-comic,150px)}
 html[data-grid-layout="fixed"] .card:has(.cover-series){--meta-w:var(--cover-w-series,150px)}
 html[data-grid-layout="fixed"] .card:has(.cover-channel){--meta-w:var(--cover-w-channel,150px)}
@@ -129,6 +142,8 @@ html[data-grid-layout="fixed"] .grid:has(.cover-series):has(.cover-channel) > .c
    el hueco entre filas no depende de cuántas líneas ocupe cada título.
    (Si prefieres filas más compactas: .card{--name-lines:1}) */
 .card .meta{width:100%;display:flex;flex-direction:column;align-items:center;min-height:calc(var(--res-fs,var(--meta-fs,.92rem)) * 1.25 * var(--name-lines,2) + .5rem + var(--res-small,var(--small-fs,.78rem)) * 1.25)}
+.card:has(.card-top) .meta{min-height:calc(var(--res-fs,var(--meta-fs,.92rem)) * 1.25 * var(--name-lines,2) + .5rem + .1rem + var(--res-small,var(--small-fs,.78rem)) * 1.25 * 2)}
+
 .card .name{min-height:0}
 .card small{line-height:1.25;margin-top:.05rem}
 .card.card-locked::after{content:"";display:block;height:calc(var(--res-fs,var(--meta-fs,.92rem)) * 1.25 * var(--name-lines,2) + .5rem + var(--res-small,var(--small-fs,.78rem)) * 1.25)}
@@ -1105,11 +1120,6 @@ textarea.meta-desc-lg.edit-input{
   z-index:14!important;
   margin:0!important;
 }
-
-
-/* ---- PC: al desplegar "Autores" aparecía la barra de scroll y las portadas cambiaban de tamaño.
-        Se reserva siempre el hueco de la barra para que el ancho útil no varíe. ---- */
-html{scrollbar-gutter:stable}
 
 
 /* ---- Modo Página + Ancho: hoja alta alineada ARRIBA; scroll solo en .page-host ---- */
