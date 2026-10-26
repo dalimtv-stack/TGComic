@@ -1,3 +1,4 @@
+html{scrollbar-gutter:stable}
 :root{color-scheme:dark;--bg:#0f1012;--card:#1b1c20;--fg:#ecebe6;--mut:#8b8d94;--acc:#f2b632;--sat:env(safe-area-inset-top,0px);--sab:env(safe-area-inset-bottom,0px)}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,-apple-system,sans-serif}

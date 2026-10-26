@@ -615,7 +615,6 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
             ['Editar datos del cómic', () => showEditComicTitle(ch, f, label, redraw)],
           ];
           if (seriesLabel) {
-            // Submenú de serie (nombre / portada / recargar fichas) — no duplicar a nivel de cómic
             editOpts.push(['Editar TODA la serie', () => {
               const files = seriesFiles || [f];
               const openSeriesEdit = () => sheet('Editar TODA la serie', seriesEditOpts, {
