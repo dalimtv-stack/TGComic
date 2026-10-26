@@ -537,10 +537,12 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
       ['Editar', () => {
         const openRoot = () => sheet(seriesDisplayName(ch, seriesLabel), seriesSheetOpts(ch, seriesLabel, files, redraw, { groupState, afterBack }));
         const editOpts = [
-          ['Editar TODA la serie', () => showEditSeries(ch, seriesLabel, files, redraw)],
+          ['Editar TODA la serie', () => showEditSeries(ch, seriesLabel, files, redraw,
+            () => sheet('Editar', editOpts, { cancelLabel: 'Volver', onCancel: openRoot }))],
           ['Recargar fichas Telegram (Cómic Vine)', () => {
             if (typeof showSeriesCvFillForm === 'function') {
-              showSeriesCvFillForm(ch, seriesLabel, files, { overwrite: true });
+              showSeriesCvFillForm(ch, seriesLabel, files, { overwrite: true,
+                onBack: () => sheet('Editar', editOpts, { cancelLabel: 'Volver', onCancel: openRoot }) });
             } else {
               appAlert('Función no disponible');
             }
@@ -579,6 +581,7 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
     const seriesFiles = ctx.seriesFiles || null;
     const groupState = ctx.groupState || null;
     const afterBack = ctx.afterDesagrupar;
+    const openRoot = () => sheet(label, comicSheetOpts(ch, f, label, redraw, ctx).concat(lockToggleOpts('comic', { ch, f }, label, redraw)));
 
     const opts = [
       ['Información', () => showComicInfo(ch, f, label)],
@@ -588,8 +591,17 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
             ['Editar datos del cómic', () => showEditComicTitle(ch, f, label, redraw)],
           ];
           if (seriesLabel) {
-            editOpts.push(['Editar TODA la serie', () => showEditSeries(ch, seriesLabel, seriesFiles || [f], redraw)]);
+            editOpts.push(['Editar TODA la serie', () => showEditSeries(ch, seriesLabel, seriesFiles || [f], redraw, openEditMenu)]);
           }
+          editOpts.push(['Recargar fichas Telegram (Cómic Vine)', async () => {
+            if (typeof showSeriesCvFillForm !== 'function') return appAlert('Función no disponible');
+            const files = (await kv.get('f:' + ch.id)) || seriesFiles || [f];
+            const groups = groupSeries(files.length ? files : [f], ch.name, seriesOverrideFor?.(ch));
+            const group = groups.find((g) => g.files.some((member) => String(member.id) === String(f.id)));
+            showSeriesCvFillForm(ch, group?.label || seriesLabel || label, group?.files || seriesFiles || [f], {
+              overwrite: true, onBack: openEditMenu,
+            });
+          }]);
           editOpts.push(['Adaptar portada', () => {
             if (typeof showCoverFitEditor === 'function') {
               showCoverFitEditor(ch, f, () => { try { redraw?.(); } catch (_) {} openEditMenu(); });
@@ -626,7 +638,7 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
         sheet('Desagrupar', [
           ['Desagrupar con Número y Títulos', () => setUngroupMode(ch, seriesLabel, 'short', afterBack || redraw)],
           ['Desagrupar con Nombre Serie, Número y Títulos', () => setUngroupMode(ch, seriesLabel, 'full', afterBack || redraw)],
-        ]);
+        ], { cancelLabel: 'Volver', onCancel: openRoot });
       }]);
     } else if (groupState === 'short' || groupState === 'full') {
       // Serie desagrupada: la opción pasa a "Agrupar"
@@ -1075,7 +1087,7 @@ function groupsView() {
           longPress: () => {
             const opts = [
               ['Información', () => showGroupInfo(name)],
-              ['Editar', () => showEditGroup(name, redrawPubs)],
+              ['Editar', () => showEditGroup(name, redrawPubs, () => sheet(label, opts))],
             ];
             if (locks.canUseLocks()) {
               if (locks.isGroupMarked(name)) {
@@ -1592,15 +1604,19 @@ function channelsView(g) {
             if (!locks.guardRestricted('channel', ch, channelDisplayName(ch))) return;
             filesView(ch);
           },
-          longPress: () => sheet(label, [
+          longPress: () => {
+            const openRoot = () => sheet(label, opts);
+            const opts = [
             ['Información', () => showChannelInfo(ch)],
-            ['Editar', () => showEditChannel(ch, files, () => build())],
+            ['Editar', () => showEditChannel(ch, files, () => build(), openRoot)],
             ['Añadir versión WebP', () => {
               try { repackTool?.offerWebpVersionChannel?.(ch, files); }
               catch (e) { appAlert(e?.message || e); }
             }],
             ...lockToggleOpts('channel', ch, label, () => build()),
-          ]),
+            ];
+            openRoot();
+          },
         });
       }
       gridItems.sort((a, b) => natural(a.label, b.label));

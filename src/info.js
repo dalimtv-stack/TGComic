@@ -1168,6 +1168,7 @@ function normIssueKey(n) {
  */
 function showSeriesCvFillForm(ch, seriesLabel, files, opts = {}) {
   const overwrite = !!(opts && opts.overwrite);
+  const seriesGroups = Array.isArray(opts.seriesGroups) ? opts.seriesGroups : null;
   document.querySelector('.info-frame.series-cv-fill')?.remove();
   const display = seriesDisplayName(ch, seriesLabel);
   const frame = el('div', 'info-frame series-cv-fill');
@@ -1177,12 +1178,32 @@ function showSeriesCvFillForm(ch, seriesLabel, files, opts = {}) {
     ? 'Recargar fichas Telegram (Comic Vine)'
     : 'Rellenar serie (Comic Vine)'));
   const close = el('button', 'btn info-close', '×');
-  close.onclick = () => frame.remove();
+  const back = () => {
+    frame.remove();
+    if (typeof opts.onBack === 'function') opts.onBack();
+    else showSeriesInfo(ch, seriesLabel, files);
+  };
+  close.onclick = back;
   head.append(close);
   const body = el('div', 'info-body');
+  let seriesSel = null;
+  if (seriesGroups) {
+    body.append(el('label', 'sync-label', 'Serie'));
+    seriesSel = el('select', 'edit-input upload-select');
+    const placeholder = el('option', '', 'Selecciona una serie');
+    placeholder.value = '';
+    seriesSel.append(placeholder);
+    seriesGroups.forEach((g, index) => {
+      const option = el('option', '', seriesDisplayName(ch, g.label));
+      option.value = String(index);
+      seriesSel.append(option);
+    });
+    if (seriesGroups.length === 1) seriesSel.value = '0';
+    body.append(seriesSel);
+  }
   body.append(el('p', 'cover-pick-hint',
     overwrite
-      ? ('Serie: ' + display + '. Pega la URL del volumen en Comic Vine. Se SOBRESCRIBEN Título original, Guionista, Dibujante, Fecha, Descripción y Editorial (si hay dato nuevo). Nombre de archivo, Título España y Serie se mantienen del archivo / serie local.')
+      ? ((seriesGroups ? 'Selecciona la serie del canal' : 'Serie: ' + display) + '. Pega la URL del volumen en Comic Vine. Se SOBRESCRIBEN Título original, Guionista, Dibujante, Fecha, Descripción y Editorial (si hay dato nuevo). Nombre de archivo, Título España y Serie se mantienen del archivo / serie local.')
       : ('Serie: ' + display + '. Pega la URL del volumen en Comic Vine. Se rellenan solo los campos vacíos: Título original, Guionista, Dibujante, Fecha y Descripción (Comic Vine); Editorial desde la editorial del canal en TGComic. Nombre de archivo, Título España y Serie salen del archivo / serie local. Lo que ya esté relleno no se sobrescribe.')
   ));
   body.append(el('label', 'sync-label', 'URL de la serie (Comic Vine)'));
@@ -1194,14 +1215,22 @@ function showSeriesCvFillForm(ch, seriesLabel, files, opts = {}) {
   body.append(el('p', 'cover-pick-hint', 'Ejemplo: https://comicvine.gamespot.com/legends-of-the-dark-knight/4050-4200/'));
 
   const actions = el('div', 'edit-actions');
-  const cancel = el('button', 'btn', 'Cancelar');
-  cancel.onclick = () => {
-    frame.remove();
-    showSeriesInfo(ch, seriesLabel, files);
-  };
-  const goBtn = el('button', 'btn edit-save', 'Rellenar');
+  const cancel = el('button', 'btn', 'Volver');
+  cancel.onclick = back;
+  const goBtn = el('button', 'btn edit-save', overwrite ? 'Recargar' : 'Rellenar');
   goBtn.type = 'button';
   goBtn.onclick = async () => {
+    let selectedLabel = seriesLabel;
+    let selectedFiles = files;
+    if (seriesGroups) {
+      const group = seriesSel?.value !== '' ? seriesGroups[Number(seriesSel?.value)] : null;
+      if (!group) {
+        await appAlert('Selecciona una serie del canal.');
+        return;
+      }
+      selectedLabel = group.label;
+      selectedFiles = group.files;
+    }
     const url = String(urlInp.value || '').trim();
     if (!url) {
       await appAlert('Pega la URL del volumen en Comic Vine.');
@@ -1219,7 +1248,7 @@ function showSeriesCvFillForm(ch, seriesLabel, files, opts = {}) {
       return;
     }
     frame.remove();
-    await runSeriesCvFill(ch, seriesLabel, files, volId, url, { overwrite });
+    await runSeriesCvFill(ch, selectedLabel, selectedFiles, volId, url, { overwrite });
   };
   actions.append(cancel, goBtn);
   body.append(actions);
@@ -1646,13 +1675,17 @@ function seriesCoverNode(ch, seriesLabel, files, badge) {
   return d;
 }
 /** Submenú Editar serie */
-function showEditSeries(ch, seriesLabel, files, after) {
+function showEditSeries(ch, seriesLabel, files, after, onBack = null) {
   const title = seriesDisplayName(ch, seriesLabel);
   const list = Array.isArray(files) ? files : [];
   sheet(title, [
     ['Editar nombre de la serie a la que pertenece', () => showEditSeriesName(ch, seriesLabel, list, after)],
     ['Seleccionar portada de la serie', () => showSeriesCoverPicker(ch, seriesLabel, list, after)],
-  ]);
+    ['Recargar fichas Telegram (Cómic Vine)', () => showSeriesCvFillForm(ch, seriesLabel, list, {
+      overwrite: true,
+      onBack: () => showEditSeries(ch, seriesLabel, list, after, onBack),
+    })],
+  ], { cancelLabel: 'Volver', onCancel: onBack || after });
 }
 function showEditSeriesName(ch, seriesLabel, seriesFiles, after) {
   document.querySelector('.info-frame.edit-series')?.remove();
@@ -2193,11 +2226,11 @@ async function showGroupInfo(originalName) {
     appAlert('No se pudo mostrar la información de la editorial');
   }
 }
-function showEditGroup(originalName, after) {
+function showEditGroup(originalName, after, onBack = null) {
   sheet(groupDisplayName(originalName), [
     ['Editar nombre de la editorial', () => showEditGroupName(originalName, after)],
     ['Seleccionar portada de la editorial', () => showGroupCoverPicker(originalName, after)],
-  ]);
+  ], { cancelLabel: 'Volver', onCancel: onBack || after });
 }
 function showEditGroupName(originalName, after) {
   document.querySelector('.info-frame.edit-group')?.remove();
@@ -2445,11 +2478,25 @@ async function showChannelInfo(ch) {
     appAlert('No se pudo mostrar la información del canal');
   }
 }
-function showEditChannel(ch, files, after) {
+function showEditChannel(ch, files, after, onBack = null) {
   sheet(channelDisplayName(ch), [
     ['Editar nombre del canal', () => showEditChannelName(ch, after)],
     ['Seleccionar portada del canal', () => showChannelCoverPicker(ch, files || [], after)],
-  ]);
+    ['Recargar fichas Telegram (Cómic Vine)', async () => {
+      const list = Array.isArray(files) && files.length ? files : (await kv.get('f:' + ch.id)) || [];
+      const groups = groupSeries(list, ch.name, seriesOverrideFor?.(ch));
+      if (!groups.length) {
+        await appAlert('No hay series en este canal.');
+        showEditChannel(ch, files, after, onBack);
+        return;
+      }
+      showSeriesCvFillForm(ch, groups.length === 1 ? groups[0].label : '', [], {
+        overwrite: true,
+        seriesGroups: groups,
+        onBack: () => showEditChannel(ch, files, after, onBack),
+      });
+    }],
+  ], { cancelLabel: 'Volver', onCancel: onBack || after });
 }
 function showEditChannelName(ch, after) {
   document.querySelector('.info-frame.edit-channel')?.remove();
