@@ -41,15 +41,16 @@ export function createViews(d) {
   // ---- Ordenación de listados (editorial / canal / serie) ----
   const sortKey = (scope, id) => 'sort:' + scope + ':' + String(id || '');
   const getSortPref = (scope, id) => {
+    const defaultMode = scope === 'authorSeries' ? 'date' : 'name';
     try {
       const raw = localStorage.getItem(sortKey(scope, id));
-      if (!raw) return { mode: 'name' };
+      if (!raw) return { mode: defaultMode };
       const o = JSON.parse(raw);
-      if (!o || typeof o !== 'object') return { mode: 'name' };
-      const mode = ['name', 'date', 'manual'].includes(o.mode) ? o.mode : 'name';
+      if (!o || typeof o !== 'object') return { mode: defaultMode };
+      const mode = ['name', 'date', 'manual'].includes(o.mode) ? o.mode : defaultMode;
       return { mode, order: Array.isArray(o.order) ? o.order.map(String) : [] };
     } catch {
-      return { mode: 'name' };
+      return { mode: defaultMode };
     }
   };
   const setSortPref = (scope, id, prefObj) => {
@@ -195,8 +196,8 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
       body.append(row);
       return inp;
     };
-    const rName = mkRadio('name', 'Por nombre (predeterminado)');
-    const rDate = mkRadio('date', 'Por fecha (caption Telegram)');
+    const rName = mkRadio('name', scope === 'authorSeries' ? 'Por nombre' : 'Por nombre (predeterminado)');
+    const rDate = mkRadio('date', scope === 'authorSeries' ? 'Por fecha (caption Telegram, predeterminado)' : 'Por fecha (caption Telegram)');
     const rMan = mkRadio('manual', 'Manual (arrastrar)');
 
     const manualHost = el('div');
@@ -1289,7 +1290,7 @@ function groupsView() {
 
           const render = () => {
             const grouped = !vopts.noGroup && (() => {
-              try { return localStorage.getItem(groupKey) === '1'; } catch (_) { return false; }
+              try { return localStorage.getItem(groupKey) !== '0'; } catch (_) { return true; }
             })();
             if (grouped) renderGrouped(); else renderComics();
             if (!vopts.noGroup) {
