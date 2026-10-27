@@ -187,9 +187,11 @@ export function collapseVersions(files, nameOf = sourceNameOf) {
  *   main = archivos sin etiqueta WebP (Alta)   ·   webp = copias [WebP] y [2400px][WebP]
  */
 export function splitStats(files) {
-  const out = { main: { n: 0, bytes: 0 }, webp: { n: 0, bytes: 0 } };
+  const out = { main: { n: 0, bytes: 0 }, webp: { n: 0, bytes: 0 }, ai: { n: 0, bytes: 0 } };
   for (const f of flattenVersions(files)) {
-    const bucket = parseQuality(sourceNameOf(f)).q === 'high' ? out.main : out.webp;
+    const pq = parseQuality(sourceNameOf(f));
+    // Versiones [Mejora-IA] se cuentan aparte
+    const bucket = pq.ai ? out.ai : (pq.q === 'high' ? out.main : out.webp);
     bucket.n++;
     bucket.bytes += Number(f?.size) || 0;
   }

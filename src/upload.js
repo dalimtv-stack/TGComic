@@ -269,7 +269,7 @@ export function createUploadTool(d) {
       }
     }
 
-    const ISSUE_TAG = '(?:\\d+(?:\\.\\d+)?[a-zA-Z]?|Special|Especial|Extra|Anual|Annual|One[\\s-]?Shot|OneShot)';
+    const ISSUE_TAG = '(?:\\d+(?:\\.\\d+)?[a-zA-Z]?(?![\\w.])|Special|Especial|Extra|Anual|Annual|One[\\s-]?Shot|OneShot)';
     const tags = extras.length ? extras.map((x) => '[' + x + ']').join(' ') : '';
     const joinInfo = (a, b) => [a, b].filter(Boolean).join(' ').trim();
     const hint = String(seriesHint || '').trim();
@@ -280,13 +280,13 @@ export function createUploadTool(d) {
       if (rest.toLowerCase().startsWith(hint.toLowerCase())) {
         rest = rest.slice(hint.length).replace(/^\s*-\s*/, '').trim();
       }
-      let m = rest.match(new RegExp(`^#\\s*(${ISSUE_TAG})(?:\\s*[-–—:]\\s*(.*))?$`, 'i'));
-      if (!m) m = rest.match(new RegExp(`^(${ISSUE_TAG})(?:\\s*[-–—:]\\s*(.*))?$`, 'i'));
+      let m = rest.match(new RegExp(`^#\\s*(${ISSUE_TAG})(?:\\s*[-–—:]?\\s+(.*)|\\s*[-–—:]\\s*(.*))?$`, 'i'));
+      if (!m) m = rest.match(new RegExp(`^(${ISSUE_TAG})(?:\\s*[-–—:]?\\s+(.*)|\\s*[-–—:]\\s*(.*))?$`, 'i'));
       if (m) {
         return {
           series: hint,
           number: String(m[1] || '').trim(),
-          info: joinInfo(String(m[2] || '').trim(), tags),
+          info: joinInfo(String(m[2] || m[3] || '').trim(), tags),
         };
       }
       if (!rest || rest.toLowerCase() === hint.toLowerCase()) {
@@ -297,8 +297,9 @@ export function createUploadTool(d) {
     // Del nombre de archivo: Serie #n - info
     let m = null;
     if (/#/.test(base)) {
-      m = base.match(new RegExp(`^(.*)\\s*#\\s*(${ISSUE_TAG})(?:\\s*[-–—:]\\s*(.*))?$`, 'i'));
+      m = base.match(new RegExp(`^(.*)\\s*#\\s*(${ISSUE_TAG})(?:\\s*[-–—:]?\\s+(.*)|\\s*[-–—:]\\s*(.*))?$`, 'i'));
     }
+    if (m) m = [m[0], m[1], m[2], m[3] || m[4] || ''];
     if (!m) m = base.match(/^(.*?)\s+(\d{1,4}[a-z]?)\s*[-–—]\s+(.*)$/i);
     if (!m) m = base.match(/^(.*?)\s+(\d{1,4}[a-z]?)$/i);
     if (m) {
@@ -1081,7 +1082,13 @@ export function createUploadTool(d) {
         // Valores previos del parseo / contexto (como en Editar cómic)
         const prevTitle = (() => {
           const num = parsed.number || '';
-          const info = parsed.info || '';
+          // Título/ficha sin etiquetas [..] ni (año)(Digital)…
+          const info = String(parsed.info || '')
+            .replace(/\s*\[[^\]]*\]/g, '')
+            .replace(/\s*\([^)]*\)/g, '')
+            .replace(/\s+/g, ' ')
+            .replace(/^[\s\-–—:]+|[\s\-–—:]+$/g, '')
+            .trim();
           if (num && info) return '#' + num + ' - ' + info;
           if (num) return '#' + num;
           return info || '';
