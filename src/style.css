@@ -1185,8 +1185,15 @@ textarea.meta-desc-lg.edit-input{
 @keyframes nextCardIn{from{opacity:0}to{opacity:1}}
 
 /* ── Versiones [Mejora-IA]: botón y selector en el visor ── */
+/* Botón IA: a la IZQUIERDA del visor, bien separado de Play y engranaje */
+#rd .q-group .ai-btn{
+  position:fixed!important;
+  bottom:calc(env(safe-area-inset-bottom,0px) + 62px)!important;
+  left:calc(50% - 24px - 8px - 40px - 4px - 40px - 20px - 40px)!important;
+  transform:none!important;
+}
 #rd .q-group .ai-btn .ai-ico{
-  display:block;width:30px;height:30px;pointer-events:none;background:currentColor;
+  display:block;width:34px;height:34px;pointer-events:none;background:currentColor;
   -webkit-mask:url(/images/AI.svg) center/contain no-repeat;mask:url(/images/AI.svg) center/contain no-repeat;
 }
 .ai-menu{
