@@ -1197,6 +1197,18 @@ try {
     }, 250);
   });
 } catch (_) {}
+// Tras guardar nombre/portada: repintar la vista actual (serie, canal o editorial) sin salir
+let changedTimer = null;
+try {
+  window.addEventListener('tgcomic:changed', () => {
+    clearTimeout(changedTimer);
+    changedTimer = setTimeout(() => {
+      const cur = stack[stack.length - 1];
+      if (cur) cur.scrollY = window.scrollY || document.documentElement.scrollTop || 0;
+      refreshView();
+    }, 60);
+  });
+} catch (_) {}
 backBtn.onclick = () => history.back();
 // Header: ocultar al bajar, mostrar al subir
 const onScrollHeader = () => {

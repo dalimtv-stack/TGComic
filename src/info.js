@@ -84,6 +84,7 @@ export function createInfoEdit(d) {
   /** Origen de la portada elegida (sincronizado): {t:'gh',url} | {t:'comic',id} | {t:'url',url}. '0' = por defecto. */
   const coverSrcLs = (key) => 'coverSrc:' + key;
   const coverAppliedLs = (key) => 'device:coverSrcApplied:' + key;
+  const coverLocalLs = (key) => 'device:coverLocal:' + key;
   function getCoverSrc(key) {
     try {
       const raw = localStorage.getItem(coverSrcLs(key));
@@ -97,6 +98,7 @@ export function createInfoEdit(d) {
       if (src) localStorage.setItem(coverSrcLs(key), JSON.stringify(src));
       else if (localStorage.getItem(coverSrcLs(key)) != null) localStorage.setItem(coverSrcLs(key), '0');
       localStorage.setItem(coverAppliedLs(key), src ? JSON.stringify(src) : '');
+      localStorage.removeItem(coverLocalLs(key));
       sync.schedulePush?.();
     } catch (_) {}
   }
@@ -105,7 +107,30 @@ export function createInfoEdit(d) {
     try {
       const raw = localStorage.getItem(coverSrcLs(key));
       localStorage.setItem(coverAppliedLs(key), !raw || raw === '0' ? '' : raw);
+      localStorage.setItem(coverLocalLs(key), '1');
     } catch (_) {}
+  }
+  /** Avisa a la app de que algo visible cambió (nombre/portada) para repintar la vista actual. */
+  function notifyChanged() {
+    try { window.dispatchEvent(new CustomEvent('tgcomic:changed')); } catch (_) {}
+  }
+  /** Texto legible con el origen de la portada de un canal ('channel') o serie ('series'). */
+  function describeCoverSource(key, ch, files, kind) {
+    try {
+      const src = getCoverSrc(key);
+      const list = Array.isArray(files) ? files : [];
+      if (src?.t === 'gh') return 'GitHub' + (src.file ? ': ' + src.file : (src.url ? ': ' + src.url : ''));
+      if (src?.t === 'url') return 'URL: ' + src.url;
+      if (src?.t === 'comic') {
+        const f = list.find((x) => String(x.id) === String(src.id))
+          || list.flatMap((x) => (Array.isArray(x.variants) ? x.variants : [])).find((x) => String(x?.id) === String(src.id));
+        const name = f ? (comicDisplay(comicSourceName(f), ch?.name) || f.name) : ('id ' + src.id);
+        return 'Cómic: ' + name;
+      }
+      if (localStorage.getItem(coverLocalLs(key)) === '1') return 'Imagen del dispositivo (solo en este dispositivo)';
+      if (kind === 'channel') return 'Predeterminada (GitHub si existe; si no, primer cómic del canal)';
+      return 'Automática (primer número disponible de la serie)';
+    } catch (_) { return '—'; }
   }
   /** Descarga una imagen desde una URL. Si el servidor bloquea CORS, usa un proxy de imágenes. */
   async function fetchImageUrlBlob(url) {
@@ -1220,6 +1245,8 @@ function showSeriesInfo(ch, seriesLabel, files) {
     body.append(row('Números', String(n)));
     body.append(row('Tamaño total', formatBytes(bytes)));
     addWebpInfo(body, row, st);
+    body.append(el('div', 'info-sec', 'Desarrollo'));
+    body.append(row('Portada', describeCoverSource(seriesCoverKey(ch, seriesLabel), ch, files, 'series')));
 
     // Cómics con algún campo CV/editorial/descripción vacío
     const pending = (files || []).filter((f) => comicNeedsCvFill(f, ch));
@@ -1887,7 +1914,7 @@ function showEditSeriesName(ch, seriesLabel, seriesFiles, after) {
       return;
     }
     frame.remove();
-    after?.();
+    notifyChanged(); after?.();
   };
   actions.append(cancel, save);
   body.append(actions);
@@ -1924,7 +1951,7 @@ function showSeriesCoverPicker(ch, seriesLabel, files, after) {
       markCoverLocalOnly(seriesCoverKey(ch, seriesLabel));
       await setSeriesCoverBlob(ch, seriesLabel, file);
       frame.remove();
-      after?.();
+      notifyChanged(); after?.();
     } catch (e) {
       appAlert('No se pudo usar la imagen: ' + (e?.message || e));
     }
@@ -1938,7 +1965,7 @@ function showSeriesCoverPicker(ch, seriesLabel, files, after) {
       setCoverSrc(seriesCoverKey(ch, seriesLabel), { t: 'url', url });
       await setSeriesCoverBlob(ch, seriesLabel, b);
       frame.remove();
-      after?.();
+      notifyChanged(); after?.();
     } catch (e) {
       appAlert('No se pudo cargar la imagen (comprueba que la URL es una imagen accesible): ' + (e?.message || e));
     }
@@ -1959,7 +1986,7 @@ function showSeriesCoverPicker(ch, seriesLabel, files, after) {
       setCoverSrc(seriesCoverKey(ch, seriesLabel), { t: 'comic', id: f.id });
       await setSeriesCoverBlob(ch, seriesLabel, b);
       frame.remove();
-      after?.();
+      notifyChanged(); after?.();
     } catch (e) {
       appAlert('No se pudo asignar la portada: ' + (e?.message || e));
     }
@@ -2376,7 +2403,7 @@ function showEditGroupName(originalName, after) {
   save.onclick = () => {
     setGroupDisplayName(originalName, input.value, () => {
       frame.remove();
-      after?.();
+      notifyChanged(); after?.();
     });
   };
   actions.append(cancel, save);
@@ -2413,7 +2440,7 @@ async function showGroupCoverPicker(originalName, after) {
     try {
       await setGroupCoverBlob(originalName, file);
       frame.remove();
-      after?.();
+      notifyChanged(); after?.();
     } catch (e) {
       appAlert('No se pudo usar la imagen: ' + (e?.message || e));
     }
@@ -2451,7 +2478,7 @@ async function showGroupCoverPicker(originalName, after) {
         if (b) await setGroupCoverBlob(originalName, b);
       } catch (_) {}
       frame.remove();
-      after?.();
+      notifyChanged(); after?.();
     });
   };
   // Igual que en canales: primero lo que indexó Vite (glob); si hay 0-1, se sondean las rutas
@@ -2486,7 +2513,7 @@ async function showGroupCoverPicker(originalName, after) {
           if (b) await setGroupCoverBlob(originalName, b);
         } catch (_) {}
         frame.remove();
-        after?.();
+        notifyChanged(); after?.();
       });
     } else {
       for (const v of ghGroupVars) addGroupVariant(v);
@@ -2522,7 +2549,7 @@ async function showGroupCoverPicker(originalName, after) {
         }
         await setGroupCoverBlob(originalName, b);
         frame.remove();
-        after?.();
+        notifyChanged(); after?.();
       });
     }
 
@@ -2542,7 +2569,7 @@ async function showGroupCoverPicker(originalName, after) {
           }
           await setGroupCoverBlob(originalName, b);
           frame.remove();
-          after?.();
+          notifyChanged(); after?.();
         });
       }
     }
@@ -2589,6 +2616,8 @@ async function showChannelInfo(ch) {
     body.append(row('Series (agrupadas)', String(seriesCount)));
     body.append(row('Tamaño total', formatBytes(bytes)));
     addWebpInfo(body, row, st);
+    body.append(el('div', 'info-sec', 'Desarrollo'));
+    body.append(row('Portada', describeCoverSource(channelCoverKey(ch), ch, files, 'channel')));
     box.append(head, body);
     frame.append(box);
   // No cerrar al pulsar fuera: solo × / Cancelar
@@ -2642,7 +2671,7 @@ function showEditChannelName(ch, after) {
   save.onclick = () => {
     setChannelDisplayName(ch, input.value, () => {
       frame.remove();
-      after?.();
+      notifyChanged(); after?.();
     });
   };
   actions.append(cancel, save);
@@ -2680,7 +2709,7 @@ function showChannelCoverPicker(ch, files, after) {
       markCoverLocalOnly(channelCoverKey(ch));
       await setChannelCoverBlob(ch, file);
       frame.remove();
-      after?.();
+      notifyChanged(); after?.();
     } catch (e) {
       appAlert('No se pudo usar la imagen: ' + (e?.message || e));
     }
@@ -2695,7 +2724,7 @@ function showChannelCoverPicker(ch, files, after) {
       setCoverSrc(channelCoverKey(ch), { t: 'url', url });
       await setChannelCoverBlob(ch, b);
       frame.remove();
-      after?.();
+      notifyChanged(); after?.();
     } catch (e) {
       appAlert('No se pudo cargar la imagen (comprueba que la URL es una imagen accesible): ' + (e?.message || e));
     }
@@ -2748,7 +2777,7 @@ function showChannelCoverPicker(ch, files, after) {
         } catch (_) {}
       } catch (_) {}
       frame.remove();
-      after?.();
+      notifyChanged(); after?.();
     });
   };
 
@@ -2770,7 +2799,7 @@ function showChannelCoverPicker(ch, files, after) {
           if (b) await setChannelCoverBlob(ch, b);
         } catch (_) {}
         frame.remove();
-        after?.();
+        notifyChanged(); after?.();
       });
     } else {
       for (const v of ghVariants) addGhVariant(v);
@@ -2800,7 +2829,7 @@ function showChannelCoverPicker(ch, files, after) {
         setCoverSrc(channelCoverKey(ch), { t: 'comic', id: f.id });
         await setChannelCoverBlob(ch, b);
         frame.remove();
-        after?.();
+        notifyChanged(); after?.();
       };
       gridComics.append(cell);
       (async () => {

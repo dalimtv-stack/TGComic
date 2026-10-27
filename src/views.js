@@ -1943,13 +1943,15 @@ function filesView(ch) {
     } catch (err) { if (!cached) msg('Error: ' + err.message); }
   });
 }
-function seriesView(ch, s, files) {
+function seriesView(ch, s0, files) {
   const LIB = libNow();
 
-  if (!locks.guardRestricted('series', { ch, seriesLabel: s }, seriesDisplayName(ch, s))) return;
+  if (!locks.guardRestricted('series', { ch, seriesLabel: s0 }, seriesDisplayName(ch, s0))) return;
 
-  const title = seriesDisplayName(ch, s);
+  const title = seriesDisplayName(ch, s0);
   go(title, (e) => {
+    // Clave actual de la serie (cambia si se renombra estando dentro)
+    let s = e._seriesKey || s0;
     e._uploadCtx = {
       editorial: ch.group || 'Sin editorial',
       channel: ch,
@@ -1975,7 +1977,22 @@ function seriesView(ch, s, files) {
           String(seriesDisplayName(ch, g.label) || '').toLowerCase() === key
         );
       }
-      return match ? match.files : (Array.isArray(files) ? files : []);
+      if (!match && Array.isArray(e._lastIds) && e._lastIds.length) {
+        // Renombrada: seguir a los mismos cómics en su nueva serie
+        const ids = new Set(e._lastIds);
+        match = groups.find((g) => g.files.some((f) => ids.has(String(f.id))));
+        if (match) {
+          s = match.label;
+          e._seriesKey = s;
+          if (e._uploadCtx) {
+            e._uploadCtx.series = (seriesDisplayName(ch, s) || s || '').trim();
+            e._uploadCtx.seriesKey = s;
+          }
+        }
+      }
+      const out = match ? match.files : (Array.isArray(files) ? files : []);
+      e._lastIds = out.map((f) => String(f.id));
+      return out;
     };
 
     const redraw = async () => {
@@ -1984,6 +2001,7 @@ function seriesView(ch, s, files) {
       if (!alive(e)) return;
       try {
         const t = seriesDisplayName(ch, s);
+        e.title = t;
         if (titleEl) titleEl.textContent = t;
       } catch (_) {}
       const seriesUnread = fs.some((x) => !isComicRead(ch.id, x.id));
