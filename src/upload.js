@@ -269,7 +269,7 @@ export function createUploadTool(d) {
       }
     }
 
-    const ISSUE_TAG = '(?:\\d+(?:\\.\\d+)?[a-zA-Z]?(?![\\w.])|Special|Especial|Extra|Anual|Annual|One[\\s-]?Shot|OneShot)';
+    const ISSUE_TAG = '(?:\\d+(?:\\.\\d+)?[a-zA-Z]?(?![\\w.])|(?:Special|Especial|Extras|Extra|Anual|Annual|[OÓoó]mnibus|Integral|One[\\s-]?Shot|OneShot)(?![A-Za-zÀ-ÿ]))';
     const tags = extras.length ? extras.map((x) => '[' + x + ']').join(' ') : '';
     const joinInfo = (a, b) => [a, b].filter(Boolean).join(' ').trim();
     const hint = String(seriesHint || '').trim();
