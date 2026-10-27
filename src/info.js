@@ -107,13 +107,66 @@ export function createInfoEdit(d) {
       localStorage.setItem(coverAppliedLs(key), !raw || raw === '0' ? '' : raw);
     } catch (_) {}
   }
-  /** Descarga una imagen desde una URL (necesita CORS en el servidor de la imagen). */
+  /** Descarga una imagen desde una URL. Si el servidor bloquea CORS, usa un proxy de imágenes. */
   async function fetchImageUrlBlob(url) {
-    const res = await fetch(url, { mode: 'cors', cache: 'no-store' });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const b = await res.blob();
-    if (!b.size || !/^image\//i.test(b.type || 'image/jpeg')) throw new Error('La URL no es una imagen');
-    return b;
+    const tryFetch = async (u) => {
+      const res = await fetch(u, { mode: 'cors', cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const b = await res.blob();
+      if (!b.size) throw new Error('Imagen vacía');
+      if (b.type && !/^image\//i.test(b.type) && !/octet-stream/i.test(b.type)) throw new Error('La URL no es una imagen');
+      return b.type && /^image\//i.test(b.type) ? b : new Blob([b], { type: guessImageType(u) });
+    };
+    const clean = String(url || '').trim();
+    const proxies = [
+      (u) => '/api/img?url=' + encodeURIComponent(u),
+      (u) => 'https://wsrv.nl/?url=' + encodeURIComponent(u) + '&n=-1',
+      (u) => 'https://images.weserv.nl/?url=' + encodeURIComponent(u) + '&n=-1',
+      (u) => 'https://corsproxy.io/?url=' + encodeURIComponent(u),
+    ];
+    let lastErr = null;
+    try { return await tryFetch(clean); } catch (e) { lastErr = e; }
+    for (const p of proxies) {
+      try { return await tryFetch(p(clean)); } catch (e) { lastErr = e; }
+    }
+    throw lastErr || new Error('No se pudo descargar');
+  }
+  function guessImageType(u) {
+    const m = String(u).toLowerCase().match(/\.(webp|png|gif|jpe?g|avif)(?:[?#]|$)/);
+    if (!m) return 'image/jpeg';
+    return m[1] === 'jpg' ? 'image/jpeg' : 'image/' + m[1];
+  }
+  /** Tras borrar la caché: vuelve a descargar todas las portadas personalizadas de canales y series. */
+  async function restoreCustomCovers(onStep) {
+    const keys = [];
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && /^coverSrc:(cc|sc):/.test(k)) keys.push(k.slice('coverSrc:'.length));
+      }
+    } catch (_) {}
+    const lib = getLIB();
+    let ok = 0, fail = 0, total = 0;
+    for (const key of keys) {
+      if (!getCoverSrc(key)) continue;
+      let has = false;
+      try { const cur = await kv.get(key); has = cur instanceof Blob && cur.size > 0; } catch (_) {}
+      if (has) continue;
+      const m = key.match(/^(cc|sc):([^:]+)(?::(.*))?$/);
+      if (!m) continue;
+      const ch = lib.find((c) => String(c.id) === m[2]);
+      if (!ch) continue;
+      total++;
+      onStep?.(channelDisplayName(ch) + (m[3] ? ' · ' + m[3] : ''));
+      let files = [];
+      try { files = (await kv.get('f:' + ch.id)) || []; } catch (_) {}
+      try { localStorage.removeItem(coverAppliedLs(key)); } catch (_) {}
+      try { await applyCoverSource(key, ch, files, m[1] === 'cc' ? 'channel' : { label: m[3] || '' }); } catch (_) {}
+      let got = false;
+      try { const b = await kv.get(key); got = b instanceof Blob && b.size > 0; } catch (_) {}
+      if (got) ok++; else fail++;
+    }
+    return { ok, fail, total };
   }
   /** Pide una URL de imagen; devuelve la URL validada o null. */
   async function askCoverUrl() {
@@ -135,7 +188,13 @@ export function createInfoEdit(d) {
     } catch (_) {}
     if (raw == null) return;
     const want = raw === '0' ? '' : raw;
-    if (want === applied) return;
+    if (want === applied) {
+      // Ya aplicado, pero si se borró la caché del navegador la imagen ya no está: volver a aplicarla
+      if (!want) return;
+      let has = false;
+      try { const cur = await kv.get(key); has = cur instanceof Blob && cur.size > 0; } catch (_) {}
+      if (has) return;
+    }
     let src = null;
     try { src = want ? JSON.parse(want) : null; } catch (_) { return; }
     const store = async (b) => {
@@ -1881,7 +1940,7 @@ function showSeriesCoverPicker(ch, seriesLabel, files, after) {
       frame.remove();
       after?.();
     } catch (e) {
-      appAlert('No se pudo cargar la imagen (¿el servidor bloquea CORS?): ' + (e?.message || e));
+      appAlert('No se pudo cargar la imagen (comprueba que la URL es una imagen accesible): ' + (e?.message || e));
     }
   };
   body.append(pickFile, fileInput, pickUrl);
@@ -2638,7 +2697,7 @@ function showChannelCoverPicker(ch, files, after) {
       frame.remove();
       after?.();
     } catch (e) {
-      appAlert('No se pudo cargar la imagen (¿el servidor bloquea CORS?): ' + (e?.message || e));
+      appAlert('No se pudo cargar la imagen (comprueba que la URL es una imagen accesible): ' + (e?.message || e));
     }
   };
   body.append(pickFile, fileInput, pickUrl);
@@ -3375,6 +3434,7 @@ function showSeriesBulkCaptionEditor(ch, seriesLabel, files, onBack) {
     showEditChannelName,
     showChannelCoverPicker,
     getChannelCoverBlob,
+    restoreCustomCovers,
     setChannelCoverBlob,
     clearChannelCover,
     getSeriesCoverBlob,

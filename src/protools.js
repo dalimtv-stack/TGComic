@@ -600,18 +600,17 @@ export function createProTools(d) {
       try { b = await kv.get(key); } catch (_) {}
       if (!b || b === 'none') missing.push(it);
     }
-    if (!missing.length) {
-      await appAlert('Todas las portadas de la biblioteca local ya están en caché.', 'Portadas');
-      return;
-    }
     const ok = await appConfirm(
-      `Hay ${missing.length} cómic(s) sin portada en caché. ¿Descargarlas ahora? (usa Telegram; puede tardar)`,
+      (missing.length
+        ? `Hay ${missing.length} cómic(s) sin portada en caché.`
+        : 'Todos los cómics tienen portada en caché.')
+      + ' También se recuperarán las portadas personalizadas de canales y series. ¿Continuar? (puede tardar)',
       'Cargar portadas faltantes'
     );
     if (!ok) return;
     const prog = showProgressFrame('Cargar portadas faltantes');
     let done = 0, okN = 0, fail = 0;
-    prog.setProgress(0, missing.length);
+    prog.setProgress(0, missing.length || 1);
     for (const { ch, f } of missing) {
       prog.setStatus((f.name || f.id || '').slice(0, 60));
       try {
@@ -623,10 +622,18 @@ export function createProTools(d) {
       prog.setProgress(done, missing.length);
       if (done % 3 === 0) await new Promise((r) => setTimeout(r, 0));
     }
+    let custom = { ok: 0, fail: 0, total: 0 };
+    if (typeof d.restoreCustomCovers === 'function') {
+      prog.setStatus('Portadas personalizadas de canales y series…');
+      try {
+        custom = (await d.restoreCustomCovers((t) => prog.setStatus(String(t).slice(0, 60)))) || custom;
+      } catch (_) {}
+    }
     prog.close();
     try { onCoversChanged?.(); } catch (_) {}
     await appAlert(
-      `Portadas: ${okN} cargadas` + (fail ? `, ${fail} sin imagen` : '') + '.',
+      `Portadas de cómics: ${okN} cargadas` + (fail ? `, ${fail} sin imagen` : '') + '.'
+      + `\nPortadas personalizadas: ${custom.ok} recuperadas` + (custom.fail ? `, ${custom.fail} fallidas` : '') + '.',
       'Portadas'
     );
   }

@@ -267,7 +267,7 @@ async function collectAppStats() {
 
   const channels = Array.isArray(LIB) ? LIB.length : 0;
   // Principal = archivos sin etiqueta WebP; las copias [WebP] / [2400px][WebP] se cuentan aparte
-  let comics = 0, telegramBytes = 0, webpComics = 0, webpBytes = 0, aiComics = 0, aiBytes = 0;
+  let comics = 0, telegramBytes = 0, webpComics = 0, webpBytes = 0;
   if (Array.isArray(LIB)) {
     for (const ch of LIB) {
       const files = (await kv.get('f:' + ch.id)) || [];
@@ -276,8 +276,6 @@ async function collectAppStats() {
       telegramBytes += st.main.bytes;
       webpComics += st.webp.n;
       webpBytes += st.webp.bytes;
-      aiComics += st.ai?.n || 0;
-      aiBytes += st.ai?.bytes || 0;
     }
   }
 
@@ -313,7 +311,7 @@ async function collectAppStats() {
     idbTotal, covers, art, other, coverN, artN,
     listsBytes, listsN,
     lsBytes, sessionBytes, sessionOk, lsKeyCount: lsKeys.length,
-    channels, comics, telegramBytes, webpComics, webpBytes, aiComics, aiBytes,
+    channels, comics, telegramBytes, webpComics, webpBytes,
     pageCacheBytes, pageCacheCount, pageCacheLimitMB,
     lastSync, failedUploads,
   };
@@ -784,11 +782,6 @@ function showInfoFrame() {
       sec('WebP', 'info-sec-webp');
       add('Cómics', String(s.webpComics));
       add('Tamaño', formatBytes(s.webpBytes));
-    }
-    if (s.aiComics) {
-      sec('Mejorados por IA', 'info-sec-ai');
-      add('Cómics', String(s.aiComics));
-      add('Tamaño', formatBytes(s.aiBytes));
     }
 
     if (titleSpan) {
@@ -2012,6 +2005,7 @@ const proTools = createProTools({
   getMsg,
   openPages,
   invalidateComicLocal,
+  restoreCustomCovers: (...a) => infoApi?.restoreCustomCovers?.(...a),
 });
 
 // ---------- Inicio ----------
