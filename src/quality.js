@@ -38,7 +38,38 @@ export function stripQualityTags(name) {
   return (m && /webp|px/i.test(m[0]) ? s.slice(0, m.index) : s).replace(/\s+/g, ' ').trim();
 }
 
+// Versiones mejoradas con IA: "… [Mejora-IA][ESRGAN].cbz" (el modelo es opcional)
+const AI_END = /\s*\[\s*mejora[\s_-]*ia\s*\]((?:\s*\[[^\]]*\])*)\s*$/i;
+// Nombre saneado por Telegram (sin corchetes): …_Mejora-IA_ESRGAN_
+const AI_SANITIZED = /[\s_]*mejora[\s_-]*ia[\s_]*(.*)$/i;
+
+/** Detecta la etiqueta [Mejora-IA] y separa el modelo. Devuelve { rest, model } o null. */
+export function parseAiTag(name) {
+  const stem = stemOf(String(name || '')).trim();
+  let m = stem.match(AI_END);
+  if (m) {
+    const model = (m[1] || '').replace(/^\s*\[|\]\s*$/g, '').replace(/\]\s*\[/g, ' · ').trim();
+    return { rest: stem.slice(0, m.index), model };
+  }
+  m = stem.match(AI_SANITIZED);
+  if (m && /_/.test(stem)) {
+    return { rest: stem.slice(0, m.index), model: m[1].replace(/_+/g, ' ').trim() };
+  }
+  return null;
+}
+
+/** Texto para el selector: el modelo, o "Mejora IA" si no lo indica. */
+export function aiLabel(name) {
+  const t = parseAiTag(name);
+  return (t && t.model) || 'Mejora IA';
+}
+
 export function parseQuality(name) {
+  const ai = parseAiTag(name);
+  if (ai) {
+    const r = parseQuality(ai.rest);
+    return { ...r, ai: true, model: ai.model };
+  }
   const raw = String(name || '');
   const hadUnderscores = raw.includes('_') && !/\s/.test(raw.trim());
   const stem = stemOf(raw.replace(/_/g, ' ')).trim();
@@ -79,7 +110,7 @@ export function existingCopy(list, outName) {
   if (!p.key) return null;
   for (const x of list || []) {
     const px = parseQuality(sourceNameOf(x));
-    if (px.key === p.key && px.q === p.q) return x;
+    if (px.key === p.key && px.q === p.q && !px.ai === !p.ai) return x;
   }
   return null;
 }
@@ -105,6 +136,7 @@ export function flattenVersions(list) {
     if (f?.variants && typeof f.variants === 'object') {
       for (const q of QUALITIES) { const v = f.variants[q]; if (v) out.push({ ...v }); }
     } else if (f) out.push(f);
+    if (Array.isArray(f?.ai)) for (const v of f.ai) if (v) out.push({ ...v });
   }
   return out;
 }
@@ -115,16 +147,26 @@ export function collapseVersions(files, nameOf = sourceNameOf) {
   const order = [];
   const extra = []; // duplicados exactos de calidad (no se ocultan)
   for (const f of files || []) {
-    const { key, q } = parseQuality(nameOf(f));
+    const { key, q, ai } = parseQuality(nameOf(f));
     let g = groups.get(key);
-    if (!g) { g = { pos: order.length, slots: {} }; groups.set(key, g); order.push(g); }
+    if (!g) { g = { pos: order.length, slots: {}, ai: [] }; groups.set(key, g); order.push(g); }
+    if (ai) { g.ai.push(f); continue; } // versiones [Mejora-IA]: no se listan, se eligen en el visor
     if (g.slots[q]) { extra.push({ pos: g.pos, f }); continue; }
     g.slots[q] = f;
   }
   const out = [];
   order.forEach((g, i) => {
+    // Solo hay versiones IA (sin original): la primera hace de entrada principal
+    if (!QUALITIES.some((q) => g.slots[q]) && g.ai.length) g.slots.high = g.ai.shift();
     const have = QUALITIES.filter((q) => g.slots[q]);
-    const rep = g.slots[have[0]];
+    let rep = g.slots[have[0]];
+    if (g.ai.length) {
+      rep = {
+        ...rep,
+        ai: g.ai.map(({ id, name, size, caption }) => ({ id, name, size, ...(caption ? { caption } : {}) }))
+          .sort((a, b) => aiLabel(sourceNameOf(a)).localeCompare(aiLabel(sourceNameOf(b)), undefined, { numeric: true, sensitivity: 'base' })),
+      };
+    }
     if (have.length < 2) { out.push(rep); }
     else {
       const variants = {};

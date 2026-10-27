@@ -1,3 +1,4 @@
+import { aiLabel, sourceNameOf } from './quality.js';
 /**
  * Lector de cómics: modo página / vertical / horizontal, mosaico, gestos.
  * @param {object} state - referencias mutables del main (cleanup, reading, pump, stack, …)
@@ -121,11 +122,13 @@ export function createReader(state, d) {
         const list = queue && queue.length ? queue : await resolveQueue(ch, f);
         // Si f es una versión oculta (p. ej. desde "Seguir leyendo"), usar la entrada principal que la agrupa
         try {
-          const holder = list.find((x) => x?.variants && Object.values(x.variants).some((v) => String(v?.id) === String(f.id)));
+          const holder = list.find((x) => (x?.variants && Object.values(x.variants).some((v) => String(v?.id) === String(f.id)))
+            || (Array.isArray(x?.ai) && x.ai.some((v) => String(v?.id) === String(f.id))));
           if (holder && String(holder.id) !== String(f.id)) f = { ...holder };
           else {
             const same = list.find((x) => String(x.id) === String(f.id));
             if (same?.variants && !f.variants) f = { ...f, variants: same.variants };
+            if (same?.ai && !f.ai) f = { ...f, ai: same.ai };
           }
         } catch (_) {}
         setLastRead(ch, f);
@@ -138,7 +141,10 @@ export function createReader(state, d) {
         // Calidad: la pedida al cambiar en el visor, o la preferida; progreso siempre por la entrada principal (f)
         const wantQ = opts.quality || pref('quality', 'high');
         let curQ = pickQuality(f, wantQ);
-        let src = variantFile(f, curQ);
+        // Versión mejorada con IA elegida en el visor (opts.ai = id del archivo)
+        const aiFile = () => (opts.ai != null && Array.isArray(f.ai) ? f.ai.find((v) => String(v.id) === String(opts.ai)) : null);
+        const pickSrc = () => { const a = aiFile(); return a ? { ...f, ...a, id: a.id } : variantFile(f, curQ); };
+        let src = pickSrc();
         const openArc = async () => {
           const m0 = await getMsg(ch, src, { force: true });
           let size = Number(src.size) || 0;
@@ -159,9 +165,9 @@ export function createReader(state, d) {
             const files = await fetchFiles(ch);
             const fresh2 = files.find((x) => String(x.id) === String(f.id));
             if (fresh2) {
-              f = { ...f, size: fresh2.size, name: fresh2.name || f.name, caption: fresh2.caption ?? f.caption, variants: fresh2.variants };
+              f = { ...f, size: fresh2.size, name: fresh2.name || f.name, caption: fresh2.caption ?? f.caption, variants: fresh2.variants, ai: fresh2.ai };
               curQ = pickQuality(f, wantQ);
-              src = variantFile(f, curQ);
+              src = pickSrc();
             }
           } catch (_) {}
           status('Reintentando apertura…');
@@ -175,7 +181,8 @@ export function createReader(state, d) {
           setPageIndex(ch.id, f.id, Math.max(0, Math.min(arc.pages.length - 1, Math.round(ratio * (arc.pages.length - 1)))));
         }
         pageBlob(arc.pages[0]).then((b) => saveCoverBlob(ch, f, b, { auto: true })).catch(() => {});
-        rdClean = reader(f, arc.pages, arc, { ch, list, idx, src, q: curQ });
+        const aiOn = aiFile();
+        rdClean = reader(f, arc.pages, arc, { ch, list, idx, src, q: aiOn ? null : curQ, aiId: aiOn ? aiOn.id : null });
       } catch (err) {
         if (err?.cancelled || cancelled(ac)) return;
         if (alive(e)) msg('Error: ' + err.message);
@@ -418,9 +425,10 @@ export function createReader(state, d) {
       bot.append(cluster);
       document.body.append(rd);
       // Botones de calidad (Alta / Media / Baja) a la derecha del de doble página
-      if (qVariants) {
+      const aiList = Array.isArray(f.ai) && f.ai.length ? f.ai : null;
+      if (qVariants || aiList) {
         const qGroup = el('div', 'q-group');
-        for (const q of QSET) {
+        if (qVariants) for (const q of QSET) {
           const b = el('button', 'btn q-btn' + (ctx?.q === q ? ' on' : ''));
           b.type = 'button';
           b.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="${QICON[q]}"/></svg>`;
@@ -437,6 +445,45 @@ export function createReader(state, d) {
             openComic(ctx.ch, f, ctx.list, { replace: true, quality: q, fromTotal: pages.length, fromIdx: n });
           };
           qGroup.append(b);
+        }
+        // Botón IA: listado para elegir la versión mejorada
+        if (aiList) {
+          const ab = el('button', 'btn q-btn ai-btn' + (ctx?.aiId != null ? ' on' : ''));
+          ab.type = 'button';
+          ab.title = 'Versión mejorada con IA';
+          ab.setAttribute('aria-label', ab.title);
+          ab.setAttribute('aria-haspopup', 'menu');
+          const ico = el('span', 'ai-ico');
+          ab.append(ico);
+          const reopen = (aiId) => {
+            savePage(n);
+            openComic(ctx.ch, f, ctx.list, { replace: true, ai: aiId, quality: ctx?.q || undefined, fromTotal: pages.length, fromIdx: n });
+          };
+          ab.onclick = (ev) => {
+            try { ev.stopPropagation(); } catch (_) {}
+            if (document.querySelector('.ai-menu')) return;
+            const ov = el('div', 'ai-menu');
+            const box = el('div', 'ai-menu-box');
+            box.setAttribute('role', 'menu');
+            box.append(el('div', 'ai-menu-ttl', 'Versión del cómic'));
+            const close = () => { try { ov.remove(); } catch (_) {} };
+            const item = (label, active, onPick) => {
+              const it = el('button', 'btn ai-menu-item' + (active ? ' on' : ''), label);
+              it.type = 'button';
+              it.setAttribute('role', 'menuitemradio');
+              it.setAttribute('aria-checked', active ? 'true' : 'false');
+              it.onclick = (e2) => { e2.stopPropagation(); close(); if (!active) onPick(); };
+              box.append(it);
+            };
+            item('Original', ctx?.aiId == null, () => reopen(null));
+            for (const v of aiList) item(aiLabel(sourceNameOf(v)), String(ctx?.aiId) === String(v.id), () => reopen(v.id));
+            ['click', 'pointerdown', 'pointerup', 'touchstart', 'touchmove', 'touchend', 'wheel', 'mousedown', 'mouseup'].forEach((t) =>
+              ov.addEventListener(t, (e3) => e3.stopPropagation(), { passive: t !== 'click' && t !== 'wheel' }));
+            ov.addEventListener('click', (e4) => { if (e4.target === ov) close(); });
+            ov.append(box);
+            rd.append(ov);
+          };
+          qGroup.append(ab);
         }
         rd.append(qGroup);
       }

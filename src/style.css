@@ -1183,3 +1183,23 @@ textarea.meta-desc-lg.edit-input{
 .next-card-stay{min-width:200px;height:44px;border-radius:14px;background:transparent!important;border:1px solid rgba(255,255,255,.25)!important;color:#fff!important}
 .next-card-count{color:var(--mut);font-size:.85rem}
 @keyframes nextCardIn{from{opacity:0}to{opacity:1}}
+
+/* ── Versiones [Mejora-IA]: botón y selector en el visor ── */
+#rd .q-group .ai-btn .ai-ico{
+  display:block;width:30px;height:30px;pointer-events:none;background:currentColor;
+  -webkit-mask:url(/images/AI.svg) center/contain no-repeat;mask:url(/images/AI.svg) center/contain no-repeat;
+}
+.ai-menu{
+  position:fixed;inset:0;z-index:40;display:flex;align-items:flex-end;justify-content:center;
+  background:#0008;padding:0 12px calc(env(safe-area-inset-bottom,0px) + 120px);
+}
+.ai-menu-box{
+  width:min(360px,100%);display:flex;flex-direction:column;gap:6px;padding:12px;border-radius:16px;
+  background:#1c1d22f2;-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);box-shadow:0 8px 30px #000a;
+}
+.ai-menu-ttl{font-size:.8rem;opacity:.7;padding:2px 4px 6px}
+.ai-menu-item{
+  text-align:left;padding:12px 14px;border-radius:12px;border:0;background:#ffffff10;color:var(--fg);
+  font-size:.95rem;cursor:pointer;overflow-wrap:anywhere;
+}
+.ai-menu-item.on{background:var(--acc);color:#111;font-weight:600}
