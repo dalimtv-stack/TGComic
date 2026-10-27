@@ -58,8 +58,16 @@ export function comicSourceName(f) {
   try {
     const cap = parseComicCaption(f?.caption || '');
     const titleEs = String(cap.titleEs || '').trim();
-    if (titleEs) return titleEs;
     const fn = String(cap.fileName || '').trim();
+    const ser = String(cap.series || '').trim();
+    // "Título España" solo con número ("#01"): la serie sale del campo Serie
+    // del caption (o del nombre de archivo), nunca del nombre del canal.
+    if (titleEs && /^#/.test(titleEs)) {
+      if (ser) return ser + ' ' + titleEs;
+      if (fn) return fn;
+      if (name) return name;
+    }
+    if (titleEs) return titleEs;
     if (fn) return fn;
   } catch (_) {}
   return name;
