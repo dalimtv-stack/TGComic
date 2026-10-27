@@ -1187,13 +1187,14 @@ textarea.meta-desc-lg.edit-input{
 /* ── Versiones [Mejora-IA]: botón y selector en el visor ── */
 /* Botón IA: a la IZQUIERDA del visor, bien separado de Play y engranaje */
 #rd .q-group .ai-btn{
+  overflow:visible!important;
   position:fixed!important;
   bottom:calc(env(safe-area-inset-bottom,0px) + 62px)!important;
   left:calc(50% - 24px - 8px - 40px - 4px - 40px - 20px - 40px)!important;
   transform:none!important;
 }
 #rd .q-group .ai-btn .ai-ico{
-  display:block;width:34px;height:34px;pointer-events:none;background:currentColor;
+  display:block;width:62px;height:62px;margin:-14px;flex:none;pointer-events:none;background:currentColor;
   -webkit-mask:url(/images/AI.svg) center/contain no-repeat;mask:url(/images/AI.svg) center/contain no-repeat;
 }
 .ai-menu{
@@ -1202,11 +1203,13 @@ textarea.meta-desc-lg.edit-input{
 }
 .ai-menu-box{
   width:min(360px,100%);display:flex;flex-direction:column;gap:6px;padding:12px;border-radius:16px;
+  max-height:calc(100dvh - env(safe-area-inset-bottom,0px) - 150px);overflow-y:auto;overscroll-behavior:contain;
+  -webkit-overflow-scrolling:touch;touch-action:pan-y;
   background:#1c1d22f2;-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);box-shadow:0 8px 30px #000a;
 }
 .ai-menu-ttl{font-size:.8rem;opacity:.7;padding:2px 4px 6px}
 .ai-menu-item{
   text-align:left;padding:12px 14px;border-radius:12px;border:0;background:#ffffff10;color:var(--fg);
-  font-size:.95rem;cursor:pointer;overflow-wrap:anywhere;
+  font-size:.95rem;cursor:pointer;overflow-wrap:anywhere;flex:none;
 }
 .ai-menu-item.on{background:var(--acc);color:#111;font-weight:600}
