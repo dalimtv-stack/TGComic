@@ -195,25 +195,29 @@ function showComicInfo(ch, f, displayTitle) {
   try {
     document.querySelector('.info-frame.comic-info')?.remove();
     const cap = parseComicCaption(f?.caption || '');
-    const parsed = parseComicName(comicSourceName(f), ch?.name);
+    // Prioridad título: Título España → Nombre archivo caption → nombre real (comicSourceName)
+    const titleSrc = comicSourceName(f);
+    const parsed = parseComicName(titleSrc, ch?.name);
     // Serie = override de agrupación o la del nombre de archivo
     let seriesKey = (ch && f ? getComicSeriesOverride(ch, f) : null)
-      || parsed?.series || seriesBase(f?.name || '', ch?.name) || '';
+      || parsed?.series || seriesBase(titleSrc || f?.name || '', ch?.name) || '';
     seriesKey = String(seriesKey || '').trim();
     let series = seriesKey || '—';
     // Título: con serie → solo "#nn - info" (como bajo la portada en la serie).
-    // Se parte del caption (Título España) o del nombre de archivo, nunca "Serie #nn".
-    const issueFromFile = parsed ? issueDisplay(parsed) : '';
+    const issueFromSrc = parsed ? issueDisplay(parsed) : '';
     let title = '—';
     if (ch && f) {
       if (seriesKey) {
-        // Forzar contexto "serie" con fallback que empieza por #
-        const fb = issueFromFile || '#';
+        let fb = issueFromSrc || '#';
+        // Si el origen era Título España tipo "#060 - …" ya viene formateado
+        if (/^#/.test(String(titleSrc || '').trim()) && !issueFromSrc) {
+          fb = String(titleSrc).trim();
+        }
         title = comicDisplayName(ch, f, fb.startsWith('#') ? fb : ('#' + fb)) || fb;
         // Por si quedó "Badlands #007"
         if (title && !/^#/.test(title.trim())) {
           const mh = title.match(/#\s*(.+)$/);
-          title = mh ? ('#' + mh[1].replace(/^#\s*/, '').trim()) : (issueFromFile || title);
+          title = mh ? ('#' + mh[1].replace(/^#\s*/, '').trim()) : (issueFromSrc || title);
         }
         // "#01 -" / "#01 - [Traducido]" residual
         title = String(title || '')
@@ -221,10 +225,10 @@ function showComicInfo(ch, f, displayTitle) {
           .replace(/\s+/g, ' ')
           .trim()
           .replace(/^[\s\-–—]+|[\s\-–—]+$/g, '')
-          .trim() || issueFromFile || title;
+          .trim() || issueFromSrc || title;
       } else {
-        title = comicDisplayName(ch, f, comicDisplay(comicSourceName(f), ch.name) || clean(f.name))
-          || comicDisplay(comicSourceName(f), ch.name)
+        title = comicDisplayName(ch, f, comicDisplay(titleSrc, ch.name) || clean(f.name))
+          || comicDisplay(titleSrc, ch.name)
           || '—';
       }
     } else if (displayTitle) {

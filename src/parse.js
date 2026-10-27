@@ -11,10 +11,15 @@ export const clean = (n) => stripExt(n).replace(/_/g, ' ').replace(/\s*\[[^\]]*\
 const NUM = /[\s._-]*(?:#|n[º°]\.?|no\.|vol\.?|cap\.?|issue|núm\.?|parte|part|tomo)?\s*\d+(?:\.\d+)?[a-zA-Z]?(?:\s*(?:de|of)\s*\d+)?\s*$/i;
 const FIRST_ISSUE = /^(.+?)[\s._-]+(?:#|n[º°]\.?|no\.?|vol\.?|cap\.?|issue|núm\.?)?\s*\d+(?:\.\d+)?[a-zA-Z]?(?:\b|$)/i;
 const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-/** Quita (paréntesis), [corchetes] y créditos "por Grupo" del tramo info */
+/** Quita (paréntesis), [corchetes] y créditos "por Grupo" del tramo info.
+ *  No cortar títulos en español ("A por el niño"): solo créditos con mayúscula tras "por". */
 const cleanInfo = (s) => (s || '')
   .replace(/\s*\[[^\]]*\]/g, '')
-  .replace(/\s+por\s+\S.*$/i, '')
+  .replace(/\s*\((?!\d+\s*de\s*\d+)[^)]*\)/gi, '')
+  .replace(
+    /\s+por\s+(?:[A-ZÁÉÍÓÚÜÑ][\wÁÉÍÓÚáéíóúüñ.\-]*)(?:\s+(?:y\s+)?[A-ZÁÉÍÓÚÜÑ][\wÁÉÍÓÚáéíóúüñ.\-]*)*\s*$/u,
+    ''
+  )
   .replace(/\s+/g, ' ')
   .trim()
   // " - " / "-" / "–" sueltos tras quitar [Traducido]
@@ -41,15 +46,28 @@ const ISSUE_TAG = `(?:${ISSUE_NUM}|Special|Especial|Extra|Extras|Annual|Anual|[O
  * Si el archivo de Telegram tiene "_" y no tiene espacios, preferir
  * "Nombre de archivo" del caption (suele traer espacios y paréntesis bien).
  */
+/**
+ * Nombre/título a usar para parsear y mostrar.
+ * Prioridad:
+ *  1) Título España del caption
+ *  2) Nombre de archivo del caption
+ *  3) Nombre real del archivo en Telegram
+ */
 export function comicSourceName(f) {
   const name = String(f?.name || '');
-  if (!name) return '';
   try {
-    // parseComicCaption está más abajo; se resuelve al llamar
-    const fn = (parseComicCaption(f?.caption || '').fileName || '').trim();
-    if (fn && /_/.test(name) && !/\s/.test(name)) return fn;
+    const cap = parseComicCaption(f?.caption || '');
+    const titleEs = String(cap.titleEs || '').trim();
+    if (titleEs) return titleEs;
+    const fn = String(cap.fileName || '').trim();
+    if (fn) return fn;
   } catch (_) {}
   return name;
+}
+
+/** Alias explícito (misma prioridad que comicSourceName). */
+export function comicTitleSource(f) {
+  return comicSourceName(f);
 }
 
 export function parseComicName(name, channelName) {
@@ -75,7 +93,21 @@ export function parseComicName(name, channelName) {
     if (low === 'integral') return 'Integral';
     return number;
   };
-  const finish = (series, tag, info, rangeEnd) => {
+    // Título España a veces es solo "#060 - A por el niño" (sin serie delante)
+  {
+    const reIssueOnly = new RegExp(`^#\\s*(${ISSUE_TAG})(?:\\s*-?\\s+(.+))?\\s*$`, 'i');
+    const mIssueOnly = raw.match(reIssueOnly);
+    if (mIssueOnly) {
+      return {
+        series: ch || '',
+        number: normTag(mIssueOnly[1]),
+        rangeEnd: '',
+        info: cleanInfo(mIssueOnly[2] || ''),
+        channel: ch || '',
+      };
+    }
+  }
+const finish = (series, tag, info, rangeEnd) => {
     // Quitar guiones/espacios sobrantes: "Killadelphia -" → "Killadelphia"
     series = (series || '').replace(/\s*[-–—]+\s*$/g, '').replace(/^\s*[-–—]+\s*/g, '').trim();
     if (!series) return null;

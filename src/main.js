@@ -8,7 +8,7 @@ import rarWasm from 'node-unrar-js/esm/js/unrar.wasm?url';
 import * as sync from './sync.js';
 import { buildSearchIndex, filterSearchIndex } from './search.js';
 import {
-  stripExt, clean, parseComicName, comicSourceName, issueDisplay, comicDisplay,
+  stripExt, clean, parseComicName, comicSourceName, comicTitleSource, issueDisplay, comicDisplay,
   seriesBase, groupSeries, issueLabel, parseComicCaption, buildComicCaption,
 } from './parse.js';
 import {
@@ -1656,7 +1656,7 @@ infoApi = createInfoEdit({
   get ready() { return ready; },
   get LIB() { return LIB; },
   locks,
-  parseComicName, comicSourceName, issueDisplay, comicDisplay, clean, stripExt,
+  parseComicName, comicSourceName, comicTitleSource, issueDisplay, comicDisplay, clean, stripExt,
   parseComicCaption, buildComicCaption,
   groupSeries, seriesOverrideFor, seriesBase, issueLabel,
   comicDisplayName, setComicDisplayName,
