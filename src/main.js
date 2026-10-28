@@ -1833,6 +1833,7 @@ try {
     splitStats, parseComicCaption, parseQuality, sourceNameOf, flattenVersions,
     comicNeedsCvFill, parseComicName, issueDisplay,
     natural, appAlert,
+    comicCover, seriesCoverNode, channelCoverNode,
     app: document.querySelector('#app'),
   });
 } catch (e) { console.warn('[search_filters]', e); }

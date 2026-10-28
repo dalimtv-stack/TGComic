@@ -1,5 +1,6 @@
 /**
  * Búsqueda y filtros avanzados (módulo independiente).
+ * Layout: cabecera app + chips de filtro + resumen + pestañas + frame de resultados con scroll.
  */
 export function createSearchFilters(d) {
   const {
@@ -13,6 +14,7 @@ export function createSearchFilters(d) {
     comicNeedsCvFill, parseComicName, issueDisplay,
     natural, appAlert,
     comicSheetOpts, seriesSheetOpts,
+    comicCover, seriesCoverNode, channelCoverNode,
   } = d;
 
   const STATE_KEY = 'searchFilters:v1';
@@ -32,11 +34,14 @@ export function createSearchFilters(d) {
         ficha: o.ficha || '',
         fichaField: o.fichaField || '',
         q: o.q || '',
-        groupMode: o.groupMode || 'comics',
+        groupMode: o.groupMode || 'series',
         scrollY: o.scrollY || 0,
       };
     } catch {
-      return { editorial: '', channel: '', series: '', quality: '', ai: '', read: '', format: '', ficha: '', fichaField: '', q: '', groupMode: 'comics', scrollY: 0 };
+      return {
+        editorial: '', channel: '', series: '', quality: '', ai: '', read: '',
+        format: '', ficha: '', fichaField: '', q: '', groupMode: 'series', scrollY: 0,
+      };
     }
   }
   function saveState() {
@@ -44,13 +49,13 @@ export function createSearchFilters(d) {
   }
 
   const FICHA_FIELDS = [
-    ['', 'Cualquier campo incompleto'],
-    ['originalTitle', 'Sin Título original'],
-    ['writer', 'Sin Guionista'],
-    ['artist', 'Sin Dibujante'],
-    ['date', 'Sin Fecha'],
-    ['description', 'Sin Sinopsis'],
-    ['publisher', 'Sin Editorial'],
+    ['', 'Cualquier campo'],
+    ['originalTitle', 'Título original'],
+    ['writer', 'Guionista'],
+    ['artist', 'Dibujante'],
+    ['date', 'Fecha'],
+    ['description', 'Sinopsis'],
+    ['publisher', 'Editorial'],
   ];
 
   function isFichaComplete(cap) {
@@ -90,6 +95,13 @@ export function createSearchFilters(d) {
     } catch {
       return 'unread';
     }
+  }
+
+  function qualityBadge(it) {
+    if (it.ai) return 'IA';
+    if (it.quality === 'mid') return 'WebP';
+    if (it.quality === 'low') return '2400px';
+    return '';
   }
 
   async function buildCorpus({ forceFetch = false, onProgress } = {}) {
@@ -199,24 +211,53 @@ export function createSearchFilters(d) {
     };
   }
 
-  function mkSelect(label, value, options, onChange) {
-    const wrap = el('div', 'sf-field');
-    wrap.append(el('label', 'sf-label', label));
-    const sel = el('select', 'sf-select');
-    for (const [val, lab] of options) {
+  /** Chip compacto: etiqueta + select en una sola pieza */
+  function mkChip(shortLabel, value, options, onChange) {
+    const wrap = el('label', 'sf-chip' + (value ? ' sf-chip-on' : ''));
+    const lab = el('span', 'sf-chip-lab', shortLabel);
+    const sel = el('select', 'sf-chip-sel');
+    for (const [val, text] of options) {
       const o = el('option');
       o.value = val;
-      o.textContent = lab;
+      o.textContent = text;
       if (String(val) === String(value)) o.selected = true;
       sel.append(o);
     }
     sel.onchange = () => onChange(sel.value);
-    wrap.append(sel);
+    wrap.append(lab, sel);
     return wrap;
   }
 
   function getApp() {
     return d.app || document.querySelector('#app');
+  }
+
+  /** Botones Limpiar + lupa en #actions mientras estamos en esta vista */
+  function mountHeaderActions(onClear, onFocusSearch) {
+    const act = document.querySelector('#actions');
+    if (!act) return () => {};
+    const prev = [...act.querySelectorAll('.sf-head-btn')];
+    prev.forEach((n) => n.remove());
+    const clear = el('button', 'btn sf-head-btn sf-head-clear', 'Limpiar');
+    clear.type = 'button';
+    clear.title = 'Limpiar filtros';
+    clear.onclick = (ev) => { try { ev.stopPropagation(); } catch (_) {} onClear?.(); };
+    const search = el('button', 'btn sf-head-btn sf-head-search');
+    search.type = 'button';
+    search.title = 'Palabras clave';
+    search.setAttribute('aria-label', 'Palabras clave');
+    search.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>';
+    search.onclick = (ev) => { try { ev.stopPropagation(); } catch (_) {} onFocusSearch?.(); };
+    const menu = act.querySelector('.menu-btn');
+    if (menu) {
+      act.insertBefore(clear, menu);
+      act.insertBefore(search, menu);
+    } else {
+      act.append(clear, search);
+    }
+    return () => {
+      try { clear.remove(); search.remove(); } catch (_) {}
+    };
   }
 
   function renderFiltersView(opts = {}) {
@@ -232,7 +273,7 @@ export function createSearchFilters(d) {
         corpus = await buildCorpus({
           forceFetch,
           onProgress: (i, t, name) => {
-            status.textContent = t ? `Actualizando ${i}/${t}: ${name}` : 'Cargando…';
+            status.textContent = t ? `Actualizando ${i} / ${t}: ${name}` : 'Cargando…';
           },
         });
       } catch (e) {
@@ -240,23 +281,36 @@ export function createSearchFilters(d) {
         return;
       }
 
-      const paintComics = (host, list) => {
+      let keywordOpen = !!filterState.q;
+      let unmountHead = null;
+
+      const paintComicsList = (host, list) => {
         const queue = list.map((it) => it.f);
         for (const it of list) {
-          const row = el('button', 'sf-row');
+          const row = el('button', 'sf-comic-row');
           row.type = 'button';
-          const meta = el('div', 'sf-row-meta');
-          meta.append(el('b', '', it.title || it.f?.name || ''));
-          const sub = [it.seriesName || it.seriesLabel, it.channelName, it.editorialName]
+          // Portada miniatura
+          const cov = el('div', 'sf-comic-cover');
+          try {
+            if (typeof comicCover === 'function') {
+              const node = comicCover(it.ch, it.f);
+              if (node) {
+                cov.append(node);
+                node._load?.();
+              }
+            }
+          } catch (_) {}
+          const meta = el('div', 'sf-comic-meta');
+          const titleLine = el('div', 'sf-comic-title');
+          titleLine.append(el('b', '', it.title || it.f?.name || ''));
+          const badge = qualityBadge(it);
+          if (badge) titleLine.append(el('span', 'sf-badge', badge));
+          meta.append(titleLine);
+          const sub = [it.seriesName || it.seriesLabel, it.channelName]
             .filter(Boolean).join(' · ');
           if (sub) meta.append(el('small', '', sub));
-          const bits = [];
-          if (it.ai) bits.push('IA');
-          else if (it.quality === 'mid') bits.push('WebP');
-          else if (it.quality === 'low') bits.push('2400px');
-          bits.push(formatBytes(it.size));
-          meta.append(el('small', 'sf-row-bits', bits.join(' · ')));
-          row.append(meta);
+          meta.append(el('small', 'sf-comic-bits', formatBytes(it.size)));
+          row.append(cov, meta);
           row.onclick = () => openComic?.(it.ch, it.f, queue);
           if (typeof bindLongPress === 'function' && typeof sheet === 'function') {
             bindLongPress(row, () => {
@@ -274,7 +328,7 @@ export function createSearchFilters(d) {
         const map = new Map();
         for (const it of list) {
           const key = mode === 'series'
-            ? (it.channelId + '::' + (it.seriesLabel || it.title))
+            ? (it.channelId + '::' + (it.seriesLabel || '__solo__' + it.f.id))
             : it.channelId;
           if (!map.has(key)) {
             map.set(key, {
@@ -292,25 +346,35 @@ export function createSearchFilters(d) {
         const nat = natural || ((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }));
         const groups = [...map.values()].sort((a, b) => nat(a.label, b.label));
         for (const g of groups) {
-          const head = el('div', 'sf-group-head');
-          const btn = el('button', 'sf-group-btn');
-          btn.type = 'button';
-          btn.append(el('b', '', g.label));
-          btn.append(el('small', '', (g.sub ? g.sub + ' · ' : '') + g.items.length + (g.items.length === 1 ? ' cómic' : ' cómics')));
+          const block = el('div', 'sf-group');
+          const head = el('button', 'sf-group-head');
+          head.type = 'button';
+          const arrow = el('span', 'sf-group-arrow', '▼');
+          const text = el('div', 'sf-group-text');
+          const n = g.items.length;
+          text.append(el('b', '', (mode === 'series' ? 'Serie: ' : 'Canal: ') + g.label));
+          text.append(el('small', '', (g.sub ? g.sub + ' · ' : '') + n + (n === 1 ? ' número' : ' números')));
+          head.append(arrow, text);
           const body = el('div', 'sf-group-body');
-          body.hidden = true;
-          btn.onclick = () => { body.hidden = !body.hidden; };
+          // Abierto por defecto si hay pocos grupos
+          const open = groups.length <= 6;
+          body.hidden = !open;
+          arrow.textContent = open ? '▼' : '▶';
+          head.onclick = () => {
+            body.hidden = !body.hidden;
+            arrow.textContent = body.hidden ? '▶' : '▼';
+          };
           if (typeof bindLongPress === 'function' && typeof sheet === 'function') {
-            bindLongPress(btn, () => {
+            bindLongPress(head, () => {
               if (mode === 'series' && seriesSheetOpts && g.seriesLabel) {
                 const files = g.items.map((x) => x.f);
                 sheet(g.label, seriesSheetOpts(g.ch, g.seriesLabel, files, () => paint()));
               }
             });
           }
-          head.append(btn);
-          paintComics(body, g.items);
-          host.append(head, body);
+          paintComicsList(body, g.items);
+          block.append(head, body);
+          host.append(block);
         }
       };
 
@@ -319,73 +383,108 @@ export function createSearchFilters(d) {
         const filtered = applyFilters(corpus, filterState);
         const optsSel = buildFilterOptions(corpus);
         root.replaceChildren();
+        root.className = 'sf-root';
 
+        // —— Filtros en chips ——
         const panel = el('div', 'sf-panel');
-        panel.append(mkSelect('Editorial', filterState.editorial, [['', 'Todas'], ...optsSel.editorials.map(([k, v]) => [k, v])], (v) => {
-          filterState.editorial = v; filterState.channel = ''; filterState.series = ''; paint();
-        }));
-        panel.append(mkSelect('Canal', filterState.channel, [['', 'Todos'], ...optsSel.channels.map(([k, v]) => [k, v])], (v) => {
-          filterState.channel = v; filterState.series = ''; paint();
-        }));
-        panel.append(mkSelect('Serie', filterState.series, [['', 'Todas'], ...optsSel.series.map(([k, v]) => [k, v])], (v) => {
-          filterState.series = v; paint();
-        }));
-        panel.append(mkSelect('Calidad WebP', filterState.quality, [
+        const chips = el('div', 'sf-chips');
+
+        chips.append(mkChip('Editorial', filterState.editorial,
+          [['', 'Todas'], ...optsSel.editorials.map(([k, v]) => [k, v])],
+          (v) => { filterState.editorial = v; filterState.channel = ''; filterState.series = ''; paint(); }));
+
+        chips.append(mkChip('Canal', filterState.channel,
+          [['', 'Todos'], ...optsSel.channels.map(([k, v]) => [k, v])],
+          (v) => { filterState.channel = v; filterState.series = ''; paint(); }));
+
+        chips.append(mkChip('Serie', filterState.series,
+          [['', 'Todas'], ...optsSel.series.map(([k, v]) => [k, v])],
+          (v) => { filterState.series = v; paint(); }));
+
+        chips.append(mkChip('Calidad', filterState.quality, [
           ['', 'Cualquiera'],
-          ['high', 'Alta (Original)'],
-          ['mid', 'Media [WebP]'],
-          ['low', 'Baja [2400px][WebP]'],
+          ['high', 'Alta'],
+          ['mid', 'WebP'],
+          ['low', '2400px'],
           ['webp', 'Cualquier WebP'],
           ['nowebp', 'Sin WebP'],
         ], (v) => { filterState.quality = v; paint(); }));
-        panel.append(mkSelect('Mejorados IA', filterState.ai, [
-          ['', 'Cualquiera'], ['yes', 'Con mejora IA'], ['no', 'Sin mejora IA'],
+
+        chips.append(mkChip('IA', filterState.ai, [
+          ['', 'Cualquiera'], ['yes', 'Con IA'], ['no', 'Sin IA'],
         ], (v) => { filterState.ai = v; paint(); }));
-        panel.append(mkSelect('Estado de lectura', filterState.read, [
+
+        chips.append(mkChip('Estado', filterState.read, [
           ['', 'Cualquiera'], ['unread', 'No leídos'], ['progress', 'En curso'], ['read', 'Leídos'],
         ], (v) => { filterState.read = v; paint(); }));
-        panel.append(mkSelect('Formato', filterState.format, [
-          ['', 'Cualquiera'], ['cbz', 'CBZ / ZIP'], ['cbr', 'CBR / RAR'], ['7z', '7Z'],
+
+        chips.append(mkChip('Formato', filterState.format, [
+          ['', 'Cualquiera'], ['cbz', 'CBZ'], ['cbr', 'CBR'], ['7z', '7Z'],
         ], (v) => { filterState.format = v; paint(); }));
-        panel.append(mkSelect('Fichas Telegram', filterState.ficha, [
-          ['', 'Cualquiera'], ['complete', 'Ficha completa'], ['incomplete', 'Ficha incompleta'],
+
+        chips.append(mkChip('Fichas', filterState.ficha, [
+          ['', 'Cualquiera'], ['complete', 'Completa'], ['incomplete', 'Incompleta'],
         ], (v) => { filterState.ficha = v; if (v !== 'incomplete') filterState.fichaField = ''; paint(); }));
+
         if (filterState.ficha === 'incomplete') {
-          panel.append(mkSelect('Campo incompleto', filterState.fichaField, FICHA_FIELDS, (v) => {
-            filterState.fichaField = v; paint();
-          }));
+          chips.append(mkChip('Campo vacío', filterState.fichaField, FICHA_FIELDS,
+            (v) => { filterState.fichaField = v; paint(); }));
         }
-        const qWrap = el('div', 'sf-field');
-        qWrap.append(el('label', 'sf-label', 'Palabras clave'));
-        const qInp = el('input', 'sf-input');
+
+        panel.append(chips);
+
+        // Palabras clave (oculto hasta pulsar lupa o si ya hay texto)
+        const qRow = el('div', 'sf-qrow');
+        qRow.hidden = !keywordOpen && !filterState.q;
+        const qInp = el('input', 'sf-qinput');
         qInp.type = 'search';
-        qInp.placeholder = 'Título, guionista, archivo…';
+        qInp.placeholder = 'Palabras clave: título, guionista, archivo…';
         qInp.value = filterState.q || '';
+        qInp.autocomplete = 'off';
         let qTimer = null;
         qInp.oninput = () => {
           clearTimeout(qTimer);
-          qTimer = setTimeout(() => { filterState.q = qInp.value; paint(); }, 200);
+          qTimer = setTimeout(() => { filterState.q = qInp.value; paint(); }, 220);
         };
-        qWrap.append(qInp);
-        panel.append(qWrap);
-
-        const clearBtn = el('button', 'btn sf-clear', 'Limpiar filtros');
-        clearBtn.type = 'button';
-        clearBtn.onclick = () => {
-          Object.assign(filterState, {
-            editorial: '', channel: '', series: '', quality: '', ai: '', read: '',
-            format: '', ficha: '', fichaField: '', q: '',
-          });
-          paint();
-        };
-        panel.append(clearBtn);
+        qRow.append(qInp);
+        panel.append(qRow);
         root.append(panel);
 
+        // Cabecera Limpiar + lupa
+        try { unmountHead?.(); } catch (_) {}
+        unmountHead = mountHeaderActions(
+          () => {
+            Object.assign(filterState, {
+              editorial: '', channel: '', series: '', quality: '', ai: '', read: '',
+              format: '', ficha: '', fichaField: '', q: '',
+            });
+            keywordOpen = false;
+            paint();
+          },
+          () => {
+            keywordOpen = true;
+            paint();
+            requestAnimationFrame(() => {
+              try { root.querySelector('.sf-qinput')?.focus(); } catch (_) {}
+            });
+          }
+        );
+
+        // —— Resumen ——
         const bytes = filtered.reduce((s, it) => s + (it.size || 0), 0);
         const summary = el('div', 'sf-summary');
-        summary.append(el('span', '', filtered.length + ' cómics encontrados · ' + formatBytes(bytes)));
+        summary.append(el('div', 'sf-summary-count',
+          filtered.length + (filtered.length === 1 ? ' cómic encontrado' : ' cómics encontrados')
+          + ' (' + formatBytes(bytes) + ')'
+        ));
+
+        // —— Pestañas Ver ——
         const tabs = el('div', 'sf-tabs');
-        for (const [mode, lab] of [['comics', 'Cómics'], ['series', 'Agrupar por Series'], ['channels', 'Agrupar por Canales']]) {
+        for (const [mode, lab] of [
+          ['comics', 'Ver: Cómics'],
+          ['series', 'Agrupar por Series'],
+          ['channels', 'Agrupar por Canales'],
+        ]) {
           const b = el('button', 'sf-tab' + (filterState.groupMode === mode ? ' on' : ''), lab);
           b.type = 'button';
           b.onclick = () => { filterState.groupMode = mode; paint(); };
@@ -394,11 +493,12 @@ export function createSearchFilters(d) {
         summary.append(tabs);
         root.append(summary);
 
+        // —— Frame resultados (scroll independiente) ——
         const results = el('div', 'sf-results');
         if (!filtered.length) {
           results.append(el('p', 'sf-empty', 'Sin resultados con estos filtros.'));
         } else if (filterState.groupMode === 'comics') {
-          paintComics(results, filtered);
+          paintComicsList(results, filtered);
         } else if (filterState.groupMode === 'series') {
           paintGrouped(results, filtered, 'series');
         } else {
