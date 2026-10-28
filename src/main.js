@@ -1180,6 +1180,12 @@ function show() {
   try { repackTool?.syncFloatingUi?.(); } catch (_) {}
   try { uploadTool?.syncFloatingUi?.(); } catch (_) {}
   try { mountSearchFiltersButton(); } catch (_) {}
+  try {
+    const top = stack[stack.length - 1];
+    if (!top || !top._sfView) {
+      document.querySelectorAll('#actions .sf-head-btn').forEach((n) => n.remove());
+    }
+  } catch (_) {}
   // Render async (canal/serie): reaplicar scroll varias veces
   requestAnimationFrame(() => {
     applyScroll();
@@ -1841,6 +1847,7 @@ try {
     locks, ART,
     get showChannelInfo() { return showChannelInfo; },
     get showEditChannel() { return showEditChannel; },
+    setCleanup: (fn) => { cleanup = fn; },
     app: document.querySelector('#app'),
   });
 } catch (e) { console.warn('[search_filters]', e); }

@@ -18,6 +18,7 @@ export function createSearchFilters(d) {
     comicCover, seriesCoverNode, channelCoverNode,
     locks, ART,
     showChannelInfo, showEditChannel,
+    setCleanup,
   } = d;
 
   const STATE_KEY = 'searchFilters:v1';
@@ -306,10 +307,16 @@ export function createSearchFilters(d) {
     return d.app || document.querySelector('#app');
   }
 
+  function removeSfHeadButtons() {
+    try {
+      document.querySelectorAll('#actions .sf-head-btn').forEach((n) => n.remove());
+    } catch (_) {}
+  }
+
   function mountHeaderActions(onClear, onFocusSearch) {
     const act = document.querySelector('#actions');
     if (!act) return () => {};
-    act.querySelectorAll('.sf-head-btn').forEach((n) => n.remove());
+    removeSfHeadButtons();
     const clear = el('button', 'btn sf-head-btn sf-head-clear', 'Limpiar');
     clear.type = 'button';
     clear.onclick = (ev) => { try { ev.stopPropagation(); } catch (_) {} onClear?.(); };
@@ -321,7 +328,17 @@ export function createSearchFilters(d) {
     const menu = act.querySelector('.menu-btn');
     if (menu) { act.insertBefore(clear, menu); act.insertBefore(search, menu); }
     else act.append(clear, search);
-    return () => { try { clear.remove(); search.remove(); } catch (_) {} };
+    const unmount = () => {
+      try { clear.remove(); } catch (_) {}
+      try { search.remove(); } catch (_) {}
+      removeSfHeadButtons();
+    };
+    // Al salir de la vista, show() llama cleanup → se quitan los botones
+    try {
+      if (typeof setCleanup === 'function') setCleanup(unmount);
+      else if (setCleanup && 'value' in Object(setCleanup)) {}
+    } catch (_) {}
+    return unmount;
   }
 
   function appendCover(host, node) {
@@ -422,7 +439,7 @@ export function createSearchFilters(d) {
       if (opts.length) sheet(channelName || ch?.name || 'Canal', opts);
     };
 
-    /** Fila de cómic (principal) + subfilas de variantes WebP / IA (plegadas por defecto) */
+        /** Fila de cómic: click = desplegar versiones (Original primero). Long-press/derecho = menú. */
     const paintComicRow = (host, it, queue) => {
       const block = el('div', 'sf-comic-block');
       const row = el('button', 'sf-comic-row');
@@ -444,78 +461,74 @@ export function createSearchFilters(d) {
       meta.append(el('small', 'sf-comic-bits', formatBytes(it.size)));
       row.append(cov, meta);
 
-      const hasNested = it.hasWebpMid || it.hasWebpLow || it.hasAi;
-      let nest = null;
+      const hasExtra = it.hasWebpMid || it.hasWebpLow || it.hasAi;
+      const nest = el('div', 'sf-nested');
+      nest.hidden = true;
       let nestOpen = false;
+      const tog = el('span', 'sf-nest-tog', '▶');
+      tog.title = 'Versiones';
+      row.append(tog);
 
-      if (hasNested) {
-        const tog = el('span', 'sf-nest-tog', '▶');
-        tog.title = 'Ver versiones';
-        row.append(tog);
-
-        nest = el('div', 'sf-nested');
-        nest.hidden = true;
-
-        const addVariant = (badgeNodes, file) => {
-          if (!file) return;
-          const vr = el('button', 'sf-variant-row');
-          vr.type = 'button';
-          const left = el('span', 'sf-variant-left');
-          for (const n of badgeNodes) left.append(n);
-          vr.append(left);
-          vr.append(el('small', '', formatBytes(Number(file.size) || 0)));
-          vr.onclick = (ev) => {
-            try { ev.preventDefault(); ev.stopPropagation(); } catch (_) {}
-            openComic?.(it.ch, { ...it.f, ...file, id: file.id }, queue);
-          };
-          vr.oncontextmenu = (ev) => {
-            try { ev.preventDefault(); ev.stopPropagation(); } catch (_) {}
-            openComicMenu(it, { ...it.f, ...file, id: file.id });
-          };
-          if (typeof bindLongPress === 'function') {
-            bindLongPress(vr, () => openComicMenu(it, { ...it.f, ...file, id: file.id }));
-          }
-          nest.append(vr);
-        };
-
-        if (it.variants?.mid) {
-          addVariant([
-            el('span', 'sf-badge sf-badge-webp', 'WebP'),
-          ], it.variants.mid);
-        }
-        if (it.variants?.low) {
-          addVariant([
-            el('span', 'sf-badge sf-badge-low', '2400px'),
-            el('span', 'sf-badge sf-badge-webp', 'WebP'),
-          ], it.variants.low);
-        }
-        if (Array.isArray(it.aiList)) {
-          for (const a of it.aiList) {
-            let model = '';
-            try { model = (aiLabel && aiLabel(sourceNameOf?.(a) || a.name)) || ''; } catch (_) {}
-            const nodes = [el('span', 'sf-badge sf-badge-ai', 'IA')];
-            if (model) nodes.push(el('span', 'sf-badge sf-badge-model', model));
-            addVariant(nodes, a);
-          }
-        }
-
-        const toggleNest = (ev) => {
+      const addVariant = (badgeNodes, file, isOriginal) => {
+        const vr = el('button', 'sf-variant-row' + (isOriginal ? ' sf-variant-original' : ''));
+        vr.type = 'button';
+        const left = el('span', 'sf-variant-left');
+        for (const n of badgeNodes) left.append(n);
+        vr.append(left);
+        const sz = Number((file && file.size) || (isOriginal ? it.size : 0)) || 0;
+        if (sz) vr.append(el('small', '', formatBytes(sz)));
+        const target = isOriginal ? it.f : { ...it.f, ...file, id: file.id };
+        vr.onclick = (ev) => {
           try { ev.preventDefault(); ev.stopPropagation(); } catch (_) {}
-          nestOpen = !nestOpen;
-          nest.hidden = !nestOpen;
-          tog.textContent = nestOpen ? '▼' : '▶';
+          openComic?.(it.ch, target, queue);
         };
-        tog.onclick = toggleNest;
-        // Pulsar las etiquetas WebP/IA también despliega
-        if (badges) {
-          badges.style.cursor = 'pointer';
-          badges.onclick = toggleNest;
+        vr.oncontextmenu = (ev) => {
+          try { ev.preventDefault(); ev.stopPropagation(); } catch (_) {}
+          openComicMenu(it, isOriginal ? null : target);
+        };
+        if (typeof bindLongPress === 'function') {
+          bindLongPress(vr, () => openComicMenu(it, isOriginal ? null : target));
+        }
+        nest.append(vr);
+      };
+
+      // Primero siempre Original
+      addVariant([el('span', 'sf-badge sf-badge-orig', 'Original')], it.f, true);
+      if (it.variants?.mid) {
+        addVariant([el('span', 'sf-badge sf-badge-webp', 'WebP')], it.variants.mid, false);
+      }
+      if (it.variants?.low) {
+        addVariant([
+          el('span', 'sf-badge sf-badge-low', '2400px'),
+          el('span', 'sf-badge sf-badge-webp', 'WebP'),
+        ], it.variants.low, false);
+      }
+      if (Array.isArray(it.aiList)) {
+        for (const a of it.aiList) {
+          let model = '';
+          try { model = (aiLabel && aiLabel(sourceNameOf?.(a) || a.name)) || ''; } catch (_) {}
+          const nodes = [el('span', 'sf-badge sf-badge-ai', 'IA')];
+          if (model) nodes.push(el('span', 'sf-badge sf-badge-model', model));
+          addVariant(nodes, a, false);
         }
       }
 
+      const toggleNest = (ev) => {
+        try { ev.preventDefault(); ev.stopPropagation(); } catch (_) {}
+        nestOpen = !nestOpen;
+        nest.hidden = !nestOpen;
+        tog.textContent = nestOpen ? '▼' : '▶';
+      };
+      tog.onclick = toggleNest;
+      if (badges) {
+        badges.style.cursor = 'pointer';
+        badges.onclick = toggleNest;
+      }
+
+      // Click en la fila = abrir desplegable (NO abrir cómic)
       row.onclick = (ev) => {
         try { ev.preventDefault(); } catch (_) {}
-        openComic?.(it.ch, it.f, queue);
+        toggleNest(ev);
       };
       row.oncontextmenu = (ev) => {
         try { ev.preventDefault(); ev.stopPropagation(); } catch (_) {}
@@ -525,12 +538,11 @@ export function createSearchFilters(d) {
         bindLongPress(row, () => openComicMenu(it));
       }
 
-      block.append(row);
-      if (nest) block.append(nest);
+      block.append(row, nest);
       host.append(block);
     };
 
-    const paintComicsList = (host, list) => {
+const paintComicsList = (host, list) => {
       const queue = list.map((it) => it.f);
       for (const it of list) paintComicRow(host, it, queue);
     };
