@@ -45,7 +45,7 @@ import {
 } from './comicvine.js';
 import * as locks from './lock.js';
 import { initBalance } from './balance.js';
-import { collapseVersions, flattenVersions, splitStats, QUALITIES, QUALITY_LABEL, parseQuality, sourceNameOf } from './quality.js';
+import { collapseVersions, flattenVersions, splitStats, QUALITIES, QUALITY_LABEL, parseQuality, sourceNameOf, aiLabel } from './quality.js';
 import { createSearchFilters } from './search_filters.js';
 
 const apiId = Number(import.meta.env.VITE_API_ID);
@@ -1831,13 +1831,16 @@ try {
     groupDisplayName, channelDisplayName, seriesDisplayName, comicDisplayName,
     comicDisplay, comicSourceName, groupSeries, seriesOverrideFor,
     isComicRead, readProgress, formatBytes, sizeLabel,
-    parseComicCaption, parseQuality, sourceNameOf, flattenVersions,
+    parseComicCaption, parseQuality, sourceNameOf,
+    collapseVersions, flattenVersions, aiLabel, QUALITY_LABEL,
     parseComicName, issueDisplay,
     natural, appAlert,
     get comicSheetOpts() { return viewsApi.comicSheetOpts; },
     get seriesSheetOpts() { return viewsApi.seriesSheetOpts; },
     comicCover, seriesCoverNode, channelCoverNode,
     locks, ART,
+    get showChannelInfo() { return showChannelInfo; },
+    get showEditChannel() { return showEditChannel; },
     app: document.querySelector('#app'),
   });
 } catch (e) { console.warn('[search_filters]', e); }

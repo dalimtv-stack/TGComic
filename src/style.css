@@ -1355,3 +1355,36 @@ textarea.meta-desc-lg.edit-input{
   padding:4px 0 6px 8px;margin:2px 0 4px 10px;
   border-left:2px solid #ffffff18;
 }
+
+
+/* Diferenciación canal / serie / cómic */
+.sf-group-kind{
+  font-size:.65rem;font-weight:800;letter-spacing:.08em;
+  text-transform:uppercase;opacity:.75;margin-bottom:.1rem;
+}
+.sf-head-channel{border-left:3px solid #7dd3fc;background:#7dd3fc12}
+.sf-head-series{border-left:3px solid var(--acc);background:#f2b63212}
+.sf-group-channel > .sf-group-head .sf-group-kind{color:#7dd3fc}
+.sf-group-series > .sf-group-head .sf-group-kind{color:var(--acc)}
+.sf-comic-row{border-left:3px solid #ffffff18}
+.sf-frow-disabled{opacity:.45;pointer-events:none}
+.sf-nested{
+  margin:0 0 6px 56px;padding:2px 0 2px 10px;
+  border-left:2px solid #ffffff18;
+  display:flex;flex-direction:column;gap:3px;
+}
+.sf-variant-row{
+  display:flex;align-items:center;justify-content:space-between;gap:.5rem;
+  width:100%;text-align:left;padding:8px 10px;border:0;border-radius:8px;
+  background:#ffffff08;color:inherit;font:inherit;font-size:.85rem;cursor:pointer;
+}
+.sf-variant-lab{font-weight:600}
+.sf-badges{display:inline-flex;flex-wrap:wrap;gap:3px;margin-left:.35rem;vertical-align:middle}
+.sf-badge-webp{background:#f2b63233;color:var(--acc)}
+.sf-badge-low{background:#ffffff18;color:#ddd}
+.sf-badge-ai{background:#7dd3fc33;color:#7dd3fc}
+.sf-badge-model{background:#ffffff12;color:#c8c7c2;font-weight:600;max-width:9rem;overflow:hidden;text-overflow:ellipsis}
+.sf-loose-title{
+  font-size:.75rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--mut);padding:6px 8px 4px;
+}
