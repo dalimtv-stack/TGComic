@@ -81,6 +81,15 @@ export function createSearchFilters(d) {
     if (/\.7z$/i.test(n) || /\.cb7$/i.test(n)) return '7z';
     return '';
   }
+  function fileFormatLabel(f) {
+    const k = fileFormat(f);
+    if (k === 'cbz') return 'CBZ';
+    if (k === 'cbr') return 'CBR';
+    if (k === '7z') return '7Z';
+    const n = String(sourceNameOf?.(f) || f?.name || '');
+    const m = n.match(/\.([a-z0-9]+)$/i);
+    return m ? m[1].toUpperCase() : '';
+  }
 
   function readStatus(ch, f) {
     try {
@@ -458,7 +467,11 @@ export function createSearchFilters(d) {
       meta.append(titleLine);
       const sub = [it.seriesName || it.seriesLabel, it.channelName].filter(Boolean).join(' · ');
       if (sub) meta.append(el('small', '', sub));
-      meta.append(el('small', 'sf-comic-bits', formatBytes(it.size)));
+      const bits = [];
+      const fmtMain = fileFormatLabel(it.f) || (it.format || '').toUpperCase();
+      if (fmtMain) bits.push(fmtMain);
+      bits.push(it.size ? formatBytes(it.size) : '—');
+      meta.append(el('small', 'sf-comic-bits', bits.join(' · ')));
       row.append(cov, meta);
 
       const hasExtra = it.hasWebpMid || it.hasWebpLow || it.hasAi;
@@ -474,10 +487,16 @@ export function createSearchFilters(d) {
         vr.type = 'button';
         const left = el('span', 'sf-variant-left');
         for (const n of badgeNodes) left.append(n);
+        // Tipo de archivo (CBZ, CBR…)
+        const fmt = fileFormatLabel(isOriginal ? it.f : file);
+        if (fmt) left.append(el('span', 'sf-badge sf-badge-fmt', fmt));
         vr.append(left);
-        const sz = Number((file && file.size) || (isOriginal ? it.size : 0)) || 0;
-        if (sz) vr.append(el('small', '', formatBytes(sz)));
-        const target = isOriginal ? it.f : { ...it.f, ...file, id: file.id };
+        // Tamaño siempre visible
+        const sz = Number(file?.size != null ? file.size : (isOriginal ? it.size : 0)) || 0;
+        const right = el('span', 'sf-variant-right');
+        right.append(el('small', 'sf-variant-size', sz ? formatBytes(sz) : '—'));
+        vr.append(right);
+        const target = isOriginal ? it.f : { ...it.f, ...file, id: file.id, size: file?.size ?? it.f?.size };
         vr.onclick = (ev) => {
           try { ev.preventDefault(); ev.stopPropagation(); } catch (_) {}
           openComic?.(it.ch, target, queue);
@@ -872,23 +891,23 @@ const paintComicsList = (host, list) => {
         ? 'Hay datos en caché. «Búsqueda rápida» los reutiliza al instante; «Actualizar y buscar» vuelve a leer Telegram.'
         : 'Elige cómo cargar los datos de la biblioteca.'
     ));
-    const act = el('div', 'edit-actions');
+    const act = el('div', 'edit-actions sf-entry-actions');
     act.style.flexDirection = 'column';
-    act.style.gap = '8px';
-    const full = el('button', 'btn edit-save', 'Actualizar y buscar');
+    act.style.gap = '10px';
+    const full = el('button', 'btn edit-save sf-entry-btn', 'Actualizar y buscar');
     full.type = 'button';
     full.onclick = () => {
       frame.remove();
       corpusCache = null;
       renderFiltersView({ forceFetch: true });
     };
-    const quick = el('button', 'btn', 'Búsqueda rápida');
+    const quick = el('button', 'btn sf-entry-btn', 'Búsqueda rápida');
     quick.type = 'button';
     quick.onclick = () => {
       frame.remove();
       renderFiltersView({ forceFetch: false });
     };
-    const cancel = el('button', 'btn', 'Cancelar');
+    const cancel = el('button', 'btn sf-entry-btn sf-entry-cancel', 'Cancelar');
     cancel.type = 'button';
     cancel.onclick = () => frame.remove();
     act.append(full, quick, cancel);
