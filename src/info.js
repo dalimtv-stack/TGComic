@@ -152,6 +152,49 @@ export function createInfoEdit(d) {
       return 'Automática: aún sin determinar (primer número con portada). Abre la serie para calcularla.';
     } catch (_) { return '—'; }
   }
+  /** Si el origen aún no se conoce (portada ya guardada de antes), lo calcula ahora y actualiza la fila. */
+  function resolveCoverRow(rowEl, key, ch, files, kind) {
+    const v = rowEl?.querySelector?.('.info-value');
+    if (!v || !/aún sin determinar/.test(v.textContent || '')) return rowEl;
+    v.textContent = (kind === 'channel' ? 'Predeterminada' : 'Automática') + ': calculando…';
+    (async () => {
+      try {
+        if (kind === 'channel') {
+          let gh = null;
+          try { gh = await getGithubChannelArtBlob(ch); } catch (_) {}
+          if (gh instanceof Blob && gh.size) {
+            let u = '';
+            try { u = (await kv.get('art:channels:' + artNorm((ch?.name || '').normalize('NFC').trim())))?.url || ''; } catch (_) {}
+            let file = u; try { file = decodeURIComponent(u.split('/').pop().split('?')[0]); } catch (_) {}
+            recordCoverOrigin(key, { t: 'gh', url: u, file: file || '(archivo del repositorio)' });
+          } else {
+            const b = await firstAvailableCover(ch, files);
+            recordCoverOrigin(key, b ? firstAvailableCover.last : null);
+          }
+        } else {
+          const b = await firstAvailableCover(ch, files);
+          recordCoverOrigin(key, b ? firstAvailableCover.last : null);
+        }
+        const txt = describeCoverSource(key, ch, files, kind);
+        v.textContent = /aún sin determinar/.test(txt)
+          ? (kind === 'channel' ? 'Predeterminada' : 'Automática') + ': ningún cómic tiene portada disponible todavía'
+          : txt;
+      } catch (_) { v.textContent = '—'; }
+    })();
+    return rowEl;
+  }
+  /** Cabecera "Información" que copia el contenido al pulsarla. */
+  function copyableInfoTitle(body) {
+    const t = el('span', 'info-head-title', 'Información');
+    t.title = 'Pulsa para copiar';
+    t.onclick = (ev) => {
+      ev.stopPropagation();
+      copyInfoFrameText(body);
+      t.textContent = 'Copiado';
+      setTimeout(() => { t.textContent = 'Información'; }, 1200);
+    };
+    return t;
+  }
   /** Descarga una imagen desde una URL. Si el servidor bloquea CORS, usa un proxy de imágenes. */
   async function fetchImageUrlBlob(url) {
     const tryFetch = async (u) => {
@@ -1266,7 +1309,7 @@ function showSeriesInfo(ch, seriesLabel, files) {
     body.append(row('Tamaño total', formatBytes(bytes)));
     addWebpInfo(body, row, st);
     body.append(el('div', 'info-sec', 'Desarrollo'));
-    body.append(row('Portada', describeCoverSource(seriesCoverKey(ch, seriesLabel), ch, files, 'series')));
+    body.append(resolveCoverRow(row('Portada', describeCoverSource(seriesCoverKey(ch, seriesLabel), ch, files, 'series')), seriesCoverKey(ch, seriesLabel), ch, files, 'series'));
 
     // Cómics con algún campo CV/editorial/descripción vacío
     const pending = (files || []).filter((f) => comicNeedsCvFill(f, ch));
@@ -2382,11 +2425,11 @@ async function showGroupInfo(originalName) {
     const frame = el('div', 'info-frame group-info');
     const box = el('div', 'info-box');
     const head = el('div', 'info-head');
-    head.append(el('span', '', 'Información'));
+    const body = el('div', 'info-body');
+    head.append(copyableInfoTitle(body));
     const close = el('button', 'btn info-close', '×');
     close.onclick = () => frame.remove();
     head.append(close);
-    const body = el('div', 'info-body');
     const row = (label, value) => {
       const r = el('div', 'info-row');
       r.append(el('span', 'info-label', label), el('span', 'info-value', String(value ?? '—')));
@@ -2633,11 +2676,11 @@ async function showChannelInfo(ch) {
     const frame = el('div', 'info-frame channel-info');
     const box = el('div', 'info-box');
     const head = el('div', 'info-head');
-    head.append(el('span', '', 'Información'));
+    const body = el('div', 'info-body');
+    head.append(copyableInfoTitle(body));
     const close = el('button', 'btn info-close', '×');
     close.onclick = () => frame.remove();
     head.append(close);
-    const body = el('div', 'info-body');
     const row = (label, value) => {
       const r = el('div', 'info-row');
       r.append(el('span', 'info-label', label), el('span', 'info-value', String(value ?? '—')));
@@ -2652,7 +2695,7 @@ async function showChannelInfo(ch) {
     body.append(row('Tamaño total', formatBytes(bytes)));
     addWebpInfo(body, row, st);
     body.append(el('div', 'info-sec', 'Desarrollo'));
-    body.append(row('Portada', describeCoverSource(channelCoverKey(ch), ch, files, 'channel')));
+    body.append(resolveCoverRow(row('Portada', describeCoverSource(channelCoverKey(ch), ch, files, 'channel')), channelCoverKey(ch), ch, files, 'channel'));
     box.append(head, body);
     frame.append(box);
   // No cerrar al pulsar fuera: solo × / Cancelar

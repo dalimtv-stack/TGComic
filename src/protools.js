@@ -141,34 +141,48 @@ export function createProTools(d) {
     return targets;
   }
 
+  /** 'adapt' = personalizada regenerable (página elegida) · 'fixed' = personalizada sin datos para regenerar · '' = por defecto */
+  async function customKind(t) {
+    try {
+      const raw = localStorage.getItem(`coverAdapt:${t.ch.id}:${t.f.id}`);
+      if (raw && raw !== '0') {
+        const v = JSON.parse(raw);
+        if (v && typeof v === 'object') return 'adapt';
+      }
+    } catch (_) {}
+    try { if (await kv.get(`ccustom:${t.ch.id}:${t.f.id}`)) return 'fixed'; } catch (_) {}
+    return '';
+  }
+
+  /** Borra portadas conservando la personalización: las adaptadas se regeneran con la misma página; las fijas se mantienen. */
   async function deleteCoverKeys(targets, onProgress) {
     let done = 0;
-    let resetAdapt = false;
     const total = targets.length;
+    const keep = [];
     for (const t of targets) {
-      try { await kv.del(t.key); } catch (_) {}
-      // Una portada personalizada se descarta: se vuelve a la portada por defecto
-      try { await kv.del(`ccustom:${t.ch.id}:${t.f.id}`); } catch (_) {}
-      try { await kv.del(`csrc:${t.ch.id}:${t.f.id}`); } catch (_) {}
-      try {
-        // Marca '0' (no borrar la clave) para que la sincronización también descarte la personalización
-        const ak = `coverAdapt:${t.ch.id}:${t.f.id}`;
-        const cur = localStorage.getItem(ak);
-        if (cur != null && cur !== '0') { localStorage.setItem(ak, '0'); resetAdapt = true; }
-      } catch (_) {}
+      const kind = await customKind(t);
+      if (kind === 'fixed') {
+        keep.push(t);
+      } else {
+        try { await kv.del(t.key); } catch (_) {}
+        // Personalizada por página: se borra solo la marca aplicada para que se regenere con la misma configuración
+        if (kind === 'adapt') { try { await kv.del(`ccustom:${t.ch.id}:${t.f.id}`); } catch (_) {} }
+      }
       done++;
       if (done % 5 === 0 || done === total) onProgress?.(done, total);
       if (done % 20 === 0) await new Promise((r) => setTimeout(r, 0));
     }
-    if (resetAdapt) { try { sync.schedulePush(); } catch (_) {} }
-    return done;
+    targets.keep = keep;
+    return done - keep.length;
   }
 
   async function regenerateCovers(targets, onProgress) {
     let done = 0;
     let okN = 0;
     const total = targets.length;
+    const skip = new Set(targets.keep || []);
     for (const t of targets) {
+      if (skip.has(t)) { done++; onProgress?.(done, total); continue; }
       try {
         // force: no usar portada en caché ni mensaje Telegram en memoria
         if (typeof d.invalidateComicLocal === 'function') {
@@ -329,13 +343,15 @@ export function createProTools(d) {
         await appAlert('No hay cómics en el alcance seleccionado.', 'Portadas');
         return;
       }
-      let customN = 0;
+      let adaptN = 0, fixedN = 0;
       for (const t of targets) {
-        try { if (await kv.get(`ccustom:${t.ch.id}:${t.f.id}`)) customN++; } catch (_) {}
+        const k = await customKind(t);
+        if (k === 'adapt') adaptN++; else if (k === 'fixed') fixedN++;
       }
       const ok = await appConfirm(
-        `Se borrarán y regenerarán ${targets.length} portada(s).`
-        + (customN ? `\n${customN} tiene(n) portada personalizada: se perderá y volverá la portada por defecto.` : '')
+        `Se borrarán y regenerarán ${targets.length - fixedN} portada(s).`
+        + (adaptN ? `\n${adaptN} personalizada(s) se regenerarán con la misma página y recorte elegidos.` : '')
+        + (fixedN ? `\n${fixedN} personalizada(s) sin datos para regenerarse se mantendrán tal cual.` : '')
         + `\nEsto puede tardar varios minutos y usar datos. ¿Continuar?`,
         'Recargar portadas'
       );
@@ -383,7 +399,7 @@ export function createProTools(d) {
       prog.close();
       try { onCoversChanged?.(); } catch (_) {}
       await appAlert(
-        `Listo.\nBorradas: ${deleted}\nRegeneradas: ${regenerated}`,
+        `Listo.\nBorradas: ${deleted}\nRegeneradas: ${regenerated}` + (targets.keep?.length ? `\nPersonalizadas mantenidas: ${targets.keep.length}` : ''),
         'Portadas'
       );
     };

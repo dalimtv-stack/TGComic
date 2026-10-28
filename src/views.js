@@ -334,7 +334,7 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
   }
 
   // Botón "Agrupar por series" (solo en la vista de un autor), a la izquierda del de ordenar
-  const GROUP_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>`;
+  const GROUP_ICON = `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" style="width:22px;height:22px;display:block;flex:none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>`;
   function hideGroupButton() {
     try {
       const gb = actions?.querySelector?.('.group-btn');
@@ -346,6 +346,8 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
     if (!btn) {
       btn = el('button', 'btn group-btn');
       btn.type = 'button';
+      // Mismo tamaño que el botón de ordenar (sin esto, Safari/iPhone dibuja el icono a 0 px)
+      btn.style.cssText = 'min-width:44px;width:44px;padding:0';
       btn.innerHTML = GROUP_ICON;
       const sortBtn = actions?.querySelector?.('.sort-btn');
       const menu = actions?.querySelector?.('.menu-btn');
