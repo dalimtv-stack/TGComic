@@ -31,6 +31,29 @@ export function createRepackTool(d) {
   const isCbrName = (name) => /\.cbr$/i.test(name || '');
   const toCbzName = (name) => String(name || 'comic.cbr').replace(/\.cbr$/i, '.cbz');
   const yieldTick = () => new Promise((r) => setTimeout(r, 0));
+  /** Nombre sin extensión, para detectar la misma página en JPG+PNG etc. */
+  const pageStem = (name) => String(name || '').replace(/\.[^.]+$/i, '').toLowerCase();
+  /** Preferir más bytes; a igualdad, PNG/WebP > JPEG. */
+  const pageQualityScore = (fileName, byteSize) => {
+    const ext = (String(fileName).match(/\.([^.]+)$/i) || [,''])[1].toLowerCase();
+    const extScore = ({ png: 4, tif: 4, tiff: 4, webp: 3, avif: 3, jpg: 1, jpeg: 1, gif: 0 })[ext] || 0;
+    return (Number(byteSize) || 0) * 10 + extScore;
+  };
+  /** Evita colisión residual en el ZIP de salida. */
+  const uniqueZipName = (used, name) => {
+    let n = String(name || 'page.webp').replace(/^[/\\]+/, '');
+    if (!n) n = 'page.webp';
+    const key0 = n.toLowerCase();
+    if (!used.has(key0)) { used.add(key0); return n; }
+    const m = n.match(/^(.*)(\.[^.]+)$/);
+    const stem = m ? m[1] : n;
+    const ext = m ? m[2] : '';
+    let i = 2;
+    let cand;
+    do { cand = `${stem}_${i}${ext}`; i++; } while (used.has(cand.toLowerCase()));
+    used.add(cand.toLowerCase());
+    return cand;
+  };
   const isGramNoise = (e) => /Missing MTProto Entity|TL definition for ID 0/i.test(String(e?.message || e || ''));
   /** GramJS a veces lanza un error de parseo DESPUÉS de enviar: el mensaje ya está en Telegram, no reintentar (duplicaría la subida). */
   async function sendFileSafe(client, peer, opts) {
@@ -318,16 +341,10 @@ export function createRepackTool(d) {
         wasmBinary: await (await fetch(rarWasm)).arrayBuffer(),
         data: ab,
       });
-      const writer = new zip.ZipWriter(new zip.BlobWriter('application/zip'), {
-        bufferedWrite: true,
-        level: 0,
-      });
-      let nImg = 0;
+      // 1) Listar páginas; si hay misma base con distinta extensión, quedarnos con la de más calidad
+      const candidates = [];
       for (const x of ex.extract().files) {
-        if (abort) {
-          try { await writer.close(); } catch (_) {}
-          throw Object.assign(new Error('cancelado'), { cancelled: true });
-        }
+        if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
         const n = x.fileHeader.name || '';
         if (x.fileHeader.flags.directory || !x.extraction) continue;
         const base = n.split(/[/\\]/).pop() || n;
@@ -337,16 +354,47 @@ export function createRepackTool(d) {
         if (!src.byteLength) continue;
         const copy = new Uint8Array(src.byteLength);
         copy.set(src);
-        let pageBlob = new Blob([copy.buffer], { type: mimeOf(base) });
-        let outName = base;
+        candidates.push({
+          base,
+          stem: pageStem(base),
+          size: copy.byteLength,
+          blob: new Blob([copy.buffer], { type: mimeOf(base) }),
+        });
+      }
+      const bestByStem = new Map();
+      for (const c of candidates) {
+        const prev = bestByStem.get(c.stem);
+        if (!prev || pageQualityScore(c.base, c.size) > pageQualityScore(prev.base, prev.size)) {
+          bestByStem.set(c.stem, c);
+        }
+      }
+      const picked = [...bestByStem.values()];
+      if (candidates.length > picked.length) {
+        status(`Omitidas ${candidates.length - picked.length} página(s) duplicada(s) (misma base, peor calidad)`);
+      }
+
+      const writer = new zip.ZipWriter(new zip.BlobWriter('application/zip'), {
+        bufferedWrite: true,
+        level: 0,
+      });
+      const usedNames = new Set();
+      let nImg = 0;
+      for (const c of picked) {
+        if (abort) {
+          try { await writer.close(); } catch (_) {}
+          throw Object.assign(new Error('cancelado'), { cancelled: true });
+        }
+        let pageBlob = c.blob;
+        let outName = c.base;
         if (wantWebp) {
           const origSize = pageBlob.size || 0;
           const converted = await blobToWebp(pageBlob, webpOpts);
           if (converted && converted.size && converted.size < origSize * 0.98) {
             pageBlob = converted;
-            outName = base.replace(/\.[^.]+$/i, '.webp');
+            outName = c.base.replace(/\.[^.]+$/i, '.webp');
           }
         }
+        outName = uniqueZipName(usedNames, outName);
         nImg++;
         await writer.add(outName, new zip.BlobReader(pageBlob), { level: 0 });
         pageBlob = null;
@@ -366,30 +414,61 @@ export function createRepackTool(d) {
     async function imagesToCbzFromZipBlob(blob) {
       const reader = new zip.ZipReader(new zip.BlobReader(blob));
       const entries = await reader.getEntries();
-      const writer = new zip.ZipWriter(new zip.BlobWriter('application/zip'), {
-        bufferedWrite: true,
-        level: 0,
-      });
-      let nImg = 0;
+      // 1) Cargar páginas y, si hay 001h.jpg + 001h.png, quedarnos solo con la de mejor calidad
+      const candidates = [];
       for (const e of entries) {
         if (abort) {
-          try { await writer.close(); } catch (_) {}
           try { await reader.close(); } catch (_) {}
           throw Object.assign(new Error('cancelado'), { cancelled: true });
         }
         if (e.directory) continue;
         const base = (e.filename || '').split(/[/\\]/).pop() || e.filename;
         if (!/\.(jpe?g|png|webp|gif|avif)$/i.test(base)) continue;
-        let pageBlob = await e.getData(new zip.BlobWriter());
-        let outName = base;
+        const pageBlob = await e.getData(new zip.BlobWriter());
+        if (!pageBlob || !pageBlob.size) continue;
+        candidates.push({
+          base,
+          stem: pageStem(base),
+          size: pageBlob.size || 0,
+          blob: pageBlob,
+        });
+      }
+      try { await reader.close(); } catch (_) {}
+
+      const bestByStem = new Map();
+      for (const c of candidates) {
+        const prev = bestByStem.get(c.stem);
+        if (!prev || pageQualityScore(c.base, c.size) > pageQualityScore(prev.base, prev.size)) {
+          bestByStem.set(c.stem, c);
+        }
+      }
+      const picked = [...bestByStem.values()];
+      if (candidates.length > picked.length) {
+        status(`Omitidas ${candidates.length - picked.length} página(s) duplicada(s) (misma base, peor calidad)`);
+      }
+
+      const writer = new zip.ZipWriter(new zip.BlobWriter('application/zip'), {
+        bufferedWrite: true,
+        level: 0,
+      });
+      const usedNames = new Set();
+      let nImg = 0;
+      for (const c of picked) {
+        if (abort) {
+          try { await writer.close(); } catch (_) {}
+          throw Object.assign(new Error('cancelado'), { cancelled: true });
+        }
+        let pageBlob = c.blob;
+        let outName = c.base;
         if (wantWebp) {
           const origSize = pageBlob.size || 0;
           const converted = await blobToWebp(pageBlob, webpOpts);
           if (converted && converted.size && converted.size < origSize * 0.98) {
             pageBlob = converted;
-            outName = base.replace(/\.[^.]+$/i, '.webp');
+            outName = c.base.replace(/\.[^.]+$/i, '.webp');
           }
         }
+        outName = uniqueZipName(usedNames, outName);
         nImg++;
         await writer.add(outName, new zip.BlobReader(pageBlob), { level: 0 });
         pageBlob = null;
@@ -397,7 +476,6 @@ export function createRepackTool(d) {
         await yieldTick();
         if (nImg % 3 === 0) await new Promise((r) => setTimeout(r, 30));
       }
-      await reader.close();
       if (!nImg) {
         try { await writer.close(); } catch (_) {}
         throw new Error('ZIP sin imágenes legibles');
