@@ -42,11 +42,13 @@ export function createSearchFilters(d) {
         fichaField: o.fichaField || '',
         q: o.q || '',
         groupMode: o.groupMode || 'series',
+        sort: o.sort || 'name-asc',
       };
     } catch {
       return {
         editorial: '', channel: '', series: '', quality: '', ai: '', read: '',
         format: '', ficha: '', fichaField: '', q: '', groupMode: 'series',
+        sort: 'name-asc',
       };
     }
   }
@@ -272,6 +274,68 @@ export function createSearchFilters(d) {
     });
   }
 
+  function sortResults(items, mode = filterState.sort) {
+    const nat = natural || ((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' }));
+    const list = (items || []).slice();
+    const titleOf = (it) => String(it.title || it.f?.name || '');
+    const sizeOf = (it) => Number(it.size) || 0;
+    switch (mode) {
+      case 'name-desc':
+        list.sort((a, b) => nat(titleOf(b), titleOf(a)));
+        break;
+      case 'size-desc':
+        list.sort((a, b) => sizeOf(b) - sizeOf(a) || nat(titleOf(a), titleOf(b)));
+        break;
+      case 'size-asc':
+        list.sort((a, b) => sizeOf(a) - sizeOf(b) || nat(titleOf(a), titleOf(b)));
+        break;
+      case 'name-asc':
+      default:
+        list.sort((a, b) => nat(titleOf(a), titleOf(b)));
+        break;
+    }
+    return list;
+  }
+
+  function showSortDialog(onPick) {
+    document.querySelector('.sf-sort-dialog')?.remove();
+    const frame = el('div', 'info-frame sf-sort-dialog');
+    const box = el('div', 'info-box');
+    const head = el('div', 'info-head');
+    head.append(el('span', '', 'Ordenar resultados'));
+    const close = el('button', 'btn info-close', '×');
+    close.onclick = () => frame.remove();
+    head.append(close);
+    const body = el('div', 'info-body');
+    body.append(el('p', 'cover-pick-hint', 'Elige cómo ordenar el listado filtrado.'));
+    const act = el('div', 'edit-actions sf-entry-actions');
+    act.style.flexDirection = 'column';
+    act.style.gap = '10px';
+    const opts = [
+      ['name-asc', 'Orden A-Z'],
+      ['name-desc', 'Orden Z-A'],
+      ['size-desc', 'Tamaño: mayor → menor'],
+      ['size-asc', 'Tamaño: menor → mayor'],
+    ];
+    for (const [mode, label] of opts) {
+      const b = el('button', 'btn sf-entry-btn' + (filterState.sort === mode ? ' edit-save' : ''), label);
+      b.type = 'button';
+      b.onclick = () => {
+        frame.remove();
+        onPick?.(mode);
+      };
+      act.append(b);
+    }
+    const cancel = el('button', 'btn sf-entry-btn sf-entry-cancel', 'Cancelar');
+    cancel.type = 'button';
+    cancel.onclick = () => frame.remove();
+    act.append(cancel);
+    body.append(act);
+    box.append(head, body);
+    frame.append(box);
+    document.body.append(frame);
+  }
+
   function buildFilterOptions(items) {
     const editorials = new Map();
     const channels = new Map();
@@ -322,23 +386,31 @@ export function createSearchFilters(d) {
     } catch (_) {}
   }
 
-  function mountHeaderActions(onClear, onFocusSearch) {
+  function mountHeaderActions(onClear, onFocusSearch, onSort) {
     const act = document.querySelector('#actions');
     if (!act) return () => {};
     removeSfHeadButtons();
     const clear = el('button', 'btn sf-head-btn sf-head-clear', 'Limpiar');
     clear.type = 'button';
     clear.onclick = (ev) => { try { ev.stopPropagation(); } catch (_) {} onClear?.(); };
+    const sortBtn = el('button', 'btn sf-head-btn sf-head-sort', 'Ordenar');
+    sortBtn.type = 'button';
+    sortBtn.title = 'Ordenar resultados';
+    sortBtn.onclick = (ev) => { try { ev.stopPropagation(); } catch (_) {} onSort?.(); };
     const search = el('button', 'btn sf-head-btn sf-head-search');
     search.type = 'button';
     search.title = 'Palabras clave';
     search.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>';
     search.onclick = (ev) => { try { ev.stopPropagation(); } catch (_) {} onFocusSearch?.(); };
     const menu = act.querySelector('.menu-btn');
-    if (menu) { act.insertBefore(clear, menu); act.insertBefore(search, menu); }
-    else act.append(clear, search);
+    if (menu) {
+      act.insertBefore(clear, menu);
+      act.insertBefore(sortBtn, menu);
+      act.insertBefore(search, menu);
+    } else act.append(clear, sortBtn, search);
     const unmount = () => {
       try { clear.remove(); } catch (_) {}
+      try { sortBtn.remove(); } catch (_) {}
       try { search.remove(); } catch (_) {}
       removeSfHeadButtons();
     };
@@ -741,7 +813,7 @@ const paintComicsList = (host, list) => {
 
     const paint = () => {
       saveState();
-      const filtered = applyFilters(corpus, filterState);
+      const filtered = sortResults(applyFilters(corpus, filterState), filterState.sort);
       const optsSel = buildFilterOptions(corpus);
       root.replaceChildren();
       root.className = 'sf-root';
@@ -833,6 +905,13 @@ const paintComicsList = (host, list) => {
           paint();
           requestAnimationFrame(() => {
             try { root.querySelector('.sf-qinput')?.focus(); } catch (_) {}
+          });
+        },
+        () => {
+          showSortDialog((mode) => {
+            filterState.sort = mode || 'name-asc';
+            saveState();
+            paint();
           });
         }
       );

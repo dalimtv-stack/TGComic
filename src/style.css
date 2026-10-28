@@ -1438,3 +1438,17 @@ html:has(.sf-root){
   border-radius:12px!important;
 }
 .sf-entry-cancel{opacity:.9}
+
+/* Hueco bajo Autores en home: el summary no queda cortado al final del scroll */
+.home-bottom-spacer{
+  height:calc(1.5rem + env(safe-area-inset-bottom, 0px));
+  min-height:28px;
+  flex:none;
+  pointer-events:none;
+  visibility:hidden;
+}
+
+.sf-head-sort{
+  height:36px;min-width:auto;padding:0 .75rem;font-size:.82rem;font-weight:650;
+  border-radius:10px;background:var(--card);
+}
