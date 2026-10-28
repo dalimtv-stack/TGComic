@@ -26,6 +26,16 @@ export function createSearchFilters(d) {
 
   /** Caché global entre visitas a la vista (no se borra al abrir un cómic). */
   let corpusCache = null;
+  /** Estado de UI al volver del visor: scroll + desplegables abiertos. */
+  const uiState = {
+    scrollTop: 0,
+    openNests: new Set(),
+    openSeries: new Set(),
+    openChannels: new Set(),
+  };
+  const comicKeyOf = (it) => String(it.channelId || it.ch?.id || '') + ':' + String(it.f?.id ?? '');
+  const seriesKeyOf = (ch, seriesLabel) => String(ch?.id ?? '') + '::' + String(seriesLabel || '');
+  const originalsBytes = (items) => (items || []).reduce((s, it) => s + (Number(it.size) || 0), 0);
 
   function loadState() {
     try {
@@ -525,6 +535,7 @@ export function createSearchFilters(d) {
       const block = el('div', 'sf-comic-block');
       const row = el('button', 'sf-comic-row');
       row.type = 'button';
+      const ckey = comicKeyOf(it);
 
       const cov = el('div', 'sf-comic-cover');
       try {
@@ -546,41 +557,50 @@ export function createSearchFilters(d) {
       meta.append(el('small', 'sf-comic-bits', bits.join(' · ')));
       row.append(cov, meta);
 
-      const hasExtra = it.hasWebpMid || it.hasWebpLow || it.hasAi;
       const nest = el('div', 'sf-nested');
-      nest.hidden = true;
-      let nestOpen = false;
-      const tog = el('span', 'sf-nest-tog', '▶');
+      const wasOpen = uiState.openNests.has(ckey);
+      nest.hidden = !wasOpen;
+      let nestOpen = wasOpen;
+      const tog = el('span', 'sf-nest-tog', wasOpen ? '▼' : '▶');
       tog.title = 'Versiones';
       row.append(tog);
 
+      const openVersion = (file) => {
+        try {
+          const results = root.querySelector('.sf-results');
+          if (results) uiState.scrollTop = results.scrollTop;
+        } catch (_) {}
+        // Abrir exactamente el file de la versión pulsada (id propio de WebP/IA/original)
+        openComic?.(it.ch, file, queue && queue.length ? queue : [file]);
+      };
+
       const addVariant = (badgeNodes, file, isOriginal) => {
+        if (!file && !isOriginal) return;
         const vr = el('button', 'sf-variant-row' + (isOriginal ? ' sf-variant-original' : ''));
         vr.type = 'button';
-        // Orden: tamaño | formato | etiquetas  (todo a la izquierda, columnas alineadas)
-        const sz = Number(file?.size != null ? file.size : (isOriginal ? it.size : 0)) || 0;
+        const src = isOriginal ? it.f : file;
+        const sz = Number(src?.size != null ? src.size : (isOriginal ? it.size : 0)) || 0;
         const sizeEl = el('span', 'sf-variant-size', sz ? formatBytes(sz) : '—');
-        const fmt = fileFormatLabel(isOriginal ? it.f : file) || '—';
+        const fmt = fileFormatLabel(src) || '—';
         const fmtEl = el('span', 'sf-badge sf-badge-fmt', fmt);
         const labs = el('span', 'sf-variant-left');
         for (const n of badgeNodes) labs.append(n);
         vr.append(sizeEl, fmtEl, labs);
-        const target = isOriginal ? it.f : { ...it.f, ...file, id: file.id, size: file?.size ?? it.f?.size };
+
         vr.onclick = (ev) => {
           try { ev.preventDefault(); ev.stopPropagation(); } catch (_) {}
-          openComic?.(it.ch, target, queue);
+          openVersion(src);
         };
         vr.oncontextmenu = (ev) => {
           try { ev.preventDefault(); ev.stopPropagation(); } catch (_) {}
-          openComicMenu(it, isOriginal ? null : target);
+          openComicMenu(it, isOriginal ? null : src);
         };
         if (typeof bindLongPress === 'function') {
-          bindLongPress(vr, () => openComicMenu(it, isOriginal ? null : target));
+          bindLongPress(vr, () => openComicMenu(it, isOriginal ? null : src));
         }
         nest.append(vr);
       };
 
-      // Primero siempre Original
       addVariant([el('span', 'sf-badge sf-badge-orig', 'Original')], it.f, true);
       if (it.variants?.mid) {
         addVariant([el('span', 'sf-badge sf-badge-webp', 'WebP')], it.variants.mid, false);
@@ -606,6 +626,8 @@ export function createSearchFilters(d) {
         nestOpen = !nestOpen;
         nest.hidden = !nestOpen;
         tog.textContent = nestOpen ? '▼' : '▶';
+        if (nestOpen) uiState.openNests.add(ckey);
+        else uiState.openNests.delete(ckey);
       };
       tog.onclick = toggleNest;
       if (badges) {
@@ -613,7 +635,6 @@ export function createSearchFilters(d) {
         badges.onclick = toggleNest;
       }
 
-      // Click en la fila = abrir desplegable (NO abrir cómic)
       row.onclick = (ev) => {
         try { ev.preventDefault(); } catch (_) {}
         toggleNest(ev);
@@ -630,16 +651,18 @@ export function createSearchFilters(d) {
       host.append(block);
     };
 
-const paintComicsList = (host, list) => {
+    const paintComicsList = (host, list) => {
+      // Cola de lectura: originales; al abrir una variante se pasa ese file concreto
       const queue = list.map((it) => it.f);
       for (const it of list) paintComicRow(host, it, queue);
     };
 
-    /** Cabecera de serie con portada + tipo visual */
+    /** Cabecera de serie + tamaño solo originales. */
     const paintSeriesBlock = (host, ch, seriesLabel, seriesName, items) => {
       const block = el('div', 'sf-group sf-group-series');
       const head = el('button', 'sf-group-head sf-head-series');
       head.type = 'button';
+      const skey = seriesKeyOf(ch, seriesLabel);
 
       const cov = el('div', 'sf-group-cover sf-group-cover-series');
       try {
@@ -648,12 +671,13 @@ const paintComicsList = (host, list) => {
         }
       } catch (_) {}
 
+      const bytes = originalsBytes(items);
       const text = el('div', 'sf-group-text');
-      const top = el('div', 'sf-group-kind', 'SERIE');
-      text.append(top);
+      text.append(el('div', 'sf-group-kind', 'SERIE'));
       text.append(el('b', '', seriesName || seriesLabel || 'Serie'));
       text.append(el('small', '',
         items.length + (items.length === 1 ? ' cómic' : ' cómics')
+        + ' · ' + (bytes ? formatBytes(bytes) : '—')
         + (items[0]?.channelName ? ' · ' + items[0].channelName : '')));
 
       const arrow = el('span', 'sf-group-arrow', '▶');
@@ -662,14 +686,22 @@ const paintComicsList = (host, list) => {
       const body = el('div', 'sf-group-body');
       body.hidden = true;
 
+      const fill = () => {
+        if (body.dataset.filled) return;
+        body.dataset.filled = '1';
+        paintComicsList(body, items);
+      };
+      const expand = (open) => {
+        body.hidden = !open;
+        arrow.textContent = open ? '▼' : '▶';
+        if (open) { fill(); uiState.openSeries.add(skey); }
+        else uiState.openSeries.delete(skey);
+      };
+      if (uiState.openSeries.has(skey)) expand(true);
+
       head.onclick = (ev) => {
         try { ev.preventDefault(); } catch (_) {}
-        body.hidden = !body.hidden;
-        arrow.textContent = body.hidden ? '▶' : '▼';
-        if (!body.hidden && !body.dataset.filled) {
-          body.dataset.filled = '1';
-          paintComicsList(body, items);
-        }
+        expand(body.hidden);
       };
       head.oncontextmenu = (ev) => {
         try { ev.preventDefault(); ev.stopPropagation(); } catch (_) {}
@@ -683,11 +715,12 @@ const paintComicsList = (host, list) => {
       host.append(block);
     };
 
-    /** Canal: abre → series (no cómics sueltos como series falsas) */
+    /** Canal → series; tamaño solo originales. */
     const paintChannelBlock = (host, ch, channelName, items) => {
       const block = el('div', 'sf-group sf-group-channel');
       const head = el('button', 'sf-group-head sf-head-channel');
       head.type = 'button';
+      const ckey = String(ch?.id ?? items[0]?.channelId ?? '');
 
       const cov = el('div', 'sf-group-cover sf-group-cover-channel');
       try {
@@ -696,19 +729,17 @@ const paintComicsList = (host, list) => {
         }
       } catch (_) {}
 
-      // Contar solo series reales (con seriesLabel) y cómics lógicos (ya colapsados)
       const seriesMap = new Map();
       let loose = 0;
       for (const it of items) {
         if (it.seriesLabel) {
           if (!seriesMap.has(it.seriesLabel)) seriesMap.set(it.seriesLabel, []);
           seriesMap.get(it.seriesLabel).push(it);
-        } else {
-          loose++;
-        }
+        } else loose++;
       }
       const nSeries = seriesMap.size;
-      const nComics = items.length; // ya son lógicos, sin WebP/IA duplicados
+      const nComics = items.length;
+      const bytes = originalsBytes(items);
 
       const text = el('div', 'sf-group-text');
       text.append(el('div', 'sf-group-kind', 'CANAL'));
@@ -717,6 +748,7 @@ const paintComicsList = (host, list) => {
       if (nSeries) parts.push(nSeries + (nSeries === 1 ? ' serie' : ' series'));
       if (loose) parts.push(loose + (loose === 1 ? ' cómic suelto' : ' cómics sueltos'));
       parts.push(nComics + (nComics === 1 ? ' cómic' : ' cómics'));
+      parts.push(bytes ? formatBytes(bytes) : '—');
       if (items[0]?.editorialName) parts.push(items[0].editorialName);
       text.append(el('small', '', parts.join(' · ')));
 
@@ -730,7 +762,6 @@ const paintComicsList = (host, list) => {
         if (body.dataset.filled) return;
         body.dataset.filled = '1';
         const nat = natural || ((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }));
-        // Series primero
         const seriesList = [...seriesMap.entries()]
           .map(([label, its]) => ({
             seriesLabel: label,
@@ -741,16 +772,20 @@ const paintComicsList = (host, list) => {
         for (const g of seriesList) {
           paintSeriesBlock(body, ch, g.seriesLabel, g.seriesName, g.items);
         }
-        // Cómics sin serie
         const solos = items.filter((it) => !it.seriesLabel);
         if (solos.length) paintComicsList(body, solos);
       };
+      const expand = (open) => {
+        body.hidden = !open;
+        arrow.textContent = open ? '▼' : '▶';
+        if (open) { fill(); uiState.openChannels.add(ckey); }
+        else uiState.openChannels.delete(ckey);
+      };
+      if (uiState.openChannels.has(ckey)) expand(true);
 
       head.onclick = (ev) => {
         try { ev.preventDefault(); } catch (_) {}
-        body.hidden = !body.hidden;
-        arrow.textContent = body.hidden ? '▶' : '▼';
-        if (!body.hidden) fill();
+        expand(body.hidden);
       };
       head.oncontextmenu = (ev) => {
         try { ev.preventDefault(); ev.stopPropagation(); } catch (_) {}
@@ -947,6 +982,21 @@ const paintComicsList = (host, list) => {
         paintGroupedChannels(results, filtered);
       }
       root.append(results);
+
+      const applyScroll = () => {
+        try {
+          if (typeof uiState.scrollTop === 'number' && uiState.scrollTop > 0) {
+            results.scrollTop = uiState.scrollTop;
+          }
+        } catch (_) {}
+      };
+      applyScroll();
+      requestAnimationFrame(applyScroll);
+      setTimeout(applyScroll, 50);
+      setTimeout(applyScroll, 150);
+      results.addEventListener('scroll', () => {
+        try { uiState.scrollTop = results.scrollTop; } catch (_) {}
+      }, { passive: true });
     };
 
     paint();
