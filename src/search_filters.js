@@ -330,21 +330,14 @@ export function createSearchFilters(d) {
     try { node._load?.(); } catch (_) {}
   }
 
+  /** Solo etiquetas resumidas junto al título: WebP / IA */
   function qualityBadges(it) {
     const wrap = el('span', 'sf-badges');
-    if (it.hasWebpMid || it.quality === 'mid') {
-      wrap.append(el('span', 'sf-badge sf-badge-webp', 'WebP'));
-    }
-    if (it.hasWebpLow || it.quality === 'low') {
-      wrap.append(el('span', 'sf-badge sf-badge-low', '2400px'));
+    if (it.hasWebpMid || it.hasWebpLow || it.quality === 'mid' || it.quality === 'low') {
       wrap.append(el('span', 'sf-badge sf-badge-webp', 'WebP'));
     }
     if (it.hasAi || it.ai) {
-      const models = it.aiModels?.length ? it.aiModels : ['Mejora IA'];
-      for (const m of models) {
-        wrap.append(el('span', 'sf-badge sf-badge-ai', 'IA'));
-        if (m && m !== 'Mejora IA') wrap.append(el('span', 'sf-badge sf-badge-model', m));
-      }
+      wrap.append(el('span', 'sf-badge sf-badge-ai', 'IA'));
     }
     return wrap.childNodes.length ? wrap : null;
   }
@@ -429,7 +422,7 @@ export function createSearchFilters(d) {
       if (opts.length) sheet(channelName || ch?.name || 'Canal', opts);
     };
 
-    /** Fila de cómic (principal) + subfilas de variantes WebP / IA */
+    /** Fila de cómic (principal) + subfilas de variantes WebP / IA (plegadas por defecto) */
     const paintComicRow = (host, it, queue) => {
       const block = el('div', 'sf-comic-block');
       const row = el('button', 'sf-comic-row');
@@ -451,6 +444,75 @@ export function createSearchFilters(d) {
       meta.append(el('small', 'sf-comic-bits', formatBytes(it.size)));
       row.append(cov, meta);
 
+      const hasNested = it.hasWebpMid || it.hasWebpLow || it.hasAi;
+      let nest = null;
+      let nestOpen = false;
+
+      if (hasNested) {
+        const tog = el('span', 'sf-nest-tog', '▶');
+        tog.title = 'Ver versiones';
+        row.append(tog);
+
+        nest = el('div', 'sf-nested');
+        nest.hidden = true;
+
+        const addVariant = (badgeNodes, file) => {
+          if (!file) return;
+          const vr = el('button', 'sf-variant-row');
+          vr.type = 'button';
+          const left = el('span', 'sf-variant-left');
+          for (const n of badgeNodes) left.append(n);
+          vr.append(left);
+          vr.append(el('small', '', formatBytes(Number(file.size) || 0)));
+          vr.onclick = (ev) => {
+            try { ev.preventDefault(); ev.stopPropagation(); } catch (_) {}
+            openComic?.(it.ch, { ...it.f, ...file, id: file.id }, queue);
+          };
+          vr.oncontextmenu = (ev) => {
+            try { ev.preventDefault(); ev.stopPropagation(); } catch (_) {}
+            openComicMenu(it, { ...it.f, ...file, id: file.id });
+          };
+          if (typeof bindLongPress === 'function') {
+            bindLongPress(vr, () => openComicMenu(it, { ...it.f, ...file, id: file.id }));
+          }
+          nest.append(vr);
+        };
+
+        if (it.variants?.mid) {
+          addVariant([
+            el('span', 'sf-badge sf-badge-webp', 'WebP'),
+          ], it.variants.mid);
+        }
+        if (it.variants?.low) {
+          addVariant([
+            el('span', 'sf-badge sf-badge-low', '2400px'),
+            el('span', 'sf-badge sf-badge-webp', 'WebP'),
+          ], it.variants.low);
+        }
+        if (Array.isArray(it.aiList)) {
+          for (const a of it.aiList) {
+            let model = '';
+            try { model = (aiLabel && aiLabel(sourceNameOf?.(a) || a.name)) || ''; } catch (_) {}
+            const nodes = [el('span', 'sf-badge sf-badge-ai', 'IA')];
+            if (model) nodes.push(el('span', 'sf-badge sf-badge-model', model));
+            addVariant(nodes, a);
+          }
+        }
+
+        const toggleNest = (ev) => {
+          try { ev.preventDefault(); ev.stopPropagation(); } catch (_) {}
+          nestOpen = !nestOpen;
+          nest.hidden = !nestOpen;
+          tog.textContent = nestOpen ? '▼' : '▶';
+        };
+        tog.onclick = toggleNest;
+        // Pulsar las etiquetas WebP/IA también despliega
+        if (badges) {
+          badges.style.cursor = 'pointer';
+          badges.onclick = toggleNest;
+        }
+      }
+
       row.onclick = (ev) => {
         try { ev.preventDefault(); } catch (_) {}
         openComic?.(it.ch, it.f, queue);
@@ -464,42 +526,7 @@ export function createSearchFilters(d) {
       }
 
       block.append(row);
-
-      // Variantes anidadas
-      const hasNested = it.hasWebpMid || it.hasWebpLow || it.hasAi;
-      if (hasNested) {
-        const nest = el('div', 'sf-nested');
-        const addVariant = (label, file) => {
-          if (!file) return;
-          const vr = el('button', 'sf-variant-row');
-          vr.type = 'button';
-          vr.append(el('span', 'sf-variant-lab', label));
-          vr.append(el('small', '', formatBytes(Number(file.size) || 0)));
-          vr.onclick = (ev) => {
-            try { ev.preventDefault(); } catch (_) {}
-            openComic?.(it.ch, { ...it.f, ...file, id: file.id }, queue);
-          };
-          vr.oncontextmenu = (ev) => {
-            try { ev.preventDefault(); ev.stopPropagation(); } catch (_) {}
-            openComicMenu(it, { ...it.f, ...file, id: file.id });
-          };
-          if (typeof bindLongPress === 'function') {
-            bindLongPress(vr, () => openComicMenu(it, { ...it.f, ...file, id: file.id }));
-          }
-          nest.append(vr);
-        };
-        if (it.variants?.mid) addVariant('WebP (Media)', it.variants.mid);
-        if (it.variants?.low) addVariant('2400px · WebP (Baja)', it.variants.low);
-        if (Array.isArray(it.aiList)) {
-          for (const a of it.aiList) {
-            let lab = 'IA';
-            try { lab = 'IA · ' + ((aiLabel && aiLabel(sourceNameOf?.(a) || a.name)) || 'Mejora IA'); } catch (_) {}
-            addVariant(lab, a);
-          }
-        }
-        block.append(nest);
-      }
-
+      if (nest) block.append(nest);
       host.append(block);
     };
 

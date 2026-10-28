@@ -1388,3 +1388,10 @@ textarea.meta-desc-lg.edit-input{
   font-size:.75rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
   color:var(--mut);padding:6px 8px 4px;
 }
+
+.sf-nest-tog{
+  flex:none;align-self:center;margin-left:.25rem;
+  font-size:.7rem;opacity:.65;padding:.35rem .4rem;border-radius:6px;
+}
+.sf-nest-tog:active{opacity:1}
+.sf-variant-left{display:inline-flex;flex-wrap:wrap;gap:3px;align-items:center}
