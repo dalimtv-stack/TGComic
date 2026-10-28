@@ -45,7 +45,8 @@ import {
 } from './comicvine.js';
 import * as locks from './lock.js';
 import { initBalance } from './balance.js';
-import { collapseVersions, flattenVersions, splitStats, QUALITIES, QUALITY_LABEL } from './quality.js';
+import { collapseVersions, flattenVersions, splitStats, QUALITIES, QUALITY_LABEL, parseQuality, sourceNameOf } from './quality.js';
+import { createSearchFilters } from './search_filters.js';
 
 const apiId = Number(import.meta.env.VITE_API_ID);
 const apiHash = import.meta.env.VITE_API_HASH;
@@ -1813,7 +1814,59 @@ const viewsApi = createViews({
   seriesBase,
   setBlobImg,
 });
+
 const { cardNode, lockToggleOpts, groupsView, channelsView, filesView, seriesView } = viewsApi;
+
+// Búsqueda y filtros avanzados
+let searchFiltersApi = null;
+try {
+  searchFiltersApi = createSearchFilters({
+    el, kv, go, show, stack,
+    getLIB: () => LIB,
+    fetchFiles,
+    getFiles: async (ch) => (await kv.get('f:' + ch.id)) || [],
+    get openComic() { return openComic; },
+    sheet, bindLongPress,
+    groupDisplayName, channelDisplayName, seriesDisplayName, comicDisplayName,
+    comicDisplay, comicSourceName, groupSeries, seriesOverrideFor,
+    isComicRead, readProgress, formatBytes, sizeLabel,
+    splitStats, parseComicCaption, parseQuality, sourceNameOf, flattenVersions,
+    comicNeedsCvFill, parseComicName, issueDisplay,
+    natural, appAlert,
+    app: document.querySelector('#app'),
+  });
+} catch (e) { console.warn('[search_filters]', e); }
+
+function mountSearchFiltersButton() {
+  try {
+    const act = document.querySelector('#actions');
+    if (!act) return;
+    let btn = act.querySelector('.search-filters-btn');
+    if (!btn) {
+      btn = el('button', 'btn search-filters-btn');
+      btn.type = 'button';
+      btn.title = 'Búsqueda y filtros';
+      btn.setAttribute('aria-label', 'Búsqueda y filtros');
+      btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>';
+      const menu = act.querySelector('.menu-btn');
+      if (menu) act.insertBefore(btn, menu);
+      else act.append(btn);
+      btn.onclick = (ev) => {
+        try { ev.stopPropagation(); } catch (_) {}
+        if (document.getElementById('rd')) return;
+        searchFiltersApi?.showSearchEntryDialog?.();
+      };
+    }
+    btn.hidden = !!document.getElementById('rd');
+  } catch (_) {}
+}
+try {
+  mountSearchFiltersButton();
+  const _show = show;
+  // re-montar tras cada show si hace falta
+  window.addEventListener('tgcomic:changed', mountSearchFiltersButton);
+} catch (_) {}
+
 
 // ---------- Recarga CBR / externos ----------
 const repackTool = createRepackTool({
@@ -2109,6 +2162,7 @@ async function migrateCacheImages() {
   try { initBalance(document.querySelector('#app')); } catch (_) {}
   stack.push({ title: 'TGComics', render: groupsView });
   show();
+  try { mountSearchFiltersButton(); } catch (_) {}
   // Optimizar caché antigua en segundo plano (WebP + menos resolución)
   migrateCacheImages();
   ready = connect();

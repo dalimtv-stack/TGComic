@@ -1213,3 +1213,55 @@ textarea.meta-desc-lg.edit-input{
   font-size:.95rem;cursor:pointer;overflow-wrap:anywhere;flex:none;
 }
 .ai-menu-item.on{background:var(--acc);color:#111;font-weight:600}
+
+
+/* Información: bloque IA */
+.info-sec.info-sec-ai{color:#7dd3fc}
+
+/* Botón búsqueda avanzada en cabecera */
+.search-filters-btn{min-width:44px;width:44px;padding:0}
+.search-filters-btn svg{display:block;width:22px;height:22px}
+
+/* Búsqueda y filtros */
+.sf-root{padding:0 0 calc(var(--sab) + 1rem)}
+.sf-status{padding:1rem .9rem;color:var(--mut)}
+.sf-panel{padding:.5rem .75rem .75rem;display:flex;flex-direction:column;gap:.55rem;background:var(--card);margin:0 .75rem .5rem;border-radius:14px}
+.sf-field{display:flex;flex-direction:column;gap:.25rem}
+.sf-label{font-size:.78rem;font-weight:650;color:var(--mut);letter-spacing:.02em}
+.sf-select,.sf-input{
+  height:42px;border:0;border-radius:10px;background:#121316;color:var(--fg);
+  padding:0 .85rem;font:inherit;width:100%;
+}
+.sf-clear{width:100%;margin-top:.25rem}
+.sf-summary{
+  display:flex;flex-direction:column;gap:.55rem;
+  padding:.35rem .9rem .75rem;font-size:.9rem;font-weight:600;
+}
+.sf-tabs{display:flex;gap:6px;flex-wrap:wrap}
+.sf-tab{
+  flex:1;min-width:calc(33% - 6px);height:40px;border:0;border-radius:10px;
+  background:#1c1d22;color:var(--fg);font:inherit;font-size:.82rem;font-weight:600;cursor:pointer;
+}
+.sf-tab.on{background:var(--acc);color:#111}
+.sf-results{
+  margin:0 .75rem;max-height:min(62vh,560px);overflow:auto;-webkit-overflow-scrolling:touch;
+  border-radius:14px;background:var(--card);padding:6px;
+}
+.sf-empty{padding:1.5rem;color:var(--mut);text-align:center}
+.sf-row{
+  display:block;width:100%;text-align:left;padding:12px 12px;margin:0 0 4px;
+  border:0;border-radius:10px;background:#ffffff08;color:inherit;font:inherit;cursor:pointer;
+}
+.sf-row:active{opacity:.85}
+.sf-row-meta{display:flex;flex-direction:column;gap:.15rem}
+.sf-row-meta b{font-weight:600;line-height:1.3}
+.sf-row-meta small{color:var(--mut);font-size:.82rem}
+.sf-row-bits{color:var(--acc)!important;font-weight:650!important}
+.sf-group-head{margin:4px 0 0}
+.sf-group-btn{
+  display:flex;flex-direction:column;align-items:flex-start;gap:.15rem;
+  width:100%;text-align:left;padding:12px;border:0;border-radius:10px;
+  background:#ffffff10;color:inherit;font:inherit;cursor:pointer;
+}
+.sf-group-btn small{color:var(--mut)}
+.sf-group-body{padding:4px 0 8px 8px;border-left:2px solid #ffffff14;margin:0 0 6px 8px}

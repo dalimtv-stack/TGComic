@@ -30,19 +30,42 @@ export function createInfoEdit(d) {
     go, show, stack, natural,
   } = d;
 
-  /** Bloque "WebP" (amarillo) con nº de cómics y tamaño de las copias WebP; solo si las hay. */
+  /** Bloque WebP: desglose Media / Baja si existen ambas. */
   const addWebpInfo = (body, row, st) => {
     if (!st?.webp?.n) return;
     body.append(el('div', 'info-sec info-sec-webp', 'WebP'));
-    body.append(row('Cómics', String(st.webp.n)));
-    body.append(row('Tamaño', formatBytes(st.webp.bytes)));
+    const mid = st.webpMid || { n: 0, bytes: 0 };
+    const low = st.webpLow || { n: 0, bytes: 0 };
+    if (mid.n && low.n) {
+      body.append(row('Media [WebP]', mid.n + ' cómics · ' + formatBytes(mid.bytes)));
+      body.append(row('Baja [2400px]', low.n + ' cómics · ' + formatBytes(low.bytes)));
+      body.append(row('Total WebP', st.webp.n + ' cómics · ' + formatBytes(st.webp.bytes)));
+    } else if (mid.n) {
+      body.append(row('Media [WebP]', mid.n + ' cómics · ' + formatBytes(mid.bytes)));
+    } else if (low.n) {
+      body.append(row('Baja [2400px]', low.n + ' cómics · ' + formatBytes(low.bytes)));
+    } else {
+      body.append(row('Cómics', String(st.webp.n)));
+      body.append(row('Tamaño', formatBytes(st.webp.bytes)));
+    }
   };
-  /** Bloque "Mejorados por IA" con nº de cómics y tamaño; solo si los hay. */
+  /** Bloque "Mejorados por IA". */
   const addAiInfo = (body, row, st) => {
     if (!st?.ai?.n) return;
     body.append(el('div', 'info-sec info-sec-ai', 'Mejorados por IA'));
     body.append(row('Cómics', String(st.ai.n)));
     body.append(row('Tamaño', formatBytes(st.ai.bytes)));
+  };
+  /** Totales de todos los archivos físicos. */
+  const addTotalInfo = (body, row, st) => {
+    const tot = st?.total || {
+      n: (st?.main?.n || 0) + (st?.webp?.n || 0) + (st?.ai?.n || 0),
+      bytes: (st?.main?.bytes || 0) + (st?.webp?.bytes || 0) + (st?.ai?.bytes || 0),
+    };
+    if (!tot.n) return;
+    body.append(el('div', 'info-sec', 'Total archivos'));
+    body.append(row('Número de archivos', String(tot.n)));
+    body.append(row('Tamaño total', formatBytes(tot.bytes)));
   };
 
   // Aliases for helpers that may be on d as functions defined later
@@ -1316,6 +1339,7 @@ function showSeriesInfo(ch, seriesLabel, files) {
     body.append(row('Tamaño total', formatBytes(bytes)));
     addWebpInfo(body, row, st);
     addAiInfo(body, row, st);
+    try { addTotalInfo(body, row, st); } catch (_) {}
     body.append(el('div', 'info-sec', 'Desarrollo'));
     body.append(resolveCoverRow(row('Portada', describeCoverSource(seriesCoverKey(ch, seriesLabel), ch, files, 'series')), seriesCoverKey(ch, seriesLabel), ch, files, 'series'));
 
@@ -2421,17 +2445,26 @@ async function showGroupInfo(originalName) {
     document.querySelector('.info-frame.group-info')?.remove();
     const display = groupDisplayName(originalName);
     const chs = getLIB().filter((c) => c.group === originalName);
-    let comics = 0, bytes = 0, wn = 0, wb = 0, ain = 0, aib = 0;
+    let comics = 0, bytes = 0;
+    const stAgg = {
+      main: { n: 0, bytes: 0 },
+      webpMid: { n: 0, bytes: 0 },
+      webpLow: { n: 0, bytes: 0 },
+      webp: { n: 0, bytes: 0 },
+      ai: { n: 0, bytes: 0 },
+      total: { n: 0, bytes: 0 },
+    };
     for (const ch of chs) {
       const files = (await kv.get('f:' + ch.id)) || [];
       const st = splitStats(files);
       comics += st.main.n;
       bytes += st.main.bytes;
-      wn += st.webp.n;
-      wb += st.webp.bytes;
-      ain += st.ai?.n || 0;
-      aib += st.ai?.bytes || 0;
+      for (const k of ['main', 'webpMid', 'webpLow', 'webp', 'ai', 'total']) {
+        stAgg[k].n += st[k]?.n || 0;
+        stAgg[k].bytes += st[k]?.bytes || 0;
+      }
     }
+    const st = stAgg;
     const frame = el('div', 'info-frame group-info');
     const box = el('div', 'info-box');
     const head = el('div', 'info-head');
@@ -2451,8 +2484,9 @@ async function showGroupInfo(originalName) {
     body.append(row('Canales', String(chs.length)));
     body.append(row('Cómics (listados)', String(comics)));
     body.append(row('Tamaño total', formatBytes(bytes)));
-    addWebpInfo(body, row, { webp: { n: wn, bytes: wb } });
-    addAiInfo(body, row, { ai: { n: ain, bytes: aib } });
+    addWebpInfo(body, row, st);
+    addAiInfo(body, row, st);
+    try { addTotalInfo(body, row, st); } catch (_) {}
     box.append(head, body);
     frame.append(box);
   // No cerrar al pulsar fuera: solo × / Cancelar
@@ -2706,6 +2740,7 @@ async function showChannelInfo(ch) {
     body.append(row('Tamaño total', formatBytes(bytes)));
     addWebpInfo(body, row, st);
     addAiInfo(body, row, st);
+    try { addTotalInfo(body, row, st); } catch (_) {}
     body.append(el('div', 'info-sec', 'Desarrollo'));
     body.append(resolveCoverRow(row('Portada', describeCoverSource(channelCoverKey(ch), ch, files, 'channel')), channelCoverKey(ch), ch, files, 'channel'));
     box.append(head, body);

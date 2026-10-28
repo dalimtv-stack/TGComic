@@ -187,13 +187,37 @@ export function collapseVersions(files, nameOf = sourceNameOf) {
  *   main = archivos sin etiqueta WebP (Alta)   ·   webp = copias [WebP] y [2400px][WebP]
  */
 export function splitStats(files) {
-  const out = { main: { n: 0, bytes: 0 }, webp: { n: 0, bytes: 0 }, ai: { n: 0, bytes: 0 } };
+  const out = {
+    main: { n: 0, bytes: 0 },
+    webpMid: { n: 0, bytes: 0 },
+    webpLow: { n: 0, bytes: 0 },
+    webp: { n: 0, bytes: 0 },
+    ai: { n: 0, bytes: 0 },
+    total: { n: 0, bytes: 0 },
+  };
   for (const f of flattenVersions(files)) {
     const pq = parseQuality(sourceNameOf(f));
-    // Versiones [Mejora-IA] se cuentan aparte
-    const bucket = pq.ai ? out.ai : (pq.q === 'high' ? out.main : out.webp);
-    bucket.n++;
-    bucket.bytes += Number(f?.size) || 0;
+    const sz = Number(f?.size) || 0;
+    out.total.n++;
+    out.total.bytes += sz;
+    if (pq.ai) {
+      out.ai.n++;
+      out.ai.bytes += sz;
+    } else if (pq.q === 'high') {
+      out.main.n++;
+      out.main.bytes += sz;
+    } else if (pq.q === 'low') {
+      out.webpLow.n++;
+      out.webpLow.bytes += sz;
+      out.webp.n++;
+      out.webp.bytes += sz;
+    } else {
+      // mid (WebP sin px)
+      out.webpMid.n++;
+      out.webpMid.bytes += sz;
+      out.webp.n++;
+      out.webp.bytes += sz;
+    }
   }
   return out;
 }
