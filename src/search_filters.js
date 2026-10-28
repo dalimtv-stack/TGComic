@@ -350,38 +350,47 @@ export function createSearchFilters(d) {
   }
 
   function renderFiltersView(opts = {}) {
-    const forceFetch = !!opts.forceFetch;
+    // forceFetch solo cuenta la PRIMERA vez que se monta esta entrada de stack.
+    // Al volver del visor, show() re-ejecuta render: NUNCA debe volver a scrapear.
+    const wantFetch = !!opts.forceFetch;
+    if (wantFetch) corpusCache = null;
 
     go('Búsqueda y Filtros', async (entry) => {
-      // —— Si ya estaba construida y hay caché: solo repintar, SIN “Actualizando…” ——
-      if (entry._sfReady && corpusCache && !forceFetch) {
+      entry._sfView = true;
+
+      // Ya montada esta entrada (p. ej. vuelta desde el visor) → solo repintar
+      if (entry._sfBuilt && corpusCache) {
+        paintUI(entry, corpusCache);
+        return;
+      }
+
+      // Hay caché de una visita anterior y no pedimos actualizar → usarla sin red
+      if (corpusCache && !wantFetch) {
+        entry._sfBuilt = true;
         paintUI(entry, corpusCache);
         return;
       }
 
       const root = el('div', 'sf-root');
-      const status = el('p', 'sf-status', forceFetch ? 'Actualizando canales…' : 'Cargando…');
+      const status = el('p', 'sf-status', wantFetch ? 'Actualizando canales…' : 'Cargando…');
       root.append(status);
       try { getApp().replaceChildren(root); } catch (_) {}
 
-      let corpus = corpusCache;
-      if (forceFetch || !corpus) {
-        try {
-          corpus = await buildCorpus({
-            forceFetch,
-            onProgress: (i, t, name) => {
-              status.textContent = t ? `Actualizando ${i} / ${t}: ${name}` : 'Cargando…';
-            },
-          });
-          corpusCache = corpus;
-        } catch (e) {
-          status.textContent = 'Error: ' + (e?.message || e);
-          return;
-        }
+      let corpus;
+      try {
+        corpus = await buildCorpus({
+          forceFetch: wantFetch,
+          onProgress: (i, tot, name) => {
+            status.textContent = tot ? `Actualizando ${i} / ${tot}: ${name}` : 'Cargando…';
+          },
+        });
+        corpusCache = corpus;
+      } catch (e) {
+        status.textContent = 'Error: ' + (e?.message || e);
+        return;
       }
 
-      entry._sfReady = true;
-      entry._sfRoot = root;
+      entry._sfBuilt = true;
       paintUI(entry, corpus);
     });
   }
@@ -694,27 +703,23 @@ export function createSearchFilters(d) {
           paint();
         }));
 
-      // Canal solo si hay editorial
-      const channelDisabled = !filterState.editorial;
-      grid.append(mkFilterRow('Canal', filterState.channel,
-        channelDisabled
-          ? [['', 'Elige editorial primero']]
-          : [['', 'Todos'], ...optsSel.channels.map(([k, v]) => [k, v])],
-        (v) => {
-          filterState.channel = v;
-          filterState.series = '';
-          paint();
-        },
-        { disabled: channelDisabled }));
+      // Canal: solo visible si hay editorial elegida (como Ficha incompleta → Campo vacío)
+      if (filterState.editorial) {
+        grid.append(mkFilterRow('Canal', filterState.channel,
+          [['', 'Todos'], ...optsSel.channels.map(([k, v]) => [k, v])],
+          (v) => {
+            filterState.channel = v;
+            filterState.series = '';
+            paint();
+          }));
+      }
 
-      // Serie solo si hay canal
-      const seriesDisabled = !filterState.channel;
-      grid.append(mkFilterRow('Serie', filterState.series,
-        seriesDisabled
-          ? [['', 'Elige canal primero']]
-          : [['', 'Todas'], ...optsSel.series.map(([k, v]) => [k, v])],
-        (v) => { filterState.series = v; paint(); },
-        { disabled: seriesDisabled }));
+      // Serie: solo visible si hay canal elegido
+      if (filterState.channel) {
+        grid.append(mkFilterRow('Serie', filterState.series,
+          [['', 'Todas'], ...optsSel.series.map(([k, v]) => [k, v])],
+          (v) => { filterState.series = v; paint(); }));
+      }
 
       grid.append(mkFilterRow('Calidad', filterState.quality, [
         ['', 'Cualquiera'], ['high', 'Alta (Original)'], ['mid', 'Media [WebP]'],
