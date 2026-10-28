@@ -1412,9 +1412,21 @@ html:has(.sf-root){
 .sf-variant-original{opacity:.95}
 
 .sf-badge-fmt{background:#ffffff10;color:#b8b7b2;font-weight:650}
-.sf-variant-right{flex:none;margin-left:auto}
-.sf-variant-size{color:var(--acc)!important;font-weight:650!important;font-size:.8rem!important;white-space:nowrap}
-.sf-variant-row{display:flex;align-items:center;justify-content:space-between;gap:.5rem}
+/* Versiones: tamaño | formato | etiquetas, columnas fijas a la izquierda */
+.sf-variant-row{
+  display:flex;align-items:center;justify-content:flex-start;gap:8px;
+  width:100%;text-align:left;
+}
+.sf-variant-size{
+  flex:none;width:4.8rem;text-align:right;
+  color:var(--acc)!important;font-weight:650!important;font-size:.8rem!important;
+  white-space:nowrap;font-variant-numeric:tabular-nums;
+}
+.sf-badge-fmt{
+  flex:none;min-width:2.4rem;text-align:center;
+}
+.sf-variant-left{display:inline-flex;flex-wrap:wrap;gap:3px;align-items:center;min-width:0}
+
 .sf-entry-actions{width:100%}
 .sf-entry-btn{
   width:100%!important;

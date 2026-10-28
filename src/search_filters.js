@@ -485,17 +485,14 @@ export function createSearchFilters(d) {
       const addVariant = (badgeNodes, file, isOriginal) => {
         const vr = el('button', 'sf-variant-row' + (isOriginal ? ' sf-variant-original' : ''));
         vr.type = 'button';
-        const left = el('span', 'sf-variant-left');
-        for (const n of badgeNodes) left.append(n);
-        // Tipo de archivo (CBZ, CBR…)
-        const fmt = fileFormatLabel(isOriginal ? it.f : file);
-        if (fmt) left.append(el('span', 'sf-badge sf-badge-fmt', fmt));
-        vr.append(left);
-        // Tamaño siempre visible
+        // Orden: tamaño | formato | etiquetas  (todo a la izquierda, columnas alineadas)
         const sz = Number(file?.size != null ? file.size : (isOriginal ? it.size : 0)) || 0;
-        const right = el('span', 'sf-variant-right');
-        right.append(el('small', 'sf-variant-size', sz ? formatBytes(sz) : '—'));
-        vr.append(right);
+        const sizeEl = el('span', 'sf-variant-size', sz ? formatBytes(sz) : '—');
+        const fmt = fileFormatLabel(isOriginal ? it.f : file) || '—';
+        const fmtEl = el('span', 'sf-badge sf-badge-fmt', fmt);
+        const labs = el('span', 'sf-variant-left');
+        for (const n of badgeNodes) labs.append(n);
+        vr.append(sizeEl, fmtEl, labs);
         const target = isOriginal ? it.f : { ...it.f, ...file, id: file.id, size: file?.size ?? it.f?.size };
         vr.onclick = (ev) => {
           try { ev.preventDefault(); ev.stopPropagation(); } catch (_) {}
