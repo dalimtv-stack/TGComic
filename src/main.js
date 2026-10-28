@@ -1179,6 +1179,7 @@ function show() {
   }
   try { repackTool?.syncFloatingUi?.(); } catch (_) {}
   try { uploadTool?.syncFloatingUi?.(); } catch (_) {}
+  try { mountSearchFiltersButton(); } catch (_) {}
   // Render async (canal/serie): reaplicar scroll varias veces
   requestAnimationFrame(() => {
     applyScroll();
@@ -1830,10 +1831,13 @@ try {
     groupDisplayName, channelDisplayName, seriesDisplayName, comicDisplayName,
     comicDisplay, comicSourceName, groupSeries, seriesOverrideFor,
     isComicRead, readProgress, formatBytes, sizeLabel,
-    splitStats, parseComicCaption, parseQuality, sourceNameOf, flattenVersions,
-    comicNeedsCvFill, parseComicName, issueDisplay,
+    parseComicCaption, parseQuality, sourceNameOf, flattenVersions,
+    parseComicName, issueDisplay,
     natural, appAlert,
+    get comicSheetOpts() { return viewsApi.comicSheetOpts; },
+    get seriesSheetOpts() { return viewsApi.seriesSheetOpts; },
     comicCover, seriesCoverNode, channelCoverNode,
+    locks, ART,
     app: document.querySelector('#app'),
   });
 } catch (e) { console.warn('[search_filters]', e); }
@@ -1843,6 +1847,12 @@ function mountSearchFiltersButton() {
     const act = document.querySelector('#actions');
     if (!act) return;
     let btn = act.querySelector('.search-filters-btn');
+    // Solo en Home (stack length 1) y fuera del visor
+    const onHome = Array.isArray(stack) && stack.length <= 1 && !document.getElementById('rd');
+    if (!onHome) {
+      if (btn) btn.hidden = true;
+      return;
+    }
     if (!btn) {
       btn = el('button', 'btn search-filters-btn');
       btn.type = 'button';
@@ -1858,7 +1868,7 @@ function mountSearchFiltersButton() {
         searchFiltersApi?.showSearchEntryDialog?.();
       };
     }
-    btn.hidden = !!document.getElementById('rd');
+    btn.hidden = false;
   } catch (_) {}
 }
 try {

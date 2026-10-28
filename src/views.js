@@ -2072,5 +2072,7 @@ function seriesView(ch, s0, files) {
     channelsView,
     filesView,
     seriesView,
+    comicSheetOpts,
+    seriesSheetOpts,
   };
 }
