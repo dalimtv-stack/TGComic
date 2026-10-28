@@ -115,21 +115,41 @@ export function createInfoEdit(d) {
     try { window.dispatchEvent(new CustomEvent('tgcomic:changed')); } catch (_) {}
   }
   /** Texto legible con el origen de la portada de un canal ('channel') o serie ('series'). */
+  const coverOriginLs = (key) => 'device:coverOrigin:' + key;
+  function recordCoverOrigin(key, origin) {
+    try { if (key) localStorage.setItem(coverOriginLs(key), JSON.stringify(origin || null)); } catch (_) {}
+  }
+  function fileFullLabel(f, ch) {
+    if (!f) return '';
+    const raw = String(f.name || '').trim();
+    let disp = '';
+    try { disp = comicDisplay(comicSourceName(f), ch?.name) || ''; } catch (_) {}
+    if (disp && raw && disp !== raw) return disp + ' — archivo: ' + raw;
+    return raw || disp;
+  }
+  /** Texto legible con el origen de la portada de un canal ('channel') o serie ('series'). */
   function describeCoverSource(key, ch, files, kind) {
     try {
       const src = getCoverSrc(key);
       const list = Array.isArray(files) ? files : [];
-      if (src?.t === 'gh') return 'GitHub' + (src.file ? ': ' + src.file : (src.url ? ': ' + src.url : ''));
-      if (src?.t === 'url') return 'URL: ' + src.url;
+      const flat = list.flatMap((x) => [x, ...(Array.isArray(x?.variants) ? x.variants : [])]).filter(Boolean);
+      if (src?.t === 'gh') return 'Elegida: GitHub — ' + (src.file || src.url || '');
+      if (src?.t === 'url') return 'Elegida: URL — ' + src.url;
       if (src?.t === 'comic') {
-        const f = list.find((x) => String(x.id) === String(src.id))
-          || list.flatMap((x) => (Array.isArray(x.variants) ? x.variants : [])).find((x) => String(x?.id) === String(src.id));
-        const name = f ? (comicDisplay(comicSourceName(f), ch?.name) || f.name) : ('id ' + src.id);
-        return 'Cómic: ' + name;
+        const f = flat.find((x) => String(x.id) === String(src.id));
+        return 'Elegida: cómic — ' + (f ? fileFullLabel(f, ch) : ('id ' + src.id + ' (no encontrado en la lista)'));
       }
-      if (localStorage.getItem(coverLocalLs(key)) === '1') return 'Imagen del dispositivo (solo en este dispositivo)';
-      if (kind === 'channel') return 'Predeterminada (GitHub si existe; si no, primer cómic del canal)';
-      return 'Automática (primer número disponible de la serie)';
+      if (localStorage.getItem(coverLocalLs(key)) === '1') return 'Elegida: imagen del dispositivo (solo en este dispositivo)';
+      let o = null;
+      try { o = JSON.parse(localStorage.getItem(coverOriginLs(key)) || 'null'); } catch (_) {}
+      if (o?.t === 'gh') return 'Predeterminada: GitHub — ' + (o.file || o.url || '');
+      if (o?.t === 'auto') {
+        const f = flat.find((x) => String(x.id) === String(o.id));
+        return 'Automática: cómic — ' + (f ? fileFullLabel(f, ch) : (o.name || ('id ' + o.id)))
+          + (o.pos ? ' (posición ' + o.pos + (o.skipped ? '; los anteriores no tenían portada disponible' : '') + ')' : '');
+      }
+      if (kind === 'channel') return 'Predeterminada: aún sin determinar (GitHub si existe; si no, primer cómic). Abre el canal para calcularla.';
+      return 'Automática: aún sin determinar (primer número con portada). Abre la serie para calcularla.';
     } catch (_) { return '—'; }
   }
   /** Descarga una imagen desde una URL. Si el servidor bloquea CORS, usa un proxy de imágenes. */
@@ -1714,13 +1734,19 @@ async function firstAvailableCover(ch, files) {
     if (ea !== eb) return ea - eb;
     return String(a?.name || '').localeCompare(String(b?.name || ''), undefined, { numeric: true });
   });
+  let pos = 0;
   for (const f of flat) {
+    pos++;
     if (!f?.id) continue;
     try {
       const b = await getCover(ch, f);
-      if (b instanceof Blob && b.size) return b;
+      if (b instanceof Blob && b.size) {
+        firstAvailableCover.last = { t: 'auto', id: f.id, name: String(f.name || ''), pos, skipped: pos > 1 };
+        return b;
+      }
     } catch (_) {}
   }
+  firstAvailableCover.last = null;
   return null;
 }
 
@@ -1750,6 +1776,7 @@ async function getSeriesCoverBlob(ch, seriesLabel, files) {
   } catch (_) {}
   const generated = await firstAvailableCover(ch, files);
   if (generated instanceof Blob && generated.size) {
+    recordCoverOrigin(key, firstAvailableCover.last);
     try { await setSeriesCoverBlob(ch, seriesLabel, generated); } catch (_) {}
     try {
       const cached = await kv.get(key);
@@ -2045,6 +2072,7 @@ async function getChannelCoverBlob(ch, files) {
   } catch (_) {}
   const generated = await firstAvailableCover(ch, files);
   if (generated instanceof Blob && generated.size) {
+    recordCoverOrigin(channelCoverKey(ch), firstAvailableCover.last);
     try { await setChannelCoverBlob(ch, generated); } catch (_) {}
     try {
       const cached = await kv.get(key);
@@ -2149,6 +2177,12 @@ function channelCoverNode(ch, files) {
     try {
       const gh = await getGithubChannelArtBlob(ch);
       if (gh instanceof Blob && gh.size) {
+        try {
+          const m = await kv.get('art:channels:' + artNorm((ch?.name || '').normalize('NFC').trim()));
+          const u = m?.url || '';
+          let file = u; try { file = decodeURIComponent(u.split('/').pop().split('?')[0]); } catch (_) {}
+          recordCoverOrigin(channelCoverKey(ch), { t: 'gh', url: u, file });
+        } catch (_) {}
         showOnHost(gh);
         return;
       }
@@ -2159,6 +2193,7 @@ function channelCoverNode(ch, files) {
       const comic = await firstAvailableCover(ch, files);
       if (comic) {
         showOnHost(comic);
+        recordCoverOrigin(channelCoverKey(ch), firstAvailableCover.last);
         try { await setChannelCoverBlob(ch, comic); } catch (_) {}
         return;
       }
