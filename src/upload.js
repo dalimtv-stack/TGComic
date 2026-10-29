@@ -224,7 +224,12 @@ export function createUploadTool(d) {
     const ch = String(channel || '').trim();
     const ser = String(series || '').trim();
     const num = String(number || '').trim();
-    const inf = String(info || '').trim();
+    // Quitar guiones sueltos al inicio/final del info (evita "#001 - - [Traducido]")
+    const inf = String(info || '')
+      .replace(/^\s*[-–—:]+\s*/g, '')
+      .replace(/\s*[-–—:]+\s*$/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
     let body = '';
     if (ser && num) body = `${ser} #${num}`;
     else if (ser) body = ser;
@@ -259,6 +264,12 @@ export function createUploadTool(d) {
       if (t && !/^webp$/i.test(t)) extras.push(t);
       return ' ';
     }).replace(/\s+/g, ' ').trim();
+    // Tras quitar [Traducido] etc. queda a menudo "Serie #001 -" → limpiar guiones/colons sobrantes
+    base = base
+      .replace(/\s*[-–—:]+\s*$/g, '')
+      .replace(/\s*[-–—:]+\s*(?=\[)/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
 
     const chName = String(channelName || '').trim();
     if (chName) {
@@ -271,7 +282,12 @@ export function createUploadTool(d) {
 
     const ISSUE_TAG = '(?:\\d+(?:\\.\\d+)?[a-zA-Z]?(?![\\w.])|(?:Special|Especial|Extras|Extra|Anual|Annual|[OÓoó]mnibus|Integral|One[\\s-]?Shot|OneShot)(?![A-Za-zÀ-ÿ]))';
     const tags = extras.length ? extras.map((x) => '[' + x + ']').join(' ') : '';
-    const joinInfo = (a, b) => [a, b].filter(Boolean).join(' ').trim();
+    const cleanInfoPart = (s) => String(s || '')
+      .replace(/^\s*[-–—:]+\s*/g, '')
+      .replace(/\s*[-–—:]+\s*$/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const joinInfo = (a, b) => [cleanInfoPart(a), cleanInfoPart(b)].filter(Boolean).join(' ').trim();
     const hint = String(seriesHint || '').trim();
 
     // Contexto de serie: el resto del nombre es #n / info
