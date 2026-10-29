@@ -565,17 +565,44 @@ export function createSearchFilters(d) {
       tog.title = 'Versiones';
       row.append(tog);
 
-      const openVersion = (file) => {
+      /**
+       * El reader agrupa por entrada principal y aplica pref('quality').
+       * Hay que pasar el holder (it.f) + quality explícita, o el stub IA con su id.
+       */
+      /**
+       * API del reader (reader-16):
+       *   openComic(ch, holder, queue, { quality: 'high'|'mid'|'low' })
+       *   openComic(ch, holder, queue, { ai: idMejora })
+       * Siempre el holder (it.f con variants/ai); la versión la elige opts.
+       */
+      const openVersion = (kind, file) => {
         try {
           const results = root.querySelector('.sf-results');
           if (results) uiState.scrollTop = results.scrollTop;
         } catch (_) {}
-        // Abrir exactamente el file de la versión pulsada (id propio de WebP/IA/original)
-        openComic?.(it.ch, file, queue && queue.length ? queue : [file]);
+        const qlist = queue && queue.length ? queue : [it.f];
+        // Asegurar variants/ai en el holder por si el de la cola no los trae
+        let holder = it.f;
+        try {
+          if (it.variants || it.aiList?.length) {
+            holder = {
+              ...it.f,
+              ...(it.variants ? { variants: it.variants } : {}),
+              ...(it.aiList?.length ? { ai: it.aiList } : {}),
+            };
+          }
+        } catch (_) {}
+        if (kind === 'ai' && file?.id != null) {
+          openComic?.(it.ch, holder, qlist, { ai: file.id });
+          return;
+        }
+        const q = (kind === 'mid' || kind === 'low' || kind === 'high') ? kind : 'high';
+        openComic?.(it.ch, holder, qlist, { quality: q });
       };
 
-      const addVariant = (badgeNodes, file, isOriginal) => {
-        if (!file && !isOriginal) return;
+      const addVariant = (badgeNodes, file, kind) => {
+        if (kind !== 'high' && kind !== 'ai' && !file) return;
+        const isOriginal = kind === 'high';
         const vr = el('button', 'sf-variant-row' + (isOriginal ? ' sf-variant-original' : ''));
         vr.type = 'button';
         const src = isOriginal ? it.f : file;
@@ -589,7 +616,7 @@ export function createSearchFilters(d) {
 
         vr.onclick = (ev) => {
           try { ev.preventDefault(); ev.stopPropagation(); } catch (_) {}
-          openVersion(src);
+          openVersion(kind, src);
         };
         vr.oncontextmenu = (ev) => {
           try { ev.preventDefault(); ev.stopPropagation(); } catch (_) {}
@@ -601,15 +628,15 @@ export function createSearchFilters(d) {
         nest.append(vr);
       };
 
-      addVariant([el('span', 'sf-badge sf-badge-orig', 'Original')], it.f, true);
+      addVariant([el('span', 'sf-badge sf-badge-orig', 'Original')], it.f, 'high');
       if (it.variants?.mid) {
-        addVariant([el('span', 'sf-badge sf-badge-webp', 'WebP')], it.variants.mid, false);
+        addVariant([el('span', 'sf-badge sf-badge-webp', 'WebP')], it.variants.mid, 'mid');
       }
       if (it.variants?.low) {
         addVariant([
           el('span', 'sf-badge sf-badge-low', '2400px'),
           el('span', 'sf-badge sf-badge-webp', 'WebP'),
-        ], it.variants.low, false);
+        ], it.variants.low, 'low');
       }
       if (Array.isArray(it.aiList)) {
         for (const a of it.aiList) {
@@ -617,7 +644,7 @@ export function createSearchFilters(d) {
           try { model = (aiLabel && aiLabel(sourceNameOf?.(a) || a.name)) || ''; } catch (_) {}
           const nodes = [el('span', 'sf-badge sf-badge-ai', 'IA')];
           if (model) nodes.push(el('span', 'sf-badge sf-badge-model', model));
-          addVariant(nodes, a, false);
+          addVariant(nodes, a, 'ai');
         }
       }
 
