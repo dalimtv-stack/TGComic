@@ -873,7 +873,36 @@ export function createSearchFilters(d) {
       for (const g of groups) paintChannelBlock(host, g.ch, g.channelName, g.items);
     };
 
-    const paint = () => {
+    const paintResultsOnly = () => {
+      saveState();
+      const filtered = sortResults(applyFilters(corpus, filterState), filterState.sort);
+      const summary = root.querySelector('.sf-summary');
+      const results = root.querySelector('.sf-results');
+      if (!summary || !results) {
+        paint();
+        return;
+      }
+      const bytes = filtered.reduce((s, it) => s + (it.size || 0), 0);
+      const countEl = summary.querySelector('.sf-summary-count');
+      if (countEl) {
+        countEl.textContent =
+          filtered.length + (filtered.length === 1 ? ' cómic encontrado' : ' cómics encontrados')
+          + ' (' + formatBytes(bytes) + ')';
+      }
+      // Mantener pestañas; solo refrescar listado
+      results.replaceChildren();
+      if (!filtered.length) {
+        results.append(el('p', 'sf-empty', 'Sin resultados con estos filtros.'));
+      } else if (filterState.groupMode === 'comics') {
+        paintComicsList(results, filtered);
+      } else if (filterState.groupMode === 'series') {
+        paintGroupedSeries(results, filtered);
+      } else {
+        paintGroupedChannels(results, filtered);
+      }
+    };
+
+    const paint = (opts = {}) => {
       saveState();
       const filtered = sortResults(applyFilters(corpus, filterState), filterState.sort);
       const optsSel = buildFilterOptions(corpus);
@@ -892,7 +921,6 @@ export function createSearchFilters(d) {
           paint();
         }));
 
-      // Canal: solo visible si hay editorial elegida (como Ficha incompleta → Campo vacío)
       if (filterState.editorial) {
         grid.append(mkFilterRow('Canal', filterState.channel,
           [['', 'Todos'], ...optsSel.channels.map(([k, v]) => [k, v])],
@@ -903,7 +931,6 @@ export function createSearchFilters(d) {
           }));
       }
 
-      // Serie: solo visible si hay canal elegido
       if (filterState.channel) {
         grid.append(mkFilterRow('Serie', filterState.series,
           [['', 'Todas'], ...optsSel.series.map(([k, v]) => [k, v])],
@@ -945,8 +972,12 @@ export function createSearchFilters(d) {
       qInp.autocomplete = 'off';
       let qTimer = null;
       qInp.oninput = () => {
+        // Actualizar estado sin destruir el input (evita perder el foco)
+        filterState.q = qInp.value;
         clearTimeout(qTimer);
-        qTimer = setTimeout(() => { filterState.q = qInp.value; paint(); }, 220);
+        qTimer = setTimeout(() => {
+          try { paintResultsOnly(); } catch (_) { paint(); }
+        }, 180);
       };
       qRow.append(qInp);
       panel.append(qRow);
@@ -964,10 +995,7 @@ export function createSearchFilters(d) {
         },
         () => {
           keywordOpen = true;
-          paint();
-          requestAnimationFrame(() => {
-            try { root.querySelector('.sf-qinput')?.focus(); } catch (_) {}
-          });
+          paint({ focusKeyword: true });
         },
         () => {
           showSortDialog((mode) => {
@@ -1024,7 +1052,21 @@ export function createSearchFilters(d) {
       results.addEventListener('scroll', () => {
         try { uiState.scrollTop = results.scrollTop; } catch (_) {}
       }, { passive: true });
+
+      if (opts.focusKeyword) {
+        requestAnimationFrame(() => {
+          try {
+            const inp = root.querySelector('.sf-qinput');
+            if (inp) {
+              inp.focus();
+              const len = inp.value.length;
+              try { inp.setSelectionRange(len, len); } catch (_) {}
+            }
+          } catch (_) {}
+        });
+      }
     };
+
 
     paint();
   }
