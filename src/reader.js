@@ -1045,16 +1045,14 @@ export function createReader(state, d) {
         img.draggable = false;
         sheet.append(img);
         pageHost.append(sheet);
-        // Barras superior/inferior: en modo página se anexan al final; aquí hay que anexarlas también
         rd.append(pageHost, top, bot);
 
         const pagePanelsCache = new Map();
         let panels = [];
         let pIdx = 0;
-        let fullView = true; // al cargar página: siempre página completa primero
+        let fullView = true;
 
         const layoutImage = () => {
-          // Medir el host de forma fiable (PC: clientWidth a veces 0 al primer frame)
           const rect = pageHost.getBoundingClientRect();
           const pw = Math.max(1, Math.round(rect.width || pageHost.clientWidth || window.innerWidth));
           const ph = Math.max(1, Math.round(rect.height || pageHost.clientHeight || window.innerHeight));
@@ -1079,35 +1077,40 @@ export function createReader(state, d) {
           const L = layoutImage();
           sheet.style.transformOrigin = '0 0';
           if (fullView || !panels.length) {
-            // Centrar página completa en el host
             sheet.style.transform = `translate3d(${L.offX}px,${L.offY}px,0)`;
+            sheet.style.boxShadow = 'none';
+            pageHost.classList.remove('panel-focus');
             return;
           }
           const panel = panels[Math.max(0, Math.min(panels.length - 1, pIdx))];
           if (!panel) {
             sheet.style.transform = `translate3d(${L.offX}px,${L.offY}px,0)`;
+            sheet.style.boxShadow = 'none';
+            pageHost.classList.remove('panel-focus');
             return;
           }
+          pageHost.classList.add('panel-focus');
           const margin = 0.04;
           const px = Math.max(0, panel.x - margin);
           const py = Math.max(0, panel.y - margin);
           const pwN = Math.min(1 - px, panel.w + margin * 2);
           const phN = Math.min(1 - py, panel.h + margin * 2);
           const scale = Math.min(L.pw / Math.max(1, pwN * L.dispW), L.ph / Math.max(1, phN * L.dispH));
-          // Centro de la viñeta en coords del sheet (sin off aún)
           const cx = (px + pwN / 2) * L.dispW;
           const cy = (py + phN / 2) * L.dispH;
           const tx = L.pw / 2 - cx * scale;
           const ty = L.ph / 2 - cy * scale;
           sheet.style.transform = `translate3d(${tx}px,${ty}px,0) scale(${scale})`;
+          // Oscurecer el resto del cómic fuera de la viñeta
+          sheet.style.boxShadow = '0 0 0 100vmax rgba(0,0,0,.62)';
         };
 
-        const loadPage = async (i, keepFull) => {
+        const loadPage = async (i, opts = {}) => {
           i = Math.max(0, Math.min(pages.length - 1, i));
           n = i;
           savePage(n);
           setCount();
-          fullView = keepFull !== false; // por defecto página completa
+          fullView = opts.fullView !== false;
           pIdx = 0;
           try {
             const u = await load(i);
@@ -1118,6 +1121,13 @@ export function createReader(state, d) {
             } else {
               panels = await detectPanelsFromUrl(u);
               pagePanelsCache.set(i, panels);
+            }
+            if (opts.enterLast && panels.length) {
+              fullView = false;
+              pIdx = panels.length - 1;
+            } else if (opts.enterFirst && panels.length) {
+              fullView = false;
+              pIdx = 0;
             }
             applyFocus();
             token++;
@@ -1135,53 +1145,81 @@ export function createReader(state, d) {
           applyFocus();
         };
 
-        const nextPanel = () => {
+        const nextPanel = async () => {
           if (fullView) {
-            if (panels.length) { enterPanel(0); return; }
-            if (n >= pages.length - 1) { showNextCard({ auto: false }); return; }
-            loadPage(n + 1);
-            return;
+            if (panels.length) { enterPanel(0); return true; }
+            if (n >= pages.length - 1) { showNextCard({ auto: false }); return false; }
+            await loadPage(n + 1);
+            return true;
           }
           if (pIdx < panels.length - 1) {
             pIdx++;
             applyFocus();
-            return;
+            return true;
           }
-          if (n >= pages.length - 1) { showNextCard({ auto: false }); return; }
-          loadPage(n + 1);
+          if (n >= pages.length - 1) { showNextCard({ auto: false }); return false; }
+          await loadPage(n + 1);
+          return true;
         };
-        const prevPanel = () => {
-          if (fullView) {
-            if (n <= 0) return;
-            loadPage(n - 1);
-            return;
-          }
-          if (pIdx > 0) {
+
+        const prevPanel = async () => {
+          // Dentro de viñetas: retroceder índice
+          if (!fullView && pIdx > 0) {
             pIdx--;
             applyFocus();
-            return;
+            return true;
           }
-          // primera viñeta → volver a página completa; otro toque ya cambia de página
-          fullView = true;
-          applyFocus();
+          // Primera viñeta → página anterior, última viñeta
+          if (!fullView && pIdx === 0) {
+            if (n <= 0) {
+              fullView = true;
+              applyFocus();
+              return true;
+            }
+            await loadPage(n - 1, { fullView: false, enterLast: true });
+            return true;
+          }
+          // Vista completa → página anterior (completa)
+          if (n <= 0) return false;
+          await loadPage(n - 1);
+          return true;
         };
 
         goToPage = (i) => loadPage(i);
 
-        pageHost.addEventListener('click', (ev) => {
+        // Play avanza viñetas
+        autoStep = async () => {
+          const more = await nextPanel();
+          return more !== false;
+        };
+
+        // Navegación por laterales (pointer para táctil + ratón)
+        let ptrStart = null;
+        pageHost.addEventListener('pointerdown', (ev) => {
           if (ev.target.closest?.('.bar, .btn, .mosaic, .play-fab, .auto-cfg-fab, .q-group, .spread-fab, .rd-info-btn')) return;
+          ptrStart = { x: ev.clientX, y: ev.clientY, id: ev.pointerId, t: Date.now() };
+        }, { passive: true });
+        pageHost.addEventListener('pointerup', (ev) => {
+          if (!ptrStart || ptrStart.id !== ev.pointerId) return;
+          const dx = ev.clientX - ptrStart.x;
+          const dy = ev.clientY - ptrStart.y;
+          const dt = Date.now() - ptrStart.t;
+          ptrStart = null;
+          if (dt > 500 || Math.abs(dx) > 18 || Math.abs(dy) > 18) return; // no es tap
           const rect = pageHost.getBoundingClientRect();
           const x = ev.clientX - rect.left;
           const w = rect.width || 1;
-          if (x < w * 0.28) prevPanel();
-          else if (x > w * 0.72) nextPanel();
-          else {
-            if (!panels.length) { toggleUI(); return; }
-            if (fullView) enterPanel(0);
-            else { fullView = true; applyFocus(); }
+          if (x < w * 0.30) {
+            prevPanel();
+            try { armUiHide(); } catch (_) {}
+          } else if (x > w * 0.70) {
+            nextPanel();
+            try { armUiHide(); } catch (_) {}
+          } else {
+            // Centro: mostrar/ocultar menú (no maximizar)
+            try { toggleUI(); } catch (_) {}
           }
-          try { armUiHide(); } catch (_) {}
-        });
+        }, { passive: true });
 
         const onWheelPanel = (e) => {
           const dy = e.deltaY || 0;
@@ -1209,7 +1247,7 @@ export function createReader(state, d) {
         loadPage(n);
         try { pokeUI(); } catch (_) {}
         try { armUiHide(); } catch (_) {}
-      } else if (!continuous) {
+            } else if (!continuous) {
         setRdClass('page fit-' + pref('fit', 'screen') + (pref('spread', '0') === '1' ? ' spread' : ''));
         const fit = el('button', 'btn');
         const pageHost = el('div', 'page-host');

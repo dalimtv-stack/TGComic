@@ -1455,6 +1455,7 @@ html:has(.sf-root){
 
 
 
+
 /* —— Modo Viñeta (panel flow) —— */
 #rd.panel-mode .page-host.panel-host{
   position:absolute;
@@ -1464,11 +1465,14 @@ html:has(.sf-root){
   touch-action:manipulation;
   z-index:1;
 }
+#rd.panel-mode .page-host.panel-host.panel-focus{
+  background:#000;
+}
 #rd.panel-mode .panel-sheet{
   position:absolute;
   left:0; top:0;
   will-change:transform;
-  transition:transform .22s ease;
+  transition:transform .22s ease, box-shadow .22s ease;
   line-height:0;
 }
 #rd.panel-mode .panel-sheet img{
@@ -1487,7 +1491,6 @@ html:has(.sf-root){
   pointer-events:auto!important;
 }
 
-/* Info entre IA y ajustes */
 #rd .rd-info-btn{
   position:fixed!important;
   bottom:calc(env(safe-area-inset-bottom,0px) + 62px)!important;
@@ -1508,9 +1511,44 @@ html:has(.sf-root){
   left:calc(50% - 24px - 8px - 40px - 4px - 40px - 4px - 40px - 4px - 40px)!important;
 }
 
-/* Panel info sobre el visor, viendo la página detrás */
-#rd ~ .info-frame,
-body > .info-frame,
-.info-frame{
-  z-index:200!important;
+/* iPhone vertical / pantallas estrechas: menos separación hacia doble página */
+@media (max-width: 430px) {
+  #rd .spread-fab,
+  #rd .play-fab,
+  #rd .auto-cfg-fab,
+  #rd .rd-info-btn,
+  #rd .q-group .btn,
+  #rd .q-group button{
+    width:36px!important;
+    height:36px!important;
+    min-width:36px!important;
+    min-height:36px!important;
+    max-width:36px!important;
+    max-height:36px!important;
+    border-radius:11px!important;
+  }
+  #rd .spread-fab{
+    margin-left:-18px!important;
+  }
+  #rd .play-fab{
+    left:calc(50% - 18px - 4px - 36px)!important;
+  }
+  #rd .auto-cfg-fab{
+    left:calc(50% - 18px - 4px - 36px - 2px - 36px)!important;
+  }
+  #rd .rd-info-btn{
+    left:calc(50% - 18px - 4px - 36px - 2px - 36px - 2px - 36px)!important;
+    width:36px!important; height:36px!important;
+  }
+  #rd .q-group{
+    left:calc(50% + 18px + 4px)!important;
+    gap:2px!important;
+  }
+  #rd .q-group .ai-btn{
+    left:calc(50% - 18px - 4px - 36px - 2px - 36px - 2px - 36px - 2px - 36px)!important;
+  }
+  #rd .play-fab svg,
+  #rd .auto-cfg-fab svg,
+  #rd .rd-info-btn svg,
+  #rd .q-group .q-btn svg{ width:18px!important; height:18px!important; }
 }
