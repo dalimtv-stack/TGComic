@@ -98,7 +98,18 @@ export function createReader(state, d) {
         i.onerror = rej;
         i.src = url;
       });
-      const maxW = 360;
+      const numP = (key, def, min, max) => {
+        let n = Number(pref(key, String(def)));
+        if (!Number.isFinite(n)) n = def;
+        return Math.max(min, Math.min(max, n));
+      };
+      const gutterMul = numP('panelGutter', 18, 5, 50) / 100;
+      const bandMin = numP('panelBandMin', 5, 1, 20) / 100;
+      const minArea = numP('panelMinArea', 4, 1, 30) / 100;
+      const maxW = numP('panelDetectW', 360, 160, 720);
+      const mergeGap = numP('panelMerge', 2, 0, 15) / 100;
+      const maxPanels = numP('panelMax', 24, 0, 60);
+
       const scale = Math.min(1, maxW / Math.max(1, im.naturalWidth));
       const w = Math.max(32, Math.round(im.naturalWidth * scale));
       const h = Math.max(32, Math.round(im.naturalHeight * scale));
@@ -126,7 +137,7 @@ export function createReader(state, d) {
         const a = Array.from(rowVar).sort((a, b) => a - b);
         return a[Math.floor(a.length / 2)] || 1;
       })();
-      const gutterRow = (y) => rowVar[y] < med * 0.18;
+      const gutterRow = (y) => rowVar[y] < med * gutterMul;
       const bands = [];
       let y = 0;
       while (y < h) {
@@ -135,7 +146,7 @@ export function createReader(state, d) {
         const y0 = y;
         while (y < h && !gutterRow(y)) y++;
         const y1 = y;
-        if (y1 - y0 > h * 0.04) bands.push([y0, y1]);
+        if (y1 - y0 > h * bandMin) bands.push([y0, y1]);
       }
       if (bands.length < 1) return [];
       const panels = [];
@@ -155,7 +166,7 @@ export function createReader(state, d) {
           const a = Array.from(colVar).sort((a, b) => a - b);
           return a[Math.floor(a.length / 2)] || 1;
         })();
-        const gutterCol = (x) => colVar[x] < cmed * 0.18;
+        const gutterCol = (x) => colVar[x] < cmed * gutterMul;
         let x = 0;
         const cols = [];
         while (x < w) {
@@ -164,17 +175,62 @@ export function createReader(state, d) {
           const x0 = x;
           while (x < w && !gutterCol(x)) x++;
           const x1 = x;
-          if (x1 - x0 > w * 0.06) cols.push([x0, x1]);
+          if (x1 - x0 > w * bandMin) cols.push([x0, x1]);
         }
         if (!cols.length) cols.push([0, w]);
         for (const [x0, x1] of cols) {
           panels.push({ x: x0 / w, y: y0 / h, w: (x1 - x0) / w, h: (y1 - y0) / h });
         }
       }
-      const filtered = panels.filter((p) => p.w * p.h > 0.04);
+      let filtered = panels.filter((p) => p.w * p.h > minArea);
       if (filtered.length <= 1) {
         const p = filtered[0];
         if (!p || (p.w > 0.85 && p.h > 0.85)) return [];
+      }
+      // Fusión de viñetas cercanas
+      if (mergeGap > 0 && filtered.length > 1) {
+        let changed = true;
+        while (changed) {
+          changed = false;
+          const next = [];
+          const used = new Array(filtered.length).fill(false);
+          for (let i = 0; i < filtered.length; i++) {
+            if (used[i]) continue;
+            let a = { ...filtered[i] };
+            for (let j = i + 1; j < filtered.length; j++) {
+              if (used[j]) continue;
+              const b = filtered[j];
+              const gapX = Math.max(0, Math.max(a.x, b.x) - Math.min(a.x + a.w, b.x + b.w));
+              const gapY = Math.max(0, Math.max(a.y, b.y) - Math.min(a.y + a.h, b.y + b.h));
+              const overlapX = a.x < b.x + b.w && b.x < a.x + a.w;
+              const overlapY = a.y < b.y + b.h && b.y < a.y + a.h;
+              const near = (overlapX && gapY <= mergeGap) || (overlapY && gapX <= mergeGap) || (gapX <= mergeGap && gapY <= mergeGap);
+              if (near) {
+                const x2 = Math.max(a.x + a.w, b.x + b.w);
+                const y2 = Math.max(a.y + a.h, b.y + b.h);
+                const x0 = Math.min(a.x, b.x);
+                const y0 = Math.min(a.y, b.y);
+                a = { x: x0, y: y0, w: x2 - x0, h: y2 - y0 };
+                used[j] = true;
+                changed = true;
+              }
+            }
+            used[i] = true;
+            next.push(a);
+          }
+          filtered = next;
+        }
+      }
+      // Orden lectura: arriba→abajo, izq→der
+      filtered.sort((a, b) => (a.y - b.y) || (a.x - b.x));
+      if (maxPanels > 0 && filtered.length > maxPanels) {
+        // Demasiadas: quedarse con las de mayor área
+        filtered = filtered
+          .map((p, i) => ({ p, i, a: p.w * p.h }))
+          .sort((u, v) => v.a - u.a)
+          .slice(0, maxPanels)
+          .sort((u, v) => u.i - v.i)
+          .map((u) => u.p);
       }
       return filtered;
     } catch {
@@ -1062,8 +1118,8 @@ export function createReader(state, d) {
             return;
           }
           pageHost.classList.add('panel-focus');
-          let cropN = Number(pref('panelCrop', '0'));
-          if (!Number.isFinite(cropN)) cropN = 0;
+          let cropN = Number(pref('panelCrop', '4'));
+          if (!Number.isFinite(cropN)) cropN = 4;
           cropN = Math.max(-30, Math.min(40, cropN)) / 100;
           const expandX = panel.w * cropN;
           const expandY = panel.h * cropN;
@@ -1161,69 +1217,71 @@ export function createReader(state, d) {
         };
 
         const prevPanel = async () => {
-          if (!fullView && pIdx > 0) {
+          // Orden inverso de nextPanel:
+          // next: fullView → 1ª viñeta → … → última → pág siguiente (full)
+          // prev: fullView → pág anterior última viñeta → … → 1ª → full de esa pág
+          if (fullView) {
+            if (n <= 0) return false;
+            await loadPage(n - 1, { fullView: false, enterLast: true });
+            // si no hay viñetas, loadPage deja fullView según opts; forzar full si vacío
+            if (!panels.length) {
+              fullView = true;
+              applyFocus();
+            }
+            return true;
+          }
+          if (pIdx > 0) {
             pIdx--;
             applyFocus();
             return true;
           }
-          if (!fullView && pIdx === 0) {
-            if (n <= 0) {
-              fullView = true;
-              applyFocus();
-              return true;
-            }
-            await loadPage(n - 1, { fullView: false, enterLast: true });
-            return true;
-          }
-          if (n <= 0) return false;
-          await loadPage(n - 1);
+          // Primera viñeta → vista completa de ESTA página (simétrico a entrar desde full a 1ª)
+          fullView = true;
+          panX = 0;
+          panY = 0;
+          applyFocus();
           return true;
         };
 
         goToPage = (i) => loadPage(i);
         autoStep = async () => (await nextPanel()) !== false;
 
+        // Tap laterales / centro + arrastre libre (como vertical) para pan en viñeta
         let ptrStart = null;
-        let panMode = false;
-        let panOrigin = null;
-        let longT = 0;
-        const clearLong = () => { clearTimeout(longT); longT = 0; };
+        let dragging = false;
+        let dragOrigin = null;
         pageHost.addEventListener('pointerdown', (ev) => {
           if (ev.target.closest && ev.target.closest('.bar, .btn, .mosaic, .play-fab, .auto-cfg-fab, .q-group, .spread-fab, .rd-info-btn')) return;
           ptrStart = { x: ev.clientX, y: ev.clientY, id: ev.pointerId, t: Date.now() };
-          panMode = false;
-          panOrigin = null;
-          clearLong();
-          longT = setTimeout(() => {
-            if (!ptrStart || fullView) return;
-            panMode = true;
-            panOrigin = { x: ptrStart.x, y: ptrStart.y, panX: panX, panY: panY };
-            pageHost.classList.add('panel-panning');
-          }, 350);
+          dragging = false;
+          dragOrigin = { x: ev.clientX, y: ev.clientY, panX: panX, panY: panY };
+          try { pageHost.setPointerCapture?.(ev.pointerId); } catch (_) {}
         }, { passive: true });
         pageHost.addEventListener('pointermove', (ev) => {
           if (!ptrStart || ptrStart.id !== ev.pointerId) return;
           const dx = ev.clientX - ptrStart.x;
           const dy = ev.clientY - ptrStart.y;
-          if (!panMode && (Math.abs(dx) > 12 || Math.abs(dy) > 12)) clearLong();
-          if (panMode && panOrigin) {
-            panX = panOrigin.panX + (ev.clientX - panOrigin.x);
-            panY = panOrigin.panY + (ev.clientY - panOrigin.y);
+          // Solo pan cuando hay viñeta enfocada (no en página completa)
+          if (!fullView && dragOrigin && (dragging || Math.abs(dx) > 6 || Math.abs(dy) > 6)) {
+            dragging = true;
+            panX = dragOrigin.panX + (ev.clientX - dragOrigin.x);
+            panY = dragOrigin.panY + (ev.clientY - dragOrigin.y);
             applyFocus();
           }
         }, { passive: true });
         pageHost.addEventListener('pointerup', (ev) => {
-          clearLong();
           if (!ptrStart || ptrStart.id !== ev.pointerId) return;
           const dx = ev.clientX - ptrStart.x;
           const dy = ev.clientY - ptrStart.y;
           const dt = Date.now() - ptrStart.t;
-          const wasPan = panMode;
+          const wasDrag = dragging;
           ptrStart = null;
-          panMode = false;
-          panOrigin = null;
-          pageHost.classList.remove('panel-panning');
-          if (wasPan) return;
+          dragging = false;
+          dragOrigin = null;
+          if (wasDrag) {
+            try { armUiHide(); } catch (_) {}
+            return;
+          }
           if (dt > 500 || Math.abs(dx) > 18 || Math.abs(dy) > 18) return;
           const rect = pageHost.getBoundingClientRect();
           const x = ev.clientX - rect.left;
@@ -1239,11 +1297,9 @@ export function createReader(state, d) {
           }
         }, { passive: true });
         pageHost.addEventListener('pointercancel', () => {
-          clearLong();
           ptrStart = null;
-          panMode = false;
-          panOrigin = null;
-          pageHost.classList.remove('panel-panning');
+          dragging = false;
+          dragOrigin = null;
         }, { passive: true });
 
         const onWheelPanel = (e) => {

@@ -946,9 +946,23 @@ function showViewerConfig() {
   // Subopciones Modo Viñeta (siempre visibles)
   const panelWrap = el('div', 'cfg-group cfg-sub');
   const numPref = (key, def, min, max) => {
-    const n = Number(pref(key, String(def)));
+    const raw = pref(key, String(def));
+    if (raw === '' || raw == null) return def;
+    const n = Number(raw);
     if (!Number.isFinite(n)) return def;
     return Math.max(min, Math.min(max, n));
+  };
+  const bindNum = (inp, key, def, min, max) => {
+    const apply = () => {
+      const raw = String(inp.value ?? '').trim();
+      let v = raw === '' ? def : Number(raw);
+      if (!Number.isFinite(v)) v = def;
+      v = Math.max(min, Math.min(max, v));
+      inp.value = String(v);
+      setPref(key, String(v));
+    };
+    inp.onchange = apply;
+    inp.onblur = apply;
   };
   const panelShadowField = el('div', 'cfg-field');
   panelShadowField.append(el('label', 'sync-label', 'Oscurecido alrededor de la viñeta (%). Por defecto 55.'));
@@ -958,13 +972,7 @@ function showViewerConfig() {
   panelShadowInp.max = '100';
   panelShadowInp.step = '5';
   panelShadowInp.value = String(numPref('panelShadow', 55, 0, 100));
-  panelShadowInp.onchange = () => {
-    let v = Number(panelShadowInp.value);
-    if (!Number.isFinite(v)) v = 55;
-    v = Math.max(0, Math.min(100, v));
-    panelShadowInp.value = String(v);
-    setPref('panelShadow', String(v));
-  };
+  bindNum(panelShadowInp, 'panelShadow', 55, 0, 100);
   panelShadowField.append(panelShadowInp);
 
   const panelMarginField = el('div', 'cfg-field');
@@ -975,35 +983,93 @@ function showViewerConfig() {
   panelMarginInp.max = '25';
   panelMarginInp.step = '1';
   panelMarginInp.value = String(numPref('panelMargin', 8, 0, 25));
-  panelMarginInp.onchange = () => {
-    let v = Number(panelMarginInp.value);
-    if (!Number.isFinite(v)) v = 8;
-    v = Math.max(0, Math.min(25, v));
-    panelMarginInp.value = String(v);
-    setPref('panelMargin', String(v));
-  };
+  bindNum(panelMarginInp, 'panelMargin', 8, 0, 25);
   panelMarginField.append(panelMarginInp);
-  panelMarginField.append(el('div', 'cfg-hint', 'Aleja un poco el zoom al enfocar la viñeta para no cortar bordes o bocadillos. 0 = encuadre justo al recuadro; 8–12 suele ir bien.'));
 
   const panelCropField = el('div', 'cfg-field');
-  panelCropField.append(el('label', 'sync-label', 'Ajuste del recuadro detectado (%). Por defecto 0.'));
+  // Antes había un margen fijo ~4% del recuadro detectado
+  panelCropField.append(el('label', 'sync-label', 'Ajuste del recuadro detectado (%). Por defecto 4.'));
   const panelCropInp = el('input', 'edit-input');
   panelCropInp.type = 'number';
   panelCropInp.min = '-30';
   panelCropInp.max = '40';
   panelCropInp.step = '1';
-  panelCropInp.value = String(numPref('panelCrop', 0, -30, 40));
-  panelCropInp.onchange = () => {
-    let v = Number(panelCropInp.value);
-    if (!Number.isFinite(v)) v = 0;
-    v = Math.max(-30, Math.min(40, v));
-    panelCropInp.value = String(v);
-    setPref('panelCrop', String(v));
-  };
+  panelCropInp.value = String(numPref('panelCrop', 4, -30, 40));
+  bindNum(panelCropInp, 'panelCrop', 4, -30, 40);
   panelCropField.append(panelCropInp);
-  panelCropField.append(el('div', 'cfg-hint', 'Negativo = recuadro más pequeño (recorta más). Positivo = recuadro más grande (incluye más alrededor de la viñeta detectada).'));
 
-  panelWrap.append(panelShadowField, panelMarginField, panelCropField);
+  // Detección de viñetas
+  const panelGutterField = el('div', 'cfg-field');
+  panelGutterField.append(el('label', 'sync-label', 'Umbral de medianil (%). Por defecto 18.'));
+  const panelGutterInp = el('input', 'edit-input');
+  panelGutterInp.type = 'number';
+  panelGutterInp.min = '5';
+  panelGutterInp.max = '50';
+  panelGutterInp.step = '1';
+  panelGutterInp.value = String(numPref('panelGutter', 18, 5, 50));
+  bindNum(panelGutterInp, 'panelGutter', 18, 5, 50);
+  panelGutterField.append(panelGutterInp);
+
+  const panelBandField = el('div', 'cfg-field');
+  panelBandField.append(el('label', 'sync-label', 'Tamaño mínimo de banda/columna (%). Por defecto 5.'));
+  const panelBandInp = el('input', 'edit-input');
+  panelBandInp.type = 'number';
+  panelBandInp.min = '1';
+  panelBandInp.max = '20';
+  panelBandInp.step = '1';
+  panelBandInp.value = String(numPref('panelBandMin', 5, 1, 20));
+  bindNum(panelBandInp, 'panelBandMin', 5, 1, 20);
+  panelBandField.append(panelBandInp);
+
+  const panelAreaField = el('div', 'cfg-field');
+  panelAreaField.append(el('label', 'sync-label', 'Área mínima de viñeta (%). Por defecto 4.'));
+  const panelAreaInp = el('input', 'edit-input');
+  panelAreaInp.type = 'number';
+  panelAreaInp.min = '1';
+  panelAreaInp.max = '30';
+  panelAreaInp.step = '1';
+  panelAreaInp.value = String(numPref('panelMinArea', 4, 1, 30));
+  bindNum(panelAreaInp, 'panelMinArea', 4, 1, 30);
+  panelAreaField.append(panelAreaInp);
+
+  const panelResField = el('div', 'cfg-field');
+  panelResField.append(el('label', 'sync-label', 'Resolución de análisis (px). Por defecto 360.'));
+  const panelResInp = el('input', 'edit-input');
+  panelResInp.type = 'number';
+  panelResInp.min = '160';
+  panelResInp.max = '720';
+  panelResInp.step = '20';
+  panelResInp.value = String(numPref('panelDetectW', 360, 160, 720));
+  bindNum(panelResInp, 'panelDetectW', 360, 160, 720);
+  panelResField.append(panelResInp);
+
+  const panelMergeField = el('div', 'cfg-field');
+  panelMergeField.append(el('label', 'sync-label', 'Fusión de viñetas cercanas (hueco máx. %). 0 = off. Por defecto 2.'));
+  const panelMergeInp = el('input', 'edit-input');
+  panelMergeInp.type = 'number';
+  panelMergeInp.min = '0';
+  panelMergeInp.max = '15';
+  panelMergeInp.step = '1';
+  panelMergeInp.value = String(numPref('panelMerge', 2, 0, 15));
+  bindNum(panelMergeInp, 'panelMerge', 2, 0, 15);
+  panelMergeField.append(panelMergeInp);
+
+  const panelMaxField = el('div', 'cfg-field');
+  panelMaxField.append(el('label', 'sync-label', 'Máx. viñetas por página. 0 = sin límite. Por defecto 24.'));
+  const panelMaxInp = el('input', 'edit-input');
+  panelMaxInp.type = 'number';
+  panelMaxInp.min = '0';
+  panelMaxInp.max = '60';
+  panelMaxInp.step = '1';
+  panelMaxInp.value = String(numPref('panelMax', 24, 0, 60));
+  bindNum(panelMaxInp, 'panelMax', 24, 0, 60);
+  panelMaxField.append(panelMaxInp);
+
+  panelWrap.append(
+    panelShadowField, panelMarginField, panelCropField,
+    panelGutterField, panelBandField, panelAreaField,
+    panelResField, panelMergeField, panelMaxField
+  );
 
   const modeGrp = toggleGroup(
     [

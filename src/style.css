@@ -1517,32 +1517,26 @@ html:has(.sf-root){
 }
 
 /* iPhone: solo un poco más pequeños; misma línea base (centrados con doble página) */
+
+/* iPhone / estrecho: mismo tamaño, más pegados entre sí y a doble página */
 @media (max-width: 430px) {
-  #rd .play-fab,
-  #rd .auto-cfg-fab,
-  #rd .rd-info-btn,
-  #rd .q-group .btn,
-  #rd .q-group button{
-    width:36px!important;
-    height:36px!important;
-    min-width:36px!important;
-    min-height:36px!important;
-    max-width:36px!important;
-    max-height:36px!important;
-    border-radius:11px!important;
-    /* spread: 48px alto, bottom 58 → centro a 58+24=82
-       36px → bottom 82-18=64 */
-    bottom:calc(env(safe-area-inset-bottom,0px) + 64px)!important;
+  #rd .play-fab{
+    left:calc(50% - 24px - 3px - 40px)!important;
+  }
+  #rd .auto-cfg-fab{
+    left:calc(50% - 24px - 3px - 40px - 2px - 40px)!important;
+  }
+  #rd .rd-info-btn{
+    left:calc(50% - 24px - 3px - 40px - 2px - 40px - 2px - 40px)!important;
+    width:40px!important; height:40px!important;
+    min-width:40px!important; min-height:40px!important;
+    bottom:calc(env(safe-area-inset-bottom,0px) + 62px)!important;
+  }
+  #rd .q-group .ai-btn{
+    left:calc(50% - 24px - 3px - 40px - 2px - 40px - 2px - 40px - 2px - 40px)!important;
   }
   #rd .q-group{
-    bottom:calc(env(safe-area-inset-bottom,0px) + 64px)!important;
-  }
-  #rd .play-fab svg,
-  #rd .auto-cfg-fab svg,
-  #rd .rd-info-btn svg,
-  #rd .q-group .q-btn svg,
-  #rd .q-group .ai-btn .ai-ico{
-    width:18px!important;
-    height:18px!important;
+    left:calc(50% + 24px + 3px)!important;
+    gap:2px!important;
   }
 }
