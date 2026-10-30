@@ -938,9 +938,48 @@ function showViewerConfig() {
   const syncSpreadVis = (mode) => {
     const m = mode || (() => {
       const x = pref('mode', 'page');
-      return (x === 'vertical' || x === 'horizontal') ? x : 'page';
+      return (x === 'vertical' || x === 'horizontal' || x === 'panel') ? x : 'page';
     })();
     spreadWrap.hidden = m !== 'page';
+  };
+
+  // Subopciones Modo Viñeta (sombra, margen)
+  const panelWrap = el('div', 'cfg-group cfg-sub');
+  panelWrap.hidden = true;
+  const panelShadowField = el('div', 'cfg-field');
+  panelShadowField.append(el('label', 'sync-label', 'Oscurecido alrededor de la viñeta (%)'));
+  const panelShadowInp = el('input', 'edit-input');
+  panelShadowInp.type = 'number';
+  panelShadowInp.min = '0';
+  panelShadowInp.max = '90';
+  panelShadowInp.step = '5';
+  panelShadowInp.value = String(Math.max(0, Math.min(90, +pref('panelShadow', '55') || 55)));
+  panelShadowInp.onchange = () => {
+    let v = Math.max(0, Math.min(90, +panelShadowInp.value || 55));
+    panelShadowInp.value = String(v);
+    setPref('panelShadow', String(v));
+  };
+  panelShadowField.append(panelShadowInp);
+  const panelMarginField = el('div', 'cfg-field');
+  panelMarginField.append(el('label', 'sync-label', 'Margen de la viñeta (% visible alrededor). Por defecto 8.'));
+  const panelMarginInp = el('input', 'edit-input');
+  panelMarginInp.type = 'number';
+  panelMarginInp.min = '0';
+  panelMarginInp.max = '25';
+  panelMarginInp.step = '1';
+  panelMarginInp.value = String(Math.max(0, Math.min(25, +pref('panelMargin', '8') || 8)));
+  panelMarginInp.onchange = () => {
+    let v = Math.max(0, Math.min(25, +panelMarginInp.value || 8));
+    panelMarginInp.value = String(v);
+    setPref('panelMargin', String(v));
+  };
+  panelMarginField.append(panelMarginInp);
+  const panelHint = el('div', 'cfg-hint', 'Al abrir un cómic en modo Viñeta se muestra la página completa; laterales y Play avanzan viñeta a viñeta. El centro muestra u oculta los menús.');
+  panelWrap.append(panelShadowField, panelMarginField, panelHint);
+
+  const syncPanelVis = (mode) => {
+    const m = mode || pref('mode', 'page');
+    panelWrap.hidden = m !== 'panel';
   };
 
   const modeGrp = toggleGroup(
@@ -948,17 +987,25 @@ function showViewerConfig() {
       ['page', 'Modo Página'],
       ['vertical', 'Modo Vertical'],
       ['horizontal', 'Modo Horizontal'],
+      ['panel', 'Modo Viñeta'],
     ],
     () => {
       const m = pref('mode', 'page');
-      return (m === 'vertical' || m === 'horizontal') ? m : 'page';
+      return (m === 'vertical' || m === 'horizontal' || m === 'panel') ? m : 'page';
     },
     (v) => setPref('mode', v),
-    (v) => syncSpreadVis(v)
+    (v) => { syncSpreadVis(v); syncPanelVis(v); }
   );
   // Una Página / Dos Páginas justo debajo de "Modo Página" (antes de Modo Vertical)
   try { modeGrp.wrap.firstElementChild.after(spreadWrap); } catch (_) { body.append(spreadWrap); }
+  // Subopciones Viñeta debajo del botón "Modo Viñeta" (último del grupo)
+  try {
+    const last = modeGrp.wrap.lastElementChild;
+    if (last) last.after(panelWrap);
+    else modeGrp.wrap.append(panelWrap);
+  } catch (_) { body.append(panelWrap); }
   syncSpreadVis();
+  syncPanelVis();
 
   section('Calidad');
   toggleGroup(

@@ -1,4 +1,23 @@
-import { aiLabel, sourceNameOf } from './quality.js';
+const marginPct = Math.max(0, Math.min(25, +pref('panelMargin', '8') || 8));
+          const marginFactor = 1 - marginPct / 100;
+          const scale = Math.min(L.pw / Math.max(1, pwN * L.dispW), L.ph / Math.max(1, phN * L.dispH)) * marginFactor;
+          const cx = (px + pwN / 2) * L.dispW;
+          const cy = (py + phN / 2) * L.dispH;
+          const tx = L.pw / 2 - cx * scale;
+          const ty = L.ph / 2 - cy * scale;
+          sheet.style.transform = `translate3d(${tx}px,${ty}px,0) scale(${scale})`;
+          // Agujero + sombra: intensidad según panelShadow (0–90 %)
+          const shadowPct = Math.max(0, Math.min(90, +pref('panelShadow', '55') || 55));
+          const alpha = (shadowPct / 100).toFixed(2);
+          const holeW = Math.max(8, pwN * L.dispW * scale);
+          const holeH = Math.max(8, phN * L.dispH * scale);
+          const holeL = (L.pw - holeW) / 2;
+          const holeT = (L.ph - holeH) / 2;
+          dimHole.style.cssText =
+            'display:block;position:absolute;left:' + holeL + 'px;top:' + holeT +
+            'px;width:' + holeW + 'px;height:' + holeH +
+            'px;border-radius:4px;box-shadow:0 0 0 100vmax rgba(0,0,0,' + alpha + ');' +
+            'pointer-events:none;z-index:5';import { aiLabel, sourceNameOf } from './quality.js';
 /**
  * Lector de cómics: modo página / vertical / horizontal, mosaico, gestos.
  * @param {object} state - referencias mutables del main (cleanup, reading, pump, stack, …)
