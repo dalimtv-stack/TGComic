@@ -1456,6 +1456,7 @@ html:has(.sf-root){
 
 
 
+
 /* —— Modo Viñeta (panel flow) —— */
 #rd.panel-mode .page-host.panel-host{
   position:absolute;
@@ -1465,21 +1466,24 @@ html:has(.sf-root){
   touch-action:manipulation;
   z-index:1;
 }
-#rd.panel-mode .page-host.panel-host.panel-focus{
-  background:#000;
-}
 #rd.panel-mode .panel-sheet{
   position:absolute;
   left:0; top:0;
   will-change:transform;
-  transition:transform .22s ease, box-shadow .22s ease;
+  transition:transform .22s ease;
   line-height:0;
+  z-index:1;
 }
 #rd.panel-mode .panel-sheet img{
   display:block;
   user-select:none;
   -webkit-user-drag:none;
   pointer-events:none;
+}
+#rd.panel-mode .panel-dim-hole{
+  display:none;
+  pointer-events:none;
+  z-index:5;
 }
 #rd.panel-mode > .bar,
 #rd.panel-mode > .play-fab,
@@ -1493,6 +1497,7 @@ html:has(.sf-root){
 
 #rd .rd-info-btn{
   position:fixed!important;
+  /* Misma altura de centro que play/auto-cfg (40px, bottom 62) y spread (48px, bottom 58) */
   bottom:calc(env(safe-area-inset-bottom,0px) + 62px)!important;
   left:calc(50% - 24px - 8px - 40px - 4px - 40px - 4px - 40px)!important;
   width:40px!important; height:40px!important;
@@ -1511,9 +1516,8 @@ html:has(.sf-root){
   left:calc(50% - 24px - 8px - 40px - 4px - 40px - 4px - 40px - 4px - 40px)!important;
 }
 
-/* iPhone vertical / pantallas estrechas: menos separación hacia doble página */
+/* iPhone: solo un poco más pequeños; misma línea base (centrados con doble página) */
 @media (max-width: 430px) {
-  #rd .spread-fab,
   #rd .play-fab,
   #rd .auto-cfg-fab,
   #rd .rd-info-btn,
@@ -1526,29 +1530,19 @@ html:has(.sf-root){
     max-width:36px!important;
     max-height:36px!important;
     border-radius:11px!important;
-  }
-  #rd .spread-fab{
-    margin-left:-18px!important;
-  }
-  #rd .play-fab{
-    left:calc(50% - 18px - 4px - 36px)!important;
-  }
-  #rd .auto-cfg-fab{
-    left:calc(50% - 18px - 4px - 36px - 2px - 36px)!important;
-  }
-  #rd .rd-info-btn{
-    left:calc(50% - 18px - 4px - 36px - 2px - 36px - 2px - 36px)!important;
-    width:36px!important; height:36px!important;
+    /* spread: 48px alto, bottom 58 → centro a 58+24=82
+       36px → bottom 82-18=64 */
+    bottom:calc(env(safe-area-inset-bottom,0px) + 64px)!important;
   }
   #rd .q-group{
-    left:calc(50% + 18px + 4px)!important;
-    gap:2px!important;
-  }
-  #rd .q-group .ai-btn{
-    left:calc(50% - 18px - 4px - 36px - 2px - 36px - 2px - 36px - 2px - 36px)!important;
+    bottom:calc(env(safe-area-inset-bottom,0px) + 64px)!important;
   }
   #rd .play-fab svg,
   #rd .auto-cfg-fab svg,
   #rd .rd-info-btn svg,
-  #rd .q-group .q-btn svg{ width:18px!important; height:18px!important; }
+  #rd .q-group .q-btn svg,
+  #rd .q-group .ai-btn .ai-ico{
+    width:18px!important;
+    height:18px!important;
+  }
 }

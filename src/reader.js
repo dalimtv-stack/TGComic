@@ -1044,7 +1044,9 @@ export function createReader(state, d) {
         const img = el('img');
         img.draggable = false;
         sheet.append(img);
-        pageHost.append(sheet);
+        const dimHole = el('div', 'panel-dim-hole');
+        dimHole.setAttribute('aria-hidden', 'true');
+        pageHost.append(sheet, dimHole);
         rd.append(pageHost, top, bot);
 
         const pagePanelsCache = new Map();
@@ -1076,17 +1078,19 @@ export function createReader(state, d) {
         const applyFocus = () => {
           const L = layoutImage();
           sheet.style.transformOrigin = '0 0';
+          const hideDim = () => {
+            pageHost.classList.remove('panel-focus');
+            dimHole.style.cssText = 'display:none';
+          };
           if (fullView || !panels.length) {
             sheet.style.transform = `translate3d(${L.offX}px,${L.offY}px,0)`;
-            sheet.style.boxShadow = 'none';
-            pageHost.classList.remove('panel-focus');
+            hideDim();
             return;
           }
           const panel = panels[Math.max(0, Math.min(panels.length - 1, pIdx))];
           if (!panel) {
             sheet.style.transform = `translate3d(${L.offX}px,${L.offY}px,0)`;
-            sheet.style.boxShadow = 'none';
-            pageHost.classList.remove('panel-focus');
+            hideDim();
             return;
           }
           pageHost.classList.add('panel-focus');
@@ -1095,14 +1099,23 @@ export function createReader(state, d) {
           const py = Math.max(0, panel.y - margin);
           const pwN = Math.min(1 - px, panel.w + margin * 2);
           const phN = Math.min(1 - py, panel.h + margin * 2);
-          const scale = Math.min(L.pw / Math.max(1, pwN * L.dispW), L.ph / Math.max(1, phN * L.dispH));
+          // Deja un poco de margen para que se note el oscurecido alrededor
+          const scale = Math.min(L.pw / Math.max(1, pwN * L.dispW), L.ph / Math.max(1, phN * L.dispH)) * 0.92;
           const cx = (px + pwN / 2) * L.dispW;
           const cy = (py + phN / 2) * L.dispH;
           const tx = L.pw / 2 - cx * scale;
           const ty = L.ph / 2 - cy * scale;
           sheet.style.transform = `translate3d(${tx}px,${ty}px,0) scale(${scale})`;
-          // Oscurecer el resto del cómic fuera de la viñeta
-          sheet.style.boxShadow = '0 0 0 100vmax rgba(0,0,0,.62)';
+          // Agujero transparente + sombra enorme = oscurece el resto (no se recorta)
+          const holeW = Math.max(8, pwN * L.dispW * scale);
+          const holeH = Math.max(8, phN * L.dispH * scale);
+          const holeL = (L.pw - holeW) / 2;
+          const holeT = (L.ph - holeH) / 2;
+          dimHole.style.cssText =
+            'display:block;position:absolute;left:' + holeL + 'px;top:' + holeT +
+            'px;width:' + holeW + 'px;height:' + holeH +
+            'px;border-radius:4px;box-shadow:0 0 0 100vmax rgba(0,0,0,.55);' +
+            'pointer-events:none;z-index:5;';
         };
 
         const loadPage = async (i, opts = {}) => {
