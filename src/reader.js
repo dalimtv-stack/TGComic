@@ -729,28 +729,34 @@ export function createReader(state, d) {
       infoBtn.onclick = (ev) => {
         try { ev.stopPropagation(); } catch (_) {}
         try {
-          if (typeof showComicInfo === 'function') {
-            // El frame de info debe quedar por encima del visor (z-index)
-            const prevZ = rd.style.zIndex;
-            rd.style.zIndex = '10';
-            showComicInfo(ctx.ch, f);
-            requestAnimationFrame(() => {
-              document.querySelectorAll('.info-frame, .edit-frame, .desc-panel').forEach((node) => {
-                try {
-                  node.style.zIndex = '120';
-                  if (getComputedStyle(node).position === 'static') node.style.position = 'fixed';
-                } catch (_) {}
-              });
+          if (typeof showComicInfo !== 'function') return;
+          // Ocultar el visor mientras el panel de info está abierto (está por debajo del #rd)
+          const prevVis = rd.style.visibility;
+          const prevPE = rd.style.pointerEvents;
+          rd.style.visibility = 'hidden';
+          rd.style.pointerEvents = 'none';
+          showComicInfo(ctx.ch, f);
+          const restore = () => {
+            try {
+              rd.style.visibility = prevVis || '';
+              rd.style.pointerEvents = prevPE || '';
+            } catch (_) {}
+          };
+          // Cuando desaparece el frame de info, restaurar el visor
+          const tick = () => {
+            const open = document.querySelector('.info-frame, .edit-frame, .desc-panel, .app-dialog');
+            if (!open) { restore(); return; }
+            requestAnimationFrame(tick);
+          };
+          requestAnimationFrame(() => {
+            document.querySelectorAll('.info-frame, .edit-frame, .desc-panel').forEach((node) => {
+              try {
+                node.style.zIndex = '200';
+                node.style.position = 'fixed';
+              } catch (_) {}
             });
-            // Observar cierre del frame para no dejar basura
-            const obs = new MutationObserver(() => {
-              if (!document.querySelector('.info-frame, .edit-frame')) {
-                try { rd.style.zIndex = prevZ; } catch (_) {}
-                try { obs.disconnect(); } catch (_) {}
-              }
-            });
-            try { obs.observe(document.body, { childList: true, subtree: true }); } catch (_) {}
-          }
+            setTimeout(tick, 50);
+          });
         } catch (e) { console.warn('[reader] info', e); }
       };
       rd.append(cfgBtn, infoBtn, playBtn);
@@ -1033,7 +1039,8 @@ export function createReader(state, d) {
         img.draggable = false;
         sheet.append(img);
         pageHost.append(sheet);
-        rd.append(pageHost);
+        // Barras superior/inferior: en modo página se anexan al final; aquí hay que anexarlas también
+        rd.append(pageHost, top, bot);
 
         const pagePanelsCache = new Map();
         let panels = [];
@@ -1188,7 +1195,7 @@ export function createReader(state, d) {
         };
 
         loadPage(n);
-      } else if (!continuous) {
+        try { pokeUI(); } catch (_) {}
       } else if (!continuous) {
         setRdClass('page fit-' + pref('fit', 'screen') + (pref('spread', '0') === '1' ? ' spread' : ''));
         const fit = el('button', 'btn');
