@@ -1171,7 +1171,7 @@ export function createReader(state, d) {
 
         // El resto del montaje de barras ya existe arriba; no duplicar continuous
       } else if (!continuous) {
-        setRdClass('page fit- + pref('fit', 'screen') + (pref('spread', '0') === '1' ? ' spread' : ''));
+        setRdClass('page fit-' + pref('fit', 'screen') + (pref('spread', '0') === '1' ? ' spread' : ''));
         const fit = el('button', 'btn');
         const pageHost = el('div', 'page-host');
         // Página+Ancho: con flex centrado, una imagen más alta que la pantalla desborda por arriba
