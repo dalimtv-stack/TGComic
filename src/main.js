@@ -943,38 +943,67 @@ function showViewerConfig() {
     spreadWrap.hidden = m !== 'page';
   };
 
-  // Subopciones Modo Viñeta (sombra, margen)
+  // Subopciones Modo Viñeta (siempre visibles)
   const panelWrap = el('div', 'cfg-group cfg-sub');
+  const numPref = (key, def, min, max) => {
+    const n = Number(pref(key, String(def)));
+    if (!Number.isFinite(n)) return def;
+    return Math.max(min, Math.min(max, n));
+  };
   const panelShadowField = el('div', 'cfg-field');
-  panelShadowField.append(el('label', 'sync-label', 'Oscurecido alrededor de la viñeta (%)'));
+  panelShadowField.append(el('label', 'sync-label', 'Oscurecido alrededor de la viñeta (%). Por defecto 55.'));
   const panelShadowInp = el('input', 'edit-input');
   panelShadowInp.type = 'number';
   panelShadowInp.min = '0';
-  panelShadowInp.max = '90';
+  panelShadowInp.max = '100';
   panelShadowInp.step = '5';
-  panelShadowInp.value = String(Math.max(0, Math.min(90, +pref('panelShadow', '55') || 55)));
+  panelShadowInp.value = String(numPref('panelShadow', 55, 0, 100));
   panelShadowInp.onchange = () => {
-    let v = Math.max(0, Math.min(90, +panelShadowInp.value || 55));
+    let v = Number(panelShadowInp.value);
+    if (!Number.isFinite(v)) v = 55;
+    v = Math.max(0, Math.min(100, v));
     panelShadowInp.value = String(v);
     setPref('panelShadow', String(v));
   };
   panelShadowField.append(panelShadowInp);
+
   const panelMarginField = el('div', 'cfg-field');
-  panelMarginField.append(el('label', 'sync-label', 'Margen de la viñeta (% visible alrededor). Por defecto 8.'));
+  panelMarginField.append(el('label', 'sync-label', 'Zoom de seguridad (%). Por defecto 8.'));
   const panelMarginInp = el('input', 'edit-input');
   panelMarginInp.type = 'number';
   panelMarginInp.min = '0';
   panelMarginInp.max = '25';
   panelMarginInp.step = '1';
-  panelMarginInp.value = String(Math.max(0, Math.min(25, +pref('panelMargin', '8') || 8)));
+  panelMarginInp.value = String(numPref('panelMargin', 8, 0, 25));
   panelMarginInp.onchange = () => {
-    let v = Math.max(0, Math.min(25, +panelMarginInp.value || 8));
+    let v = Number(panelMarginInp.value);
+    if (!Number.isFinite(v)) v = 8;
+    v = Math.max(0, Math.min(25, v));
     panelMarginInp.value = String(v);
     setPref('panelMargin', String(v));
   };
   panelMarginField.append(panelMarginInp);
-  const panelHint = el('div', 'cfg-hint', 'Al abrir un cómic en modo Viñeta se muestra la página completa; laterales y Play avanzan viñeta a viñeta. El centro muestra u oculta los menús.');
-  panelWrap.append(panelShadowField, panelMarginField, panelHint);
+  panelMarginField.append(el('div', 'cfg-hint', 'Aleja un poco el zoom al enfocar la viñeta para no cortar bordes o bocadillos. 0 = encuadre justo al recuadro; 8–12 suele ir bien.'));
+
+  const panelCropField = el('div', 'cfg-field');
+  panelCropField.append(el('label', 'sync-label', 'Ajuste del recuadro detectado (%). Por defecto 0.'));
+  const panelCropInp = el('input', 'edit-input');
+  panelCropInp.type = 'number';
+  panelCropInp.min = '-30';
+  panelCropInp.max = '40';
+  panelCropInp.step = '1';
+  panelCropInp.value = String(numPref('panelCrop', 0, -30, 40));
+  panelCropInp.onchange = () => {
+    let v = Number(panelCropInp.value);
+    if (!Number.isFinite(v)) v = 0;
+    v = Math.max(-30, Math.min(40, v));
+    panelCropInp.value = String(v);
+    setPref('panelCrop', String(v));
+  };
+  panelCropField.append(panelCropInp);
+  panelCropField.append(el('div', 'cfg-hint', 'Negativo = recuadro más pequeño (recorta más). Positivo = recuadro más grande (incluye más alrededor de la viñeta detectada).'));
+
+  panelWrap.append(panelShadowField, panelMarginField, panelCropField);
 
   const modeGrp = toggleGroup(
     [
