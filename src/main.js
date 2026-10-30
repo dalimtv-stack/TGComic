@@ -1011,14 +1011,14 @@ function showViewerConfig() {
   panelGutterField.append(panelGutterInp);
 
   const panelBandField = el('div', 'cfg-field');
-  panelBandField.append(el('label', 'sync-label', 'Tamaño mínimo de banda/columna (%). Por defecto 5.'));
+  panelBandField.append(el('label', 'sync-label', 'Tamaño mínimo de banda/columna (%). Por defecto 4.'));
   const panelBandInp = el('input', 'edit-input');
   panelBandInp.type = 'number';
   panelBandInp.min = '1';
   panelBandInp.max = '20';
   panelBandInp.step = '1';
-  panelBandInp.value = String(numPref('panelBandMin', 5, 1, 20));
-  bindNum(panelBandInp, 'panelBandMin', 5, 1, 20);
+  panelBandInp.value = String(numPref('panelBandMin', 4, 1, 20));
+  bindNum(panelBandInp, 'panelBandMin', 4, 1, 20);
   panelBandField.append(panelBandInp);
 
   const panelAreaField = el('div', 'cfg-field');
@@ -1044,25 +1044,25 @@ function showViewerConfig() {
   panelResField.append(panelResInp);
 
   const panelMergeField = el('div', 'cfg-field');
-  panelMergeField.append(el('label', 'sync-label', 'Fusión de viñetas cercanas (hueco máx. %). 0 = off. Por defecto 2.'));
+  panelMergeField.append(el('label', 'sync-label', 'Fusión de viñetas cercanas (hueco máx. %). 0 = off. Por defecto 0.'));
   const panelMergeInp = el('input', 'edit-input');
   panelMergeInp.type = 'number';
   panelMergeInp.min = '0';
   panelMergeInp.max = '15';
   panelMergeInp.step = '1';
-  panelMergeInp.value = String(numPref('panelMerge', 2, 0, 15));
-  bindNum(panelMergeInp, 'panelMerge', 2, 0, 15);
+  panelMergeInp.value = String(numPref('panelMerge', 0, 0, 15));
+  bindNum(panelMergeInp, 'panelMerge', 0, 0, 15);
   panelMergeField.append(panelMergeInp);
 
   const panelMaxField = el('div', 'cfg-field');
-  panelMaxField.append(el('label', 'sync-label', 'Máx. viñetas por página. 0 = sin límite. Por defecto 24.'));
+  panelMaxField.append(el('label', 'sync-label', 'Máx. viñetas por página. 0 = sin límite. Por defecto 0.'));
   const panelMaxInp = el('input', 'edit-input');
   panelMaxInp.type = 'number';
   panelMaxInp.min = '0';
   panelMaxInp.max = '60';
   panelMaxInp.step = '1';
-  panelMaxInp.value = String(numPref('panelMax', 24, 0, 60));
-  bindNum(panelMaxInp, 'panelMax', 24, 0, 60);
+  panelMaxInp.value = String(numPref('panelMax', 0, 0, 60));
+  bindNum(panelMaxInp, 'panelMax', 0, 0, 60);
   panelMaxField.append(panelMaxInp);
 
   panelWrap.append(

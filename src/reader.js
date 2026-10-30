@@ -103,12 +103,14 @@ export function createReader(state, d) {
         if (!Number.isFinite(n)) n = def;
         return Math.max(min, Math.min(max, n));
       };
+      // Defaults = valores del detector original (antes de exponer ajustes)
       const gutterMul = numP('panelGutter', 18, 5, 50) / 100;
-      const bandMin = numP('panelBandMin', 5, 1, 20) / 100;
+      const bandMinH = numP('panelBandMin', 4, 1, 20) / 100;
+      const bandMinW = Math.max(bandMinH, 0.06); // original: filas 4%, columnas 6%
       const minArea = numP('panelMinArea', 4, 1, 30) / 100;
       const maxW = numP('panelDetectW', 360, 160, 720);
-      const mergeGap = numP('panelMerge', 2, 0, 15) / 100;
-      const maxPanels = numP('panelMax', 24, 0, 60);
+      const mergeGap = numP('panelMerge', 0, 0, 15) / 100; // 0 = off (comportamiento original)
+      const maxPanels = numP('panelMax', 0, 0, 60); // 0 = sin límite
 
       const scale = Math.min(1, maxW / Math.max(1, im.naturalWidth));
       const w = Math.max(32, Math.round(im.naturalWidth * scale));
@@ -146,7 +148,7 @@ export function createReader(state, d) {
         const y0 = y;
         while (y < h && !gutterRow(y)) y++;
         const y1 = y;
-        if (y1 - y0 > h * bandMin) bands.push([y0, y1]);
+        if (y1 - y0 > h * bandMinH) bands.push([y0, y1]);
       }
       if (bands.length < 1) return [];
       const panels = [];
@@ -175,7 +177,7 @@ export function createReader(state, d) {
           const x0 = x;
           while (x < w && !gutterCol(x)) x++;
           const x1 = x;
-          if (x1 - x0 > w * bandMin) cols.push([x0, x1]);
+          if (x1 - x0 > w * bandMinW) cols.push([x0, x1]);
         }
         if (!cols.length) cols.push([0, w]);
         for (const [x0, x1] of cols) {
