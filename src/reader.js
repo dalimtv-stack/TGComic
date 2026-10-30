@@ -20,6 +20,7 @@ export function createReader(state, d) {
     modeBtn,
     pageCache,
     getCover,
+    showComicInfo,
   } = d;
   const QSET = ['high', 'mid', 'low'];
   const FALLBACK = { high: ['high', 'mid', 'low'], mid: ['mid', 'high', 'low'], low: ['low', 'mid', 'high'] };
@@ -84,6 +85,108 @@ export function createReader(state, d) {
       return 2;
     } catch {
       return 2;
+    }
+  }
+
+
+  /** Detecta viñetas por medianiles (filas/columnas de baja variación). Devuelve rects normalizados 0–1. */
+  async function detectPanelsFromUrl(url) {
+    try {
+      const im = await new Promise((res, rej) => {
+        const i = new Image();
+        i.onload = () => res(i);
+        i.onerror = rej;
+        i.src = url;
+      });
+      const maxW = 360;
+      const scale = Math.min(1, maxW / Math.max(1, im.naturalWidth));
+      const w = Math.max(32, Math.round(im.naturalWidth * scale));
+      const h = Math.max(32, Math.round(im.naturalHeight * scale));
+      const cv = document.createElement('canvas');
+      cv.width = w; cv.height = h;
+      const ctx = cv.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(im, 0, 0, w, h);
+      const data = ctx.getImageData(0, 0, w, h).data;
+      const lum = new Float32Array(w * h);
+      for (let i = 0, p = 0; i < lum.length; i++, p += 4) {
+        lum[i] = 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2];
+      }
+      const rowVar = new Float32Array(h);
+      for (let y = 0; y < h; y++) {
+        let sum = 0, sum2 = 0;
+        const off = y * w;
+        for (let x = 0; x < w; x++) {
+          const v = lum[off + x];
+          sum += v; sum2 += v * v;
+        }
+        const mean = sum / w;
+        rowVar[y] = sum2 / w - mean * mean;
+      }
+      const med = (() => {
+        const a = Array.from(rowVar).sort((a, b) => a - b);
+        return a[Math.floor(a.length / 2)] || 1;
+      })();
+      const gutterRow = (y) => rowVar[y] < med * 0.18;
+      // bandas de contenido
+      const bands = [];
+      let y = 0;
+      while (y < h) {
+        while (y < h && gutterRow(y)) y++;
+        if (y >= h) break;
+        const y0 = y;
+        while (y < h && !gutterRow(y)) y++;
+        const y1 = y;
+        if (y1 - y0 > h * 0.04) bands.push([y0, y1]);
+      }
+      if (bands.length < 1) return [];
+
+      const panels = [];
+      for (const [y0, y1] of bands) {
+        const bh = y1 - y0;
+        const colVar = new Float32Array(w);
+        for (let x = 0; x < w; x++) {
+          let sum = 0, sum2 = 0;
+          for (let yy = y0; yy < y1; yy++) {
+            const v = lum[yy * w + x];
+            sum += v; sum2 += v * v;
+          }
+          const mean = sum / bh;
+          colVar[x] = sum2 / bh - mean * mean;
+        }
+        const cmed = (() => {
+          const a = Array.from(colVar).sort((a, b) => a - b);
+          return a[Math.floor(a.length / 2)] || 1;
+        })();
+        const gutterCol = (x) => colVar[x] < cmed * 0.18;
+        let x = 0;
+        const cols = [];
+        while (x < w) {
+          while (x < w && gutterCol(x)) x++;
+          if (x >= w) break;
+          const x0 = x;
+          while (x < w && !gutterCol(x)) x++;
+          const x1 = x;
+          if (x1 - x0 > w * 0.06) cols.push([x0, x1]);
+        }
+        if (!cols.length) cols.push([0, w]);
+        for (const [x0, x1] of cols) {
+          panels.push({
+            x: x0 / w,
+            y: y0 / h,
+            w: (x1 - x0) / w,
+            h: (y1 - y0) / h,
+          });
+        }
+      }
+      // Filtrar viñetas minúsculas; si solo 1 casi a página completa → sin panel
+      const filtered = panels.filter((p) => p.w * p.h > 0.04);
+      if (filtered.length <= 1) {
+        const p = filtered[0];
+        if (!p || (p.w > 0.85 && p.h > 0.85)) return [];
+      }
+      return filtered;
+    } catch {
+      return [];
     }
   }
 
@@ -367,16 +470,17 @@ export function createReader(state, d) {
     const mount = () => {
       n = Math.min(chId != null ? getPageIndex(chId, f.id) : (n || 0), pages.length - 1);
       let mode = pref('mode', 'page');
-      if (mode !== 'page' && mode !== 'vertical' && mode !== 'horizontal') mode = 'page';
+      if (mode !== 'page' && mode !== 'vertical' && mode !== 'horizontal' && mode !== 'panel') mode = 'page';
       const vert = mode === 'vertical';
       const horiz = mode === 'horizontal';
+      const panelMode = mode === 'panel';
       const continuous = vert || horiz;
       let token = 0, observers = [], footObs = null;
       const rd = el('div'); rd.id = 'rd';
       try { window.dispatchEvent(new CustomEvent('tgcomic:reader', { detail: { open: true } })); } catch (_) {}
       // Barra superior: título + estado de modo
       const top = el('div', 'bar topbar');
-      const modeName = { page: 'Página', vertical: 'Vertical', horizontal: 'Horizontal' };
+      const modeName = { page: 'Página', vertical: 'Vertical', horizontal: 'Horizontal', panel: 'Viñeta' };
       const fitName = { screen: 'Pantalla', width: 'Ancho' };
       const status = el('div', 'rd-status');
       const updateStatus = () => {
@@ -616,7 +720,21 @@ export function createReader(state, d) {
         rd.append(overlay);
         try { inp.focus(); inp.select(); } catch (_) {}
       };
-      rd.append(cfgBtn, playBtn);
+      // Información del cómic (entre ajustes y botón IA cuando exista)
+      const infoBtn = el('button', 'btn rd-info-btn');
+      infoBtn.type = 'button';
+      infoBtn.title = 'Información del cómic';
+      infoBtn.setAttribute('aria-label', infoBtn.title);
+      infoBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M11,9H13V7H11M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M11,17H13V11H11V17Z"/></svg>';
+      infoBtn.onclick = (ev) => {
+        try { ev.stopPropagation(); } catch (_) {}
+        try {
+          if (typeof showComicInfo === 'function') {
+            showComicInfo(ctx.ch, f);
+          }
+        } catch (e) { console.warn('[reader] info', e); }
+      };
+      rd.append(cfgBtn, infoBtn, playBtn);
       document.body.style.overflow = 'hidden';
       try { enterReaderFullscreen(); } catch (_) {}
       try { sizeReaderEl(rd); } catch (_) {}
@@ -887,8 +1005,173 @@ export function createReader(state, d) {
 
       let goToPage = (i) => {}; // se asigna en cada modo
 
-      if (!continuous) {
-        setRdClass('page fit-' + pref('fit', 'screen') + (pref('spread', '0') === '1' ? ' spread' : ''));
+
+      if (panelMode) {
+        setRdClass('page panel-mode fit-screen');
+        const pageHost = el('div', 'page-host panel-host');
+        const sheet = el('div', 'panel-sheet');
+        const img = el('img');
+        img.draggable = false;
+        sheet.append(img);
+        pageHost.append(sheet);
+        rd.append(pageHost);
+
+        const pagePanelsCache = new Map(); // pageIdx → panels[]
+        let panels = [];
+        let pIdx = 0;
+        let fullView = false;
+
+        const applyFocus = () => {
+          const pw = pageHost.clientWidth || 1;
+          const ph = pageHost.clientHeight || 1;
+          if (fullView || !panels.length || !img.naturalWidth) {
+            sheet.style.transform = '';
+            sheet.style.transformOrigin = 'center center';
+            img.style.width = '';
+            img.style.height = '';
+            img.style.maxWidth = '100%';
+            img.style.maxHeight = '100%';
+            img.style.objectFit = 'contain';
+            return;
+          }
+          const panel = panels[Math.max(0, Math.min(panels.length - 1, pIdx))];
+          if (!panel) return;
+          // Tamaño de la imagen con contain
+          const ir = img.naturalWidth / img.naturalHeight;
+          const hr = pw / ph;
+          let dispW, dispH;
+          if (ir > hr) { dispW = pw; dispH = pw / ir; }
+          else { dispH = ph; dispW = ph * ir; }
+          img.style.maxWidth = 'none';
+          img.style.maxHeight = 'none';
+          img.style.width = dispW + 'px';
+          img.style.height = dispH + 'px';
+          img.style.objectFit = 'fill';
+          const margin = 0.03;
+          const px = Math.max(0, panel.x - margin);
+          const py = Math.max(0, panel.y - margin);
+          const pwN = Math.min(1 - px, panel.w + margin * 2);
+          const phN = Math.min(1 - py, panel.h + margin * 2);
+          const scale = Math.min(pw / (pwN * dispW), ph / (phN * dispH));
+          const cx = (px + pwN / 2) * dispW;
+          const cy = (py + phN / 2) * dispH;
+          const tx = pw / 2 - cx * scale;
+          const ty = ph / 2 - cy * scale;
+          sheet.style.transformOrigin = '0 0';
+          sheet.style.transform = `translate3d(${tx}px,${ty}px,0) scale(${scale})`;
+        };
+
+        const loadPage = async (i) => {
+          i = Math.max(0, Math.min(pages.length - 1, i));
+          n = i;
+          savePage(n);
+          setCount();
+          fullView = false;
+          pIdx = 0;
+          try {
+            const u = await load(i);
+            img.src = u;
+            await img.decode().catch(() => {});
+            if (pagePanelsCache.has(i)) {
+              panels = pagePanelsCache.get(i) || [];
+            } else {
+              panels = await detectPanelsFromUrl(u);
+              pagePanelsCache.set(i, panels);
+            }
+            if (!panels.length) fullView = true;
+            applyFocus();
+            token++;
+            const mine = token;
+            preloadAround(i, token, mine);
+          } catch (e) {
+            console.warn('[panel]', e);
+          }
+        };
+
+        const nextPanel = () => {
+          if (fullView || !panels.length) {
+            if (n >= pages.length - 1) { showNextCard({ auto: false }); return; }
+            loadPage(n + 1);
+            return;
+          }
+          if (pIdx < panels.length - 1) {
+            pIdx++;
+            applyFocus();
+            return;
+          }
+          if (n >= pages.length - 1) { showNextCard({ auto: false }); return; }
+          loadPage(n + 1);
+        };
+        const prevPanel = () => {
+          if (fullView || !panels.length) {
+            if (n <= 0) return;
+            loadPage(n - 1);
+            return;
+          }
+          if (pIdx > 0) {
+            pIdx--;
+            applyFocus();
+            return;
+          }
+          if (n <= 0) return;
+          loadPage(n - 1).then(() => {
+            if (panels.length) {
+              pIdx = panels.length - 1;
+              fullView = false;
+              applyFocus();
+            }
+          });
+        };
+
+        goToPage = (i) => loadPage(i);
+
+        pageHost.addEventListener('click', (ev) => {
+          if (ev.target.closest?.('.bar, .btn, .mosaic, .play-fab, .auto-cfg-fab, .q-group, .spread-fab, .rd-info-btn')) return;
+          const rect = pageHost.getBoundingClientRect();
+          const x = ev.clientX - rect.left;
+          const w = rect.width || 1;
+          if (x < w * 0.28) prevPanel();
+          else if (x > w * 0.72) nextPanel();
+          else {
+            // centro: alternar vista completa ↔ viñeta
+            if (!panels.length) {
+              toggleUI();
+              return;
+            }
+            fullView = !fullView;
+            if (!fullView) applyFocus();
+            else applyFocus();
+          }
+        });
+
+        // Doble toque → vista completa
+        let lastTap = 0;
+        pageHost.addEventListener('pointerup', (ev) => {
+          const now = Date.now();
+          if (now - lastTap < 320) {
+            fullView = true;
+            applyFocus();
+            lastTap = 0;
+          } else lastTap = now;
+        });
+
+        addEventListener('resize', () => { try { applyFocus(); } catch (_) {} });
+        observers._resize = () => { try { applyFocus(); } catch (_) {} };
+
+        // Botones inferiores: sin spread en modo viñeta; fit no aplica
+        const bot = rd.querySelector('.bot-cluster') || null;
+
+        document.onkeydown = (ev) => {
+          if (ev.key === 'ArrowRight' || ev.key === ' ') { ev.preventDefault(); nextPanel(); }
+          else if (ev.key === 'ArrowLeft') { ev.preventDefault(); prevPanel(); }
+          else if (ev.key === 'Escape') { fullView = true; applyFocus(); }
+        };
+
+        loadPage(n);
+
+        // El resto del montaje de barras ya existe arriba; no duplicar continuous
+      } else if (!continuous) {
+        setRdClass('page fit- + pref('fit', 'screen') + (pref('spread', '0') === '1' ? ' spread' : ''));
         const fit = el('button', 'btn');
         const pageHost = el('div', 'page-host');
         // Página+Ancho: con flex centrado, una imagen más alta que la pantalla desborda por arriba

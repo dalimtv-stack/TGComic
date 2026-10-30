@@ -1452,3 +1452,43 @@ html:has(.sf-root){
   height:36px;min-width:auto;padding:0 .75rem;font-size:.82rem;font-weight:650;
   border-radius:10px;background:var(--card);
 }
+
+/* —— Modo Viñeta (panel flow) —— */
+#rd.panel-mode .page-host.panel-host{
+  position:absolute;inset:0;
+  display:flex;align-items:center;justify-content:center;
+  overflow:hidden;background:#000;
+  touch-action:manipulation;
+}
+#rd.panel-mode .panel-sheet{
+  will-change:transform;
+  transition:transform .25s ease;
+  display:flex;align-items:center;justify-content:center;
+}
+#rd.panel-mode .panel-sheet img{
+  display:block;
+  max-width:100%;max-height:100%;
+  user-select:none;-webkit-user-drag:none;
+}
+
+/* Botón información en el visor (junto a ajustes / play) */
+#rd .rd-info-btn{
+  position:fixed!important;
+  bottom:calc(env(safe-area-inset-bottom,0px) + 62px)!important;
+  left:calc(50% - 24px - 8px - 40px - 4px - 40px - 4px - 40px)!important;
+  width:40px!important;height:40px!important;
+  min-width:40px!important;min-height:40px!important;
+  max-width:40px!important;max-height:40px!important;
+  padding:0!important;border-radius:12px!important;
+  z-index:14!important;
+  background:#1c1d22e6!important;color:var(--fg)!important;border:0!important;
+  box-shadow:0 4px 18px #0008!important;
+  display:inline-flex!important;align-items:center!important;justify-content:center!important;
+  -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+}
+#rd .rd-info-btn svg{width:20px;height:20px;display:block}
+#rd.ui-off .rd-info-btn{opacity:0;pointer-events:none}
+/* Empujar auto-cfg un poco a la izquierda para dejar hueco al info */
+#rd .auto-cfg-fab{
+  left:calc(50% - 24px - 8px - 40px - 4px - 40px - 4px - 40px - 4px - 40px)!important;
+}
