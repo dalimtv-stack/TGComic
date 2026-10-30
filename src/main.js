@@ -945,7 +945,6 @@ function showViewerConfig() {
 
   // Subopciones Modo Viñeta (sombra, margen)
   const panelWrap = el('div', 'cfg-group cfg-sub');
-  panelWrap.hidden = true;
   const panelShadowField = el('div', 'cfg-field');
   panelShadowField.append(el('label', 'sync-label', 'Oscurecido alrededor de la viñeta (%)'));
   const panelShadowInp = el('input', 'edit-input');
@@ -977,11 +976,6 @@ function showViewerConfig() {
   const panelHint = el('div', 'cfg-hint', 'Al abrir un cómic en modo Viñeta se muestra la página completa; laterales y Play avanzan viñeta a viñeta. El centro muestra u oculta los menús.');
   panelWrap.append(panelShadowField, panelMarginField, panelHint);
 
-  const syncPanelVis = (mode) => {
-    const m = mode || pref('mode', 'page');
-    panelWrap.hidden = m !== 'panel';
-  };
-
   const modeGrp = toggleGroup(
     [
       ['page', 'Modo Página'],
@@ -994,7 +988,7 @@ function showViewerConfig() {
       return (m === 'vertical' || m === 'horizontal' || m === 'panel') ? m : 'page';
     },
     (v) => setPref('mode', v),
-    (v) => { syncSpreadVis(v); syncPanelVis(v); }
+    (v) => { syncSpreadVis(v); }
   );
   // Una Página / Dos Páginas justo debajo de "Modo Página" (antes de Modo Vertical)
   try { modeGrp.wrap.firstElementChild.after(spreadWrap); } catch (_) { body.append(spreadWrap); }
@@ -1005,7 +999,6 @@ function showViewerConfig() {
     else modeGrp.wrap.append(panelWrap);
   } catch (_) { body.append(panelWrap); }
   syncSpreadVis();
-  syncPanelVis();
 
   section('Calidad');
   toggleGroup(
