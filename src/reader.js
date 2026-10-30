@@ -730,32 +730,38 @@ export function createReader(state, d) {
         try { ev.stopPropagation(); } catch (_) {}
         try {
           if (typeof showComicInfo !== 'function') return;
-          // Ocultar el visor mientras el panel de info está abierto (está por debajo del #rd)
-          const prevVis = rd.style.visibility;
-          const prevPE = rd.style.pointerEvents;
-          rd.style.visibility = 'hidden';
-          rd.style.pointerEvents = 'none';
+          // Mantener la página visible debajo: solo subir z-index del frame
           showComicInfo(ctx.ch, f);
-          const restore = () => {
-            try {
-              rd.style.visibility = prevVis || '';
-              rd.style.pointerEvents = prevPE || '';
-            } catch (_) {}
-          };
-          // Cuando desaparece el frame de info, restaurar el visor
-          const tick = () => {
-            const open = document.querySelector('.info-frame, .edit-frame, .desc-panel, .app-dialog');
-            if (!open) { restore(); return; }
-            requestAnimationFrame(tick);
-          };
-          requestAnimationFrame(() => {
+          const styleFrame = () => {
             document.querySelectorAll('.info-frame, .edit-frame, .desc-panel').forEach((node) => {
               try {
                 node.style.zIndex = '200';
                 node.style.position = 'fixed';
+                // Fondo semitransparente para ver la página detrás
+                if (node.classList.contains('info-frame') || node.classList.contains('edit-frame')) {
+                  const bg = getComputedStyle(node).backgroundColor || '';
+                  if (!node.dataset.tgBg) {
+                    node.dataset.tgBg = '1';
+                    // Si el frame es opaco de borde a borde, suavizar el overlay exterior
+                    node.style.background = 'rgba(0,0,0,.45)';
+                  }
+                  // Caja interior opaca si existe
+                  const box = node.querySelector('.info-box, .edit-box, .info-panel, .edit-panel, .sheet-box');
+                  if (box && !box.dataset.tgSolid) {
+                    box.dataset.tgSolid = '1';
+                    const cs = getComputedStyle(box);
+                    if (cs.backgroundColor === 'rgba(0, 0, 0, 0)' || cs.backgroundColor === 'transparent') {
+                      box.style.background = 'var(--card, #1b1c20)';
+                    }
+                  }
+                }
               } catch (_) {}
             });
-            setTimeout(tick, 50);
+          };
+          requestAnimationFrame(() => {
+            styleFrame();
+            setTimeout(styleFrame, 30);
+            setTimeout(styleFrame, 120);
           });
         } catch (e) { console.warn('[reader] info', e); }
       };
@@ -1048,28 +1054,32 @@ export function createReader(state, d) {
         let fullView = true; // al cargar página: siempre página completa primero
 
         const layoutImage = () => {
-          const pw = pageHost.clientWidth || 1;
-          const ph = pageHost.clientHeight || 1;
-          if (!img.naturalWidth) return { dispW: pw, dispH: ph, offX: 0, offY: 0 };
-          const ir = img.naturalWidth / img.naturalHeight;
+          // Medir el host de forma fiable (PC: clientWidth a veces 0 al primer frame)
+          const rect = pageHost.getBoundingClientRect();
+          const pw = Math.max(1, Math.round(rect.width || pageHost.clientWidth || window.innerWidth));
+          const ph = Math.max(1, Math.round(rect.height || pageHost.clientHeight || window.innerHeight));
+          if (!img.naturalWidth) return { dispW: pw, dispH: ph, offX: 0, offY: 0, pw, ph };
+          const ir = img.naturalWidth / Math.max(1, img.naturalHeight);
           const hr = pw / ph;
           let dispW, dispH;
           if (ir > hr) { dispW = pw; dispH = pw / ir; }
           else { dispH = ph; dispW = ph * ir; }
           const offX = (pw - dispW) / 2;
           const offY = (ph - dispH) / 2;
-          img.style.maxWidth = 'none';
-          img.style.maxHeight = 'none';
-          img.style.width = dispW + 'px';
-          img.style.height = dispH + 'px';
-          img.style.objectFit = 'fill';
+          img.style.cssText = `display:block;width:${dispW}px;height:${dispH}px;max-width:none;max-height:none;object-fit:fill;`;
+          sheet.style.position = 'absolute';
+          sheet.style.left = '0';
+          sheet.style.top = '0';
+          sheet.style.width = dispW + 'px';
+          sheet.style.height = dispH + 'px';
           return { dispW, dispH, offX, offY, pw, ph };
         };
 
         const applyFocus = () => {
           const L = layoutImage();
+          sheet.style.transformOrigin = '0 0';
           if (fullView || !panels.length) {
-            sheet.style.transformOrigin = '0 0';
+            // Centrar página completa en el host
             sheet.style.transform = `translate3d(${L.offX}px,${L.offY}px,0)`;
             return;
           }
@@ -1078,17 +1088,17 @@ export function createReader(state, d) {
             sheet.style.transform = `translate3d(${L.offX}px,${L.offY}px,0)`;
             return;
           }
-          const margin = 0.035;
+          const margin = 0.04;
           const px = Math.max(0, panel.x - margin);
           const py = Math.max(0, panel.y - margin);
           const pwN = Math.min(1 - px, panel.w + margin * 2);
           const phN = Math.min(1 - py, panel.h + margin * 2);
-          const scale = Math.min(L.pw / (pwN * L.dispW), L.ph / (phN * L.dispH));
-          const cx = px * L.dispW + (pwN * L.dispW) / 2;
-          const cy = py * L.dispH + (phN * L.dispH) / 2;
+          const scale = Math.min(L.pw / Math.max(1, pwN * L.dispW), L.ph / Math.max(1, phN * L.dispH));
+          // Centro de la viñeta en coords del sheet (sin off aún)
+          const cx = (px + pwN / 2) * L.dispW;
+          const cy = (py + phN / 2) * L.dispH;
           const tx = L.pw / 2 - cx * scale;
           const ty = L.ph / 2 - cy * scale;
-          sheet.style.transformOrigin = '0 0';
           sheet.style.transform = `translate3d(${tx}px,${ty}px,0) scale(${scale})`;
         };
 
@@ -1170,6 +1180,7 @@ export function createReader(state, d) {
             if (fullView) enterPanel(0);
             else { fullView = true; applyFocus(); }
           }
+          try { armUiHide(); } catch (_) {}
         });
 
         const onWheelPanel = (e) => {
@@ -1180,6 +1191,7 @@ export function createReader(state, d) {
           e.preventDefault();
           if (dominant > 0) nextPanel();
           else prevPanel();
+          try { armUiHide(); } catch (_) {}
         };
         pageHost.addEventListener('wheel', onWheelPanel, { passive: false });
         observers._wheel = onWheelPanel;
@@ -1196,6 +1208,7 @@ export function createReader(state, d) {
 
         loadPage(n);
         try { pokeUI(); } catch (_) {}
+        try { armUiHide(); } catch (_) {}
       } else if (!continuous) {
         setRdClass('page fit-' + pref('fit', 'screen') + (pref('spread', '0') === '1' ? ' spread' : ''));
         const fit = el('button', 'btn');
