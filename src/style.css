@@ -1455,40 +1455,60 @@ html:has(.sf-root){
 
 /* —— Modo Viñeta (panel flow) —— */
 #rd.panel-mode .page-host.panel-host{
-  position:absolute;inset:0;
-  display:flex;align-items:center;justify-content:center;
-  overflow:hidden;background:#000;
+  position:absolute; left:0; right:0; top:0;
+  bottom:calc(env(safe-area-inset-bottom,0px) + 56px);
+  display:flex; align-items:center; justify-content:center;
+  overflow:hidden; background:#000;
   touch-action:manipulation;
+  z-index:1;
 }
 #rd.panel-mode .panel-sheet{
   will-change:transform;
-  transition:transform .25s ease;
-  display:flex;align-items:center;justify-content:center;
+  transition:transform .22s ease;
+  display:block;
+  line-height:0;
 }
 #rd.panel-mode .panel-sheet img{
   display:block;
-  max-width:100%;max-height:100%;
-  user-select:none;-webkit-user-drag:none;
+  user-select:none; -webkit-user-drag:none;
+  pointer-events:none;
+}
+/* Barras siempre por encima del lienzo de viñetas */
+#rd.panel-mode .bar,
+#rd.panel-mode .play-fab,
+#rd.panel-mode .auto-cfg-fab,
+#rd.panel-mode .rd-info-btn,
+#rd.panel-mode .spread-fab,
+#rd.panel-mode .q-group{
+  z-index:20!important;
 }
 
-/* Botón información en el visor (junto a ajustes / play) */
+/* Info entre IA (más a la izq) y ajustes (auto-cfg), sin desplazar play/spread */
 #rd .rd-info-btn{
   position:fixed!important;
   bottom:calc(env(safe-area-inset-bottom,0px) + 62px)!important;
+  /* auto-cfg está en: 50% - 24px - 8px - 40px - 4px - 40px
+     info justo a su izquierda: -4px -40px más */
   left:calc(50% - 24px - 8px - 40px - 4px - 40px - 4px - 40px)!important;
-  width:40px!important;height:40px!important;
-  min-width:40px!important;min-height:40px!important;
-  max-width:40px!important;max-height:40px!important;
-  padding:0!important;border-radius:12px!important;
+  width:40px!important; height:40px!important;
+  min-width:40px!important; min-height:40px!important;
+  max-width:40px!important; max-height:40px!important;
+  padding:0!important; border-radius:12px!important;
   z-index:14!important;
-  background:#1c1d22e6!important;color:var(--fg)!important;border:0!important;
+  background:#1c1d22e6!important; color:var(--fg)!important; border:0!important;
   box-shadow:0 4px 18px #0008!important;
-  display:inline-flex!important;align-items:center!important;justify-content:center!important;
-  -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+  display:inline-flex!important; align-items:center!important; justify-content:center!important;
+  -webkit-backdrop-filter:blur(12px); backdrop-filter:blur(12px);
 }
-#rd .rd-info-btn svg{width:20px;height:20px;display:block}
-#rd.ui-off .rd-info-btn{opacity:0;pointer-events:none}
-/* Empujar auto-cfg un poco a la izquierda para dejar hueco al info */
-#rd .auto-cfg-fab{
+#rd .rd-info-btn svg{ width:20px; height:20px; display:block }
+#rd.ui-off .rd-info-btn{ opacity:0; pointer-events:none }
+
+/* AI a la izquierda del botón info (solo desplaza AI lo necesario para no solaparse) */
+#rd .q-group .ai-btn{
   left:calc(50% - 24px - 8px - 40px - 4px - 40px - 4px - 40px - 4px - 40px)!important;
+}
+
+/* Frames de información por encima del visor */
+.info-frame, .edit-frame, .desc-panel, .app-dialog, .sheet{
+  z-index:100!important;
 }

@@ -730,7 +730,26 @@ export function createReader(state, d) {
         try { ev.stopPropagation(); } catch (_) {}
         try {
           if (typeof showComicInfo === 'function') {
+            // El frame de info debe quedar por encima del visor (z-index)
+            const prevZ = rd.style.zIndex;
+            rd.style.zIndex = '10';
             showComicInfo(ctx.ch, f);
+            requestAnimationFrame(() => {
+              document.querySelectorAll('.info-frame, .edit-frame, .desc-panel').forEach((node) => {
+                try {
+                  node.style.zIndex = '120';
+                  if (getComputedStyle(node).position === 'static') node.style.position = 'fixed';
+                } catch (_) {}
+              });
+            });
+            // Observar cierre del frame para no dejar basura
+            const obs = new MutationObserver(() => {
+              if (!document.querySelector('.info-frame, .edit-frame')) {
+                try { rd.style.zIndex = prevZ; } catch (_) {}
+                try { obs.disconnect(); } catch (_) {}
+              }
+            });
+            try { obs.observe(document.body, { childList: true, subtree: true }); } catch (_) {}
           }
         } catch (e) { console.warn('[reader] info', e); }
       };
@@ -1016,57 +1035,62 @@ export function createReader(state, d) {
         pageHost.append(sheet);
         rd.append(pageHost);
 
-        const pagePanelsCache = new Map(); // pageIdx → panels[]
+        const pagePanelsCache = new Map();
         let panels = [];
         let pIdx = 0;
-        let fullView = false;
+        let fullView = true; // al cargar página: siempre página completa primero
 
-        const applyFocus = () => {
+        const layoutImage = () => {
           const pw = pageHost.clientWidth || 1;
           const ph = pageHost.clientHeight || 1;
-          if (fullView || !panels.length || !img.naturalWidth) {
-            sheet.style.transform = '';
-            sheet.style.transformOrigin = 'center center';
-            img.style.width = '';
-            img.style.height = '';
-            img.style.maxWidth = '100%';
-            img.style.maxHeight = '100%';
-            img.style.objectFit = 'contain';
-            return;
-          }
-          const panel = panels[Math.max(0, Math.min(panels.length - 1, pIdx))];
-          if (!panel) return;
-          // Tamaño de la imagen con contain
+          if (!img.naturalWidth) return { dispW: pw, dispH: ph, offX: 0, offY: 0 };
           const ir = img.naturalWidth / img.naturalHeight;
           const hr = pw / ph;
           let dispW, dispH;
           if (ir > hr) { dispW = pw; dispH = pw / ir; }
           else { dispH = ph; dispW = ph * ir; }
+          const offX = (pw - dispW) / 2;
+          const offY = (ph - dispH) / 2;
           img.style.maxWidth = 'none';
           img.style.maxHeight = 'none';
           img.style.width = dispW + 'px';
           img.style.height = dispH + 'px';
           img.style.objectFit = 'fill';
-          const margin = 0.03;
+          return { dispW, dispH, offX, offY, pw, ph };
+        };
+
+        const applyFocus = () => {
+          const L = layoutImage();
+          if (fullView || !panels.length) {
+            sheet.style.transformOrigin = '0 0';
+            sheet.style.transform = `translate3d(${L.offX}px,${L.offY}px,0)`;
+            return;
+          }
+          const panel = panels[Math.max(0, Math.min(panels.length - 1, pIdx))];
+          if (!panel) {
+            sheet.style.transform = `translate3d(${L.offX}px,${L.offY}px,0)`;
+            return;
+          }
+          const margin = 0.035;
           const px = Math.max(0, panel.x - margin);
           const py = Math.max(0, panel.y - margin);
           const pwN = Math.min(1 - px, panel.w + margin * 2);
           const phN = Math.min(1 - py, panel.h + margin * 2);
-          const scale = Math.min(pw / (pwN * dispW), ph / (phN * dispH));
-          const cx = (px + pwN / 2) * dispW;
-          const cy = (py + phN / 2) * dispH;
-          const tx = pw / 2 - cx * scale;
-          const ty = ph / 2 - cy * scale;
+          const scale = Math.min(L.pw / (pwN * L.dispW), L.ph / (phN * L.dispH));
+          const cx = px * L.dispW + (pwN * L.dispW) / 2;
+          const cy = py * L.dispH + (phN * L.dispH) / 2;
+          const tx = L.pw / 2 - cx * scale;
+          const ty = L.ph / 2 - cy * scale;
           sheet.style.transformOrigin = '0 0';
           sheet.style.transform = `translate3d(${tx}px,${ty}px,0) scale(${scale})`;
         };
 
-        const loadPage = async (i) => {
+        const loadPage = async (i, keepFull) => {
           i = Math.max(0, Math.min(pages.length - 1, i));
           n = i;
           savePage(n);
           setCount();
-          fullView = false;
+          fullView = keepFull !== false; // por defecto página completa
           pIdx = 0;
           try {
             const u = await load(i);
@@ -1078,7 +1102,6 @@ export function createReader(state, d) {
               panels = await detectPanelsFromUrl(u);
               pagePanelsCache.set(i, panels);
             }
-            if (!panels.length) fullView = true;
             applyFocus();
             token++;
             const mine = token;
@@ -1088,8 +1111,16 @@ export function createReader(state, d) {
           }
         };
 
+        const enterPanel = (idx) => {
+          if (!panels.length) return;
+          fullView = false;
+          pIdx = Math.max(0, Math.min(panels.length - 1, idx));
+          applyFocus();
+        };
+
         const nextPanel = () => {
-          if (fullView || !panels.length) {
+          if (fullView) {
+            if (panels.length) { enterPanel(0); return; }
             if (n >= pages.length - 1) { showNextCard({ auto: false }); return; }
             loadPage(n + 1);
             return;
@@ -1103,7 +1134,7 @@ export function createReader(state, d) {
           loadPage(n + 1);
         };
         const prevPanel = () => {
-          if (fullView || !panels.length) {
+          if (fullView) {
             if (n <= 0) return;
             loadPage(n - 1);
             return;
@@ -1113,14 +1144,9 @@ export function createReader(state, d) {
             applyFocus();
             return;
           }
-          if (n <= 0) return;
-          loadPage(n - 1).then(() => {
-            if (panels.length) {
-              pIdx = panels.length - 1;
-              fullView = false;
-              applyFocus();
-            }
-          });
+          // primera viñeta → volver a página completa; otro toque ya cambia de página
+          fullView = true;
+          applyFocus();
         };
 
         goToPage = (i) => loadPage(i);
@@ -1133,33 +1159,27 @@ export function createReader(state, d) {
           if (x < w * 0.28) prevPanel();
           else if (x > w * 0.72) nextPanel();
           else {
-            // centro: alternar vista completa ↔ viñeta
-            if (!panels.length) {
-              toggleUI();
-              return;
-            }
-            fullView = !fullView;
-            if (!fullView) applyFocus();
-            else applyFocus();
+            if (!panels.length) { toggleUI(); return; }
+            if (fullView) enterPanel(0);
+            else { fullView = true; applyFocus(); }
           }
         });
 
-        // Doble toque → vista completa
-        let lastTap = 0;
-        pageHost.addEventListener('pointerup', (ev) => {
-          const now = Date.now();
-          if (now - lastTap < 320) {
-            fullView = true;
-            applyFocus();
-            lastTap = 0;
-          } else lastTap = now;
-        });
+        const onWheelPanel = (e) => {
+          const dy = e.deltaY || 0;
+          const dx = e.deltaX || 0;
+          const dominant = Math.abs(dx) > Math.abs(dy) ? dx : dy;
+          if (Math.abs(dominant) < 8) return;
+          e.preventDefault();
+          if (dominant > 0) nextPanel();
+          else prevPanel();
+        };
+        pageHost.addEventListener('wheel', onWheelPanel, { passive: false });
+        observers._wheel = onWheelPanel;
 
-        addEventListener('resize', () => { try { applyFocus(); } catch (_) {} });
-        observers._resize = () => { try { applyFocus(); } catch (_) {} };
-
-        // Botones inferiores: sin spread en modo viñeta; fit no aplica
-        const bot = rd.querySelector('.bot-cluster') || null;
+        const onResizePanel = () => { try { applyFocus(); } catch (_) {} };
+        addEventListener('resize', onResizePanel);
+        observers._resize = onResizePanel;
 
         document.onkeydown = (ev) => {
           if (ev.key === 'ArrowRight' || ev.key === ' ') { ev.preventDefault(); nextPanel(); }
@@ -1168,8 +1188,7 @@ export function createReader(state, d) {
         };
 
         loadPage(n);
-
-        // El resto del montaje de barras ya existe arriba; no duplicar continuous
+      } else if (!continuous) {
       } else if (!continuous) {
         setRdClass('page fit-' + pref('fit', 'screen') + (pref('spread', '0') === '1' ? ' spread' : ''));
         const fit = el('button', 'btn');
