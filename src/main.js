@@ -881,19 +881,6 @@ function showViewerConfig() {
   closeAppMenu();
   document.querySelector('.info-frame.cfg')?.remove();
   const frame = el('div', 'info-frame cfg');
-  // Migración prefs detección viñetas → defaults actuales
-  try {
-    if (pref('panelDetectCfgV', '') !== '2') {
-      const d = {
-        panelDetectW: '480', panelGutterRow: '18', panelGutterCol: '22',
-        panelBandMin: '4', panelMinArea: '3', panelMerge: '0', panelMax: '0',
-        panelUseEdges: '1', panelEdgeMul: '20', panelDetectCfgV: '2',
-      };
-      for (const [k, v] of Object.entries(d)) setPref(k, v);
-      setPref('panelDetectRev', String(Date.now()));
-    }
-  } catch (_) {}
-
   const box = el('div', 'info-box');
   const head = el('div', 'info-head');
   head.append(el('span', '', 'Configuración Visor'));
@@ -973,11 +960,6 @@ function showViewerConfig() {
       v = Math.max(min, Math.min(max, v));
       inp.value = String(v);
       setPref(key, String(v));
-      // Invalida caché de viñetas en el lector (si está abierto)
-      if (/^panel(Gutter|Band|MinArea|DetectW|Merge|Max|UseEdges|EdgeMul)/.test(key) || key === 'panelGutterRow' || key === 'panelGutterCol') {
-        setPref('panelDetectRev', String(Date.now()));
-        try { window.dispatchEvent(new CustomEvent('tgcomic:panel-prefs')); } catch (_) {}
-      }
     };
     inp.onchange = apply;
     inp.onblur = apply;
@@ -1016,28 +998,17 @@ function showViewerConfig() {
   bindNum(panelCropInp, 'panelCrop', 4, -30, 40);
   panelCropField.append(panelCropInp);
 
-  // Detección de viñetas (defaults orientados a cómic occidental)
-  const panelGutterRowField = el('div', 'cfg-field');
-  panelGutterRowField.append(el('label', 'sync-label', 'Umbral medianil horizontal / filas (%). Por defecto 18.'));
-  const panelGutterRowInp = el('input', 'edit-input');
-  panelGutterRowInp.type = 'number';
-  panelGutterRowInp.min = '5';
-  panelGutterRowInp.max = '50';
-  panelGutterRowInp.step = '1';
-  panelGutterRowInp.value = String(numPref('panelGutterRow', 18, 5, 50));
-  bindNum(panelGutterRowInp, 'panelGutterRow', 18, 5, 50);
-  panelGutterRowField.append(panelGutterRowInp);
-
-  const panelGutterColField = el('div', 'cfg-field');
-  panelGutterColField.append(el('label', 'sync-label', 'Umbral medianil vertical / columnas (%). Por defecto 22.'));
-  const panelGutterColInp = el('input', 'edit-input');
-  panelGutterColInp.type = 'number';
-  panelGutterColInp.min = '5';
-  panelGutterColInp.max = '50';
-  panelGutterColInp.step = '1';
-  panelGutterColInp.value = String(numPref('panelGutterCol', 22, 5, 50));
-  bindNum(panelGutterColInp, 'panelGutterCol', 22, 5, 50);
-  panelGutterColField.append(panelGutterColInp);
+  // Detección de viñetas
+  const panelGutterField = el('div', 'cfg-field');
+  panelGutterField.append(el('label', 'sync-label', 'Umbral de medianil (%). Por defecto 18.'));
+  const panelGutterInp = el('input', 'edit-input');
+  panelGutterInp.type = 'number';
+  panelGutterInp.min = '5';
+  panelGutterInp.max = '50';
+  panelGutterInp.step = '1';
+  panelGutterInp.value = String(numPref('panelGutter', 18, 5, 50));
+  bindNum(panelGutterInp, 'panelGutter', 18, 5, 50);
+  panelGutterField.append(panelGutterInp);
 
   const panelBandField = el('div', 'cfg-field');
   panelBandField.append(el('label', 'sync-label', 'Tamaño mínimo de banda/columna (%). Por defecto 4.'));
@@ -1051,25 +1022,25 @@ function showViewerConfig() {
   panelBandField.append(panelBandInp);
 
   const panelAreaField = el('div', 'cfg-field');
-  panelAreaField.append(el('label', 'sync-label', 'Área mínima de viñeta (%). Por defecto 3.'));
+  panelAreaField.append(el('label', 'sync-label', 'Área mínima de viñeta (%). Por defecto 4.'));
   const panelAreaInp = el('input', 'edit-input');
   panelAreaInp.type = 'number';
   panelAreaInp.min = '1';
   panelAreaInp.max = '30';
   panelAreaInp.step = '1';
-  panelAreaInp.value = String(numPref('panelMinArea', 3, 1, 30));
-  bindNum(panelAreaInp, 'panelMinArea', 3, 1, 30);
+  panelAreaInp.value = String(numPref('panelMinArea', 4, 1, 30));
+  bindNum(panelAreaInp, 'panelMinArea', 4, 1, 30);
   panelAreaField.append(panelAreaInp);
 
   const panelResField = el('div', 'cfg-field');
-  panelResField.append(el('label', 'sync-label', 'Resolución de análisis (px). Por defecto 480.'));
+  panelResField.append(el('label', 'sync-label', 'Resolución de análisis (px). Por defecto 360.'));
   const panelResInp = el('input', 'edit-input');
   panelResInp.type = 'number';
   panelResInp.min = '160';
-  panelResInp.max = '960';
+  panelResInp.max = '720';
   panelResInp.step = '20';
-  panelResInp.value = String(numPref('panelDetectW', 480, 160, 960));
-  bindNum(panelResInp, 'panelDetectW', 480, 160, 960);
+  panelResInp.value = String(numPref('panelDetectW', 360, 160, 720));
+  bindNum(panelResInp, 'panelDetectW', 360, 160, 720);
   panelResField.append(panelResInp);
 
   const panelMergeField = el('div', 'cfg-field');
@@ -1094,33 +1065,10 @@ function showViewerConfig() {
   bindNum(panelMaxInp, 'panelMax', 0, 0, 60);
   panelMaxField.append(panelMaxInp);
 
-  const panelEdgeField = el('div', 'cfg-field');
-  panelEdgeField.append(el('label', 'sync-label', 'Usar bordes (Sobel) en medianiles. 0 = no, 1 = sí. Por defecto 1.'));
-  const panelEdgeInp = el('input', 'edit-input');
-  panelEdgeInp.type = 'number';
-  panelEdgeInp.min = '0';
-  panelEdgeInp.max = '1';
-  panelEdgeInp.step = '1';
-  panelEdgeInp.value = String(numPref('panelUseEdges', 1, 0, 1));
-  bindNum(panelEdgeInp, 'panelUseEdges', 1, 0, 1);
-  panelEdgeField.append(panelEdgeInp);
-
-  const panelEdgeMulField = el('div', 'cfg-field');
-  panelEdgeMulField.append(el('label', 'sync-label', 'Umbral densidad de bordes (%). Por defecto 20.'));
-  const panelEdgeMulInp = el('input', 'edit-input');
-  panelEdgeMulInp.type = 'number';
-  panelEdgeMulInp.min = '5';
-  panelEdgeMulInp.max = '50';
-  panelEdgeMulInp.step = '1';
-  panelEdgeMulInp.value = String(numPref('panelEdgeMul', 20, 5, 50));
-  bindNum(panelEdgeMulInp, 'panelEdgeMul', 20, 5, 50);
-  panelEdgeMulField.append(panelEdgeMulInp);
-
   panelWrap.append(
     panelShadowField, panelMarginField, panelCropField,
-    panelGutterRowField, panelGutterColField, panelBandField, panelAreaField,
-    panelResField, panelMergeField, panelMaxField,
-    panelEdgeField, panelEdgeMulField
+    panelGutterField, panelBandField, panelAreaField,
+    panelResField, panelMergeField, panelMaxField
   );
 
   const modeGrp = toggleGroup(
