@@ -1,241 +1,4 @@
 import { aiLabel, sourceNameOf } from './quality.js';
-
-/** Ajustes normalizados; cómic occidental por defecto. */
-export function readPanelSettings(pref) {
-  const number = (key, fallback, min, max) => {
-    const raw = pref(key, String(fallback));
-    const value = raw == null || raw === '' ? fallback : Number(raw);
-    return Math.max(min, Math.min(max, Number.isFinite(value) ? value : fallback));
-  };
-  return {
-    gutter: number('panelGutter', 18, 8, 30) / 100,
-    bandH: number('panelBandMin', 4, 2, 8) / 100,
-    bandW: number('panelBandMinW', 6, 2, 10) / 100,
-    minArea: number('panelMinArea', 4, 1, 8) / 100,
-    width: Math.round(number('panelDetectW', 480, 320, 800)),
-    merge: number('panelMerge', 0, 0, 1.5) / 100,
-    maxPanels: Math.round(number('panelMax', 0, 0, 60)),
-    order: pref('panelReadingOrder', 'ltr') === 'rtl' ? 'rtl' : 'ltr',
-  };
-}
-
-/** Detector puro, sin dependencias: RGB + bordes, XY-cut y flood-fill de respaldo.
- * Los límites devueltos son rectángulos normalizados; no altera la imagen original.
- */
-export function detectPanelsFromPixels(data, w, h, settings) {
-  if (w < 8 || h < 8 || data.length < w * h * 4) return [];
-  const s = settings;
-  const size = w * h;
-  const lum = new Float32Array(size);
-  const hist = new Uint32Array(256);
-  for (let i = 0; i < size; i++) {
-    const p = i * 4;
-    lum[i] = .299 * data[p] + .587 * data[p + 1] + .114 * data[p + 2];
-    hist[Math.round(lum[i])]++;
-  }
-  // Otsu ayuda a adaptar la tolerancia a escaneos; nunca binariza el color del cómic.
-  let total = 0, left = 0, leftSum = 0, best = -1, otsu = 128;
-  for (let i = 0; i < 256; i++) total += i * hist[i];
-  for (let i = 0; i < 255; i++) {
-    left += hist[i]; leftSum += i * hist[i];
-    if (!left || left === size) continue;
-    const delta = leftSum / left - (total - leftSum) / (size - left);
-    const between = left * (size - left) * delta * delta;
-    if (between > best) { best = between; otsu = i; }
-  }
-  const frame = Math.max(2, Math.round(Math.min(w, h) * .025));
-  const backgroundOf = (r) => {
-    const bins = new Map();
-    const add = (x, y) => {
-      const i = (y * w + x) * 4;
-      const key = (data[i] >> 4) * 256 + (data[i + 1] >> 4) * 16 + (data[i + 2] >> 4);
-      const b = bins.get(key) || [0, 0, 0, 0];
-      b[0]++; b[1] += data[i]; b[2] += data[i + 1]; b[3] += data[i + 2]; bins.set(key, b);
-    };
-    const step = Math.max(1, Math.floor(Math.min(r.x1 - r.x0, r.y1 - r.y0) / 160));
-    const f = Math.min(frame, Math.max(1, Math.floor(Math.min(r.x1-r.x0, r.y1-r.y0) / 8)));
-    for (let y = r.y0; y < r.y1; y += step) {
-      for (let x = r.x0; x < r.x1; x += step) {
-        if (x < r.x0 + f || x >= r.x1 - f || y < r.y0 + f || y >= r.y1 - f) add(x, y);
-      }
-    }
-    let winner = [1, 255, 255, 255];
-    for (const b of bins.values()) if (b[0] > winner[0]) winner = b;
-    return winner.slice(1).map(v => v / winner[0]);
-  };
-  const whole = { x0: 0, y0: 0, x1: w, y1: h };
-  const bg = backgroundOf(whole);
-  const bgLum = .299 * bg[0] + .587 * bg[1] + .114 * bg[2];
-  const tolerance = Math.max(14, Math.min(30, Math.abs(bgLum - otsu) * .12));
-  const isBackground = (i, color = bg) => {
-    const p = i * 4;
-    return Math.max(Math.abs(data[p] - color[0]), Math.abs(data[p+1] - color[1]), Math.abs(data[p+2] - color[2])) <= tolerance;
-  };
-  const edge = new Float32Array(size);
-  for (let y = 1; y < h-1; y++) for (let x = 1; x < w-1; x++) {
-    const i = y*w+x;
-    const gx = -lum[i-w-1] + lum[i-w+1] - 2*lum[i-1] + 2*lum[i+1] - lum[i+w-1] + lum[i+w+1];
-    const gy = -lum[i-w-1] - 2*lum[i-w] - lum[i-w+1] + lum[i+w-1] + 2*lum[i+w] + lum[i+w+1];
-    edge[i] = Math.hypot(gx, gy);
-  }
-  // Solo quita márgenes uniformes conectados al borde; no recorta por color interior.
-  const trim = (r, color = bg) => {
-    const out = { ...r };
-    const blank = (axis, at) => {
-      let count = 0, matches = 0;
-      const start = axis === 'y' ? out.x0 : out.y0;
-      const end = axis === 'y' ? out.x1 : out.y1;
-      for (let k = start; k < end; k++) {
-        count++; if (isBackground(axis === 'y' ? at*w+k : k*w+at, color)) matches++;
-      }
-      return count > 0 && matches / count >= .995;
-    };
-    while (out.y1-out.y0 > 3 && blank('y', out.y0)) out.y0++;
-    while (out.y1-out.y0 > 3 && blank('y', out.y1-1)) out.y1--;
-    while (out.x1-out.x0 > 3 && blank('x', out.x0)) out.x0++;
-    while (out.x1-out.x0 > 3 && blank('x', out.x1-1)) out.x1--;
-    return out;
-  };
-  const root = trim(whole);
-  const area = r => (r.x1-r.x0) * (r.y1-r.y0);
-  const cuts = (r, axis) => {
-    const start = axis === 'y' ? r.y0 : r.x0;
-    const end = axis === 'y' ? r.y1 : r.x1;
-    const a = axis === 'y' ? r.x0 : r.y0;
-    const b = axis === 'y' ? r.x1 : r.y1;
-    const local = backgroundOf(r);
-    // El fondo local debe parecerse al de la página: un cielo plano no es medianil.
-    const compatible = Math.max(...local.map((v,i) => Math.abs(v-bg[i]))) <= tolerance;
-    const color = compatible ? local : bg;
-    const stats = [];
-    for (let k = start; k < end; k++) {
-      let sum=0, square=0, matches=0, edges=0;
-      for (let j=a; j<b; j++) {
-        const i = axis === 'y' ? k*w+j : j*w+k;
-        sum += lum[i]; square += lum[i]*lum[i];
-        if (isBackground(i,color)) matches++;
-        if (edge[i] > 64) edges++;
-      }
-      const n = b-a, mean = sum/n;
-      stats.push({ variance: Math.max(0,square/n-mean*mean), matches: matches/n, edges: edges/n });
-    }
-    const median = stats.map(v => v.variance).sort((a,b)=>a-b)[Math.floor(stats.length/2)] || 0;
-    const varianceLimit = Math.max(16, median*s.gutter*(axis === 'x' ? 1.2 : 1));
-    const mask = stats.map(v => v.variance <= varianceLimit && v.matches >= .985 && v.edges <= .03);
-    // Cierre 1D: une huecos de suciedad de un píxel, sin ensanchar los medianiles.
-    const closed = mask.map((v,i) => v || (i>0 && i+1<mask.length && mask[i-1] && mask[i+1]));
-    const found = [];
-    for (let i=0; i<closed.length;) {
-      if (!closed[i]) { i++; continue; }
-      const from=i; while (i<closed.length && closed[i]) i++;
-      const lo=start+from, hi=start+i;
-      const minBand = (axis === 'y' ? h*s.bandH : w*s.bandW);
-      if (hi-lo >= 2 && lo-start >= minBand && end-hi >= minBand) found.push({ lo, hi });
-    }
-    return found;
-  };
-  let interiorGutter = false;
-  const leaves = [];
-  const split = (r, depth=0) => {
-    if (depth >= 12) { leaves.push(r); return; }
-    const rows=cuts(r,'y'), cols=cuts(r,'x');
-    if (!rows.length && !cols.length) { leaves.push(r); return; }
-    // Horizontal primero conserva el flujo de filas occidental; vertical si es necesario.
-    const axis = rows.length ? 'y' : 'x';
-    const candidates = rows.length ? rows : cols;
-    const cut = candidates.reduce((a,b) => b.hi-b.lo > a.hi-a.lo ? b : a);
-    const first = { ...r, [axis === 'y' ? 'y1' : 'x1']: cut.lo };
-    const second = { ...r, [axis === 'y' ? 'y0' : 'x0']: cut.hi };
-    if (area(first) < size*s.minArea || area(second) < size*s.minArea) { leaves.push(r); return; }
-    if (cut.hi-cut.lo >= (axis === 'y' ? h : w)*.01) interiorGutter=true;
-    split(first, depth+1); split(second, depth+1);
-  };
-  split(root);
-  let rects=leaves.map(r=>trim(r)).filter(r=>area(r)>=size*s.minArea);
-  // Un único encuadre casi de página completa es splash, no una viñeta artificial.
-  const splash = rs => rs.length===1 && (rs[0].x1-rs[0].x0)/w > .85 && (rs[0].y1-rs[0].y0)/h > .85 && !interiorGutter;
-  if (splash(rects)) rects=[];
-  if (rects.length <= 1) {
-    // Flood-fill desde todo el borde (incluye las esquinas). Conserva interiores blancos
-    // encerrados por marcos; el cierre 3×3 sella pequeños desperfectos de escaneo.
-    const ink = new Uint8Array(size), dilated=new Uint8Array(size), sealed=new Uint8Array(size);
-    for(let i=0;i<size;i++) ink[i]=isBackground(i)?0:1;
-    for(let y=0;y<h;y++) for(let x=0;x<w;x++) {
-      let value=0;
-      for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++) {
-        const xx=x+dx, yy=y+dy;
-        if(xx>=0&&xx<w&&yy>=0&&yy<h&&ink[yy*w+xx]) value=1;
-      }
-      dilated[y*w+x]=value;
-    }
-    for(let y=0;y<h;y++) for(let x=0;x<w;x++) {
-      let value=1;
-      for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++) {
-        const xx=x+dx, yy=y+dy;
-        if(xx>=0&&xx<w&&yy>=0&&yy<h&&!dilated[yy*w+xx]) value=0;
-      }
-      sealed[y*w+x]=value;
-    }
-    const outside=new Uint8Array(size), seen=new Uint8Array(size), queue=new Int32Array(size);
-    let tail=0;
-    const seed=i=>{if(!sealed[i]&&!outside[i]) {outside[i]=1; queue[tail++]=i;}};
-    for(let x=0;x<w;x++) {seed(x);seed((h-1)*w+x);}
-    for(let y=0;y<h;y++) {seed(y*w);seed(y*w+w-1);}
-    const neighbors=(i,visit)=>{
-      const x=i%w;
-      if(x>0) visit(i-1); if(x<w-1) visit(i+1);
-      if(i>=w) visit(i-w); if(i<size-w) visit(i+w);
-    };
-    for(let head=0;head<tail;head++) neighbors(queue[head],seed);
-    const components=[];
-    for(let i=0;i<size;i++) {
-      if(outside[i]||seen[i]) continue;
-      tail=1;queue[0]=i;seen[i]=1;
-      const r={x0:w,y0:h,x1:0,y1:0};
-      for(let head=0;head<tail;head++) {
-        const p=queue[head], x=p%w,y=Math.floor(p/w);
-        r.x0=Math.min(r.x0,x);r.x1=Math.max(r.x1,x+1);r.y0=Math.min(r.y0,y);r.y1=Math.max(r.y1,y+1);
-        neighbors(p,j=>{if(!outside[j]&&!seen[j]) {seen[j]=1;queue[tail++]=j;}});
-      }
-      // Densidad evita aceptar letras, líneas y siluetas sueltas como viñetas.
-      if(tail>=size*s.minArea && tail/area(r)>=.55 && r.x1-r.x0>=w*s.bandW && r.y1-r.y0>=h*s.bandH) components.push(trim(r));
-    }
-    if(components.length>1 && !splash(components)) rects=components;
-  }
-  let panels=rects.map(r=>({x:r.x0/w,y:r.y0/h,w:(r.x1-r.x0)/w,h:(r.y1-r.y0)/h}));
-  if(s.merge>0) {
-    let changed=true;
-    while(changed) {
-      changed=false;
-      outer: for(let i=0;i<panels.length;i++) for(let j=i+1;j<panels.length;j++) {
-        const a=panels[i],b=panels[j];
-        const ox=Math.max(0,Math.min(a.x+a.w,b.x+b.w)-Math.max(a.x,b.x));
-        const oy=Math.max(0,Math.min(a.y+a.h,b.y+b.h)-Math.max(a.y,b.y));
-        const gx=Math.max(0,Math.max(a.x,b.x)-Math.min(a.x+a.w,b.x+b.w));
-        const gy=Math.max(0,Math.max(a.y,b.y)-Math.min(a.y+a.h,b.y+b.h));
-        if((ox/Math.min(a.w,b.w)>.8&&gy<=s.merge)||(oy/Math.min(a.h,b.h)>.8&&gx<=s.merge)) {
-          const x=Math.min(a.x,b.x),y=Math.min(a.y,b.y);
-          panels[i]={x,y,w:Math.max(a.x+a.w,b.x+b.w)-x,h:Math.max(a.y+a.h,b.y+b.h)-y};
-          panels.splice(j,1);changed=true;break outer;
-        }
-      }
-    }
-  }
-  // Filas con tolerancia: una viñeta alta no arrastra a todas las filas siguientes.
-  const rows=[];
-  for(const p of panels.sort((a,b)=>a.y-b.y||a.x-b.x)) {
-    const row=rows.find(r=>Math.max(0,Math.min(r.bottom,p.y+p.h)-Math.max(r.top,p.y)) >= Math.min(r.bottom-r.top,p.h)*.5);
-    if(row) {row.panels.push(p);row.top=Math.max(row.top,p.y);row.bottom=Math.min(row.bottom,p.y+p.h);}
-    else rows.push({top:p.y,bottom:p.y+p.h,panels:[p]});
-  }
-  panels=rows.flatMap(r=>r.panels.sort((a,b)=>s.order==='rtl'?b.x-a.x:a.x-b.x));
-  if(s.maxPanels>0&&panels.length>s.maxPanels) {
-    const keep=new Set(panels.map((p,i)=>({i,area:p.w*p.h})).sort((a,b)=>b.area-a.area).slice(0,s.maxPanels).map(v=>v.i));
-    panels=panels.filter((_,i)=>keep.has(i));
-  }
-  return panels;
-}
-
 /**
  * Lector de cómics: modo página / vertical / horizontal, mosaico, gestos.
  * @param {object} state - referencias mutables del main (cleanup, reading, pump, stack, …)
@@ -326,36 +89,216 @@ export function createReader(state, d) {
   }
 
 
-  /** Análisis local; errores de imagen conservan la lectura en página completa. */
-  async function detectPanelsFromUrl(url, settings = readPanelSettings(pref)) {
-    let im;
+  /**
+   * Detecta viñetas por medianiles (v2). Rects normalizados 0–1.
+   * Mejoras: media de luminancia vs fondo, umbral con suelo, morfología 1D,
+   * corte XY recursivo, fallback progresivo, orden de lectura natural y flag RTL (manga).
+   * Defaults y claves de preferencias iguales que antes; nuevas: panelRtl (0/1).
+   */
+  async function detectPanelsFromUrl(url) {
     try {
-      im = await new Promise((resolve, reject) => {
-        const image = new Image();
-        image.crossOrigin = 'anonymous';
-        image.onload = () => resolve(image);
-        image.onerror = reject;
-        image.src = url;
+      const im = await new Promise((res, rej) => {
+        const i = new Image();
+        i.onload = () => res(i);
+        i.onerror = rej;
+        i.src = url;
       });
-      if (!im.naturalWidth || !im.naturalHeight) return [];
-      // Limita también páginas excepcionalmente altas para acotar memoria y trabajo.
-      const scale = Math.min(1, settings.width / im.naturalWidth, 1600 / im.naturalHeight);
-      const w = Math.max(8, Math.round(im.naturalWidth * scale));
-      const h = Math.max(8, Math.round(im.naturalHeight * scale));
-      const canvas = document.createElement('canvas');
-      canvas.width = w; canvas.height = h;
-      const context = canvas.getContext('2d', { willReadFrequently: true });
-      if (!context) return [];
-      context.drawImage(im, 0, 0, w, h);
-      const pixels = context.getImageData(0, 0, w, h).data;
-      // Cede un turno antes del análisis para pintar la página completa.
-      await new Promise(resolve => setTimeout(resolve, 0));
-      return detectPanelsFromPixels(pixels, w, h, settings);
-    } catch (error) {
-      console.warn('[panel] No se pudo analizar la página', error);
+      const numP = (key, def, min, max) => {
+        let n = Number(pref(key, String(def)));
+        if (!Number.isFinite(n)) n = def;
+        return Math.max(min, Math.min(max, n));
+      };
+      const baseMul = numP('panelGutter', 18, 5, 50) / 100;
+      const bandMinH = numP('panelBandMin', 4, 1, 20) / 100;
+      const bandMinW = Math.max(bandMinH, 0.06);
+      const minArea = numP('panelMinArea', 4, 1, 30) / 100;
+      const maxW = numP('panelDetectW', 360, 160, 720);
+      const mergeGap = numP('panelMerge', 0, 0, 15) / 100;
+      const maxPanels = numP('panelMax', 0, 0, 60);
+      const rtl = String(pref('panelRtl', '0')) === '1';
+
+      const scale = Math.min(1, maxW / Math.max(1, im.naturalWidth));
+      const w = Math.max(32, Math.round(im.naturalWidth * scale));
+      const h = Math.max(32, Math.round(im.naturalHeight * scale));
+      const cv = document.createElement('canvas');
+      cv.width = w; cv.height = h;
+      const ctx = cv.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(im, 0, 0, w, h);
+      const data = ctx.getImageData(0, 0, w, h).data;
+      const lum = new Float32Array(w * h);
+      for (let i = 0, p = 0; i < lum.length; i++, p += 4) {
+        lum[i] = 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2];
+      }
+
+      // Luminancia de fondo (margen de la página): mediana del anillo exterior
+      const ring = [];
+      const rx = Math.max(1, Math.round(w * 0.02));
+      const ry = Math.max(1, Math.round(h * 0.02));
+      for (let y = 0; y < h; y += 2) {
+        for (let x = 0; x < w; x++) {
+          if (y < ry || y >= h - ry || x < rx || x >= w - rx) ring.push(lum[y * w + x]);
+        }
+      }
+      ring.sort((a, b) => a - b);
+      const bgLum = ring.length ? ring[Math.floor(ring.length / 2)] : 255;
+      const ringSpread = ring.length ? ring[Math.floor(ring.length * 0.9)] - ring[Math.floor(ring.length * 0.1)] : 255;
+      const useMean = ringSpread < 60; // margen homogéneo → medianil debe parecerse al fondo
+      const MEAN_TOL = 45;
+
+      const medianOf = (arr) => {
+        const a = Array.from(arr).sort((p, q) => p - q);
+        return a[Math.floor(a.length / 2)] || 0;
+      };
+
+      // Perfil (media, varianza) por fila o columna dentro de un rectángulo
+      const profile = (x0, y0, x1, y1, byRow) => {
+        const n = byRow ? y1 - y0 : x1 - x0;
+        const m = new Float32Array(n), v = new Float32Array(n);
+        for (let k = 0; k < n; k++) {
+          let s = 0, s2 = 0, c = 0;
+          if (byRow) {
+            const off = (y0 + k) * w;
+            for (let x = x0; x < x1; x++) { const q = lum[off + x]; s += q; s2 += q * q; c++; }
+          } else {
+            const xx = x0 + k;
+            for (let y = y0; y < y1; y++) { const q = lum[y * w + xx]; s += q; s2 += q * q; c++; }
+          }
+          const mean = s / Math.max(1, c);
+          m[k] = mean;
+          v[k] = s2 / Math.max(1, c) - mean * mean;
+        }
+        return { m, v, n };
+      };
+
+      // Segmenta un perfil en tramos de contenido [a,b) relativos al inicio
+      const segments = (prof, mul, minLen, minGutterLen) => {
+        const { m, v, n } = prof;
+        const med = medianOf(v);
+        const thr = Math.min(300, Math.max(med * mul, 2));
+        const isG = new Uint8Array(n);
+        for (let k = 0; k < n; k++) {
+          isG[k] = v[k] < thr && (!useMean || Math.abs(m[k] - bgLum) < MEAN_TOL) ? 1 : 0;
+        }
+        // Cierre: medianiles más cortos que minGutterLen (interiores) cuentan como contenido
+        let k = 0;
+        while (k < n) {
+          if (isG[k]) {
+            let e = k; while (e < n && isG[e]) e++;
+            if (k > 0 && e < n && e - k < minGutterLen) for (let j = k; j < e; j++) isG[j] = 0;
+            k = e;
+          } else k++;
+        }
+        const out = [];
+        k = 0;
+        while (k < n) {
+          while (k < n && isG[k]) k++;
+          if (k >= n) break;
+          const a = k;
+          while (k < n && !isG[k]) k++;
+          if (k - a > minLen) out.push([a, k]);
+        }
+        return out;
+      };
+
+      const run = (mul) => {
+        const minGutterLen = Math.max(1, Math.round(h * 0.004));
+        const leaves = [];
+        const cut = (x0, y0, x1, y1, rowsFirst, depth) => {
+          if (x1 - x0 < 8 || y1 - y0 < 8) return;
+          const tryAxis = (byRow) => {
+            const prof = profile(x0, y0, x1, y1, byRow);
+            const minLen = byRow ? h * bandMinH : w * bandMinW;
+            return segments(prof, mul, minLen, minGutterLen);
+          };
+          if (depth < 6) {
+            for (const byRow of rowsFirst ? [true, false] : [false, true]) {
+              const segs = tryAxis(byRow);
+              const full = segs.length === 1 && segs[0][0] === 0 &&
+                segs[0][1] === (byRow ? y1 - y0 : x1 - x0);
+              if (segs.length > 1 || (segs.length === 1 && !full)) {
+                let list = segs;
+                if (!byRow && rtl) list = segs.slice().reverse();
+                for (const [a, b] of list) {
+                  if (byRow) cut(x0, y0 + a, x1, y0 + b, false, depth + 1);
+                  else cut(x0 + a, y0, x0 + b, y1, true, depth + 1);
+                }
+                return;
+              }
+            }
+          }
+          leaves.push({ x: x0 / w, y: y0 / h, w: (x1 - x0) / w, h: (y1 - y0) / h });
+        };
+        cut(0, 0, w, h, true, 0);
+        return leaves.filter((p) => p.w * p.h > minArea);
+      };
+
+      // Fallback progresivo: si sale 0/1 viñeta, probar umbrales de medianil más permisivos
+      let filtered = [];
+      for (const k of [1, 1.7, 2.8]) {
+        filtered = run(Math.min(0.6, baseMul * k));
+        if (filtered.length >= 2) break;
+      }
+      if (filtered.length <= 1) {
+        const p = filtered[0];
+        if (!p || (p.w > 0.85 && p.h > 0.85)) return [];
+      }
+
+      let reordered = false;
+      if (mergeGap > 0 && filtered.length > 1) {
+        let changed = true;
+        while (changed) {
+          changed = false;
+          const next = [];
+          const used = new Array(filtered.length).fill(false);
+          for (let i = 0; i < filtered.length; i++) {
+            if (used[i]) continue;
+            let a = { ...filtered[i] };
+            for (let j = i + 1; j < filtered.length; j++) {
+              if (used[j]) continue;
+              const b = filtered[j];
+              const gapX = Math.max(0, Math.max(a.x, b.x) - Math.min(a.x + a.w, b.x + b.w));
+              const gapY = Math.max(0, Math.max(a.y, b.y) - Math.min(a.y + a.h, b.y + b.h));
+              const overlapX = a.x < b.x + b.w && b.x < a.x + a.w;
+              const overlapY = a.y < b.y + b.h && b.y < a.y + a.h;
+              const near = (overlapX && gapY <= mergeGap) || (overlapY && gapX <= mergeGap) || (gapX <= mergeGap && gapY <= mergeGap);
+              if (near) {
+                const x2 = Math.max(a.x + a.w, b.x + b.w);
+                const y2 = Math.max(a.y + a.h, b.y + b.h);
+                const x0 = Math.min(a.x, b.x);
+                const y0 = Math.min(a.y, b.y);
+                const cand = { x: x0, y: y0, w: x2 - x0, h: y2 - y0 };
+                if (cand.w * cand.h > 0.7) continue; // nunca fusionar hasta "casi splash"
+                a = cand;
+                used[j] = true;
+                changed = true;
+                reordered = true;
+              }
+            }
+            used[i] = true;
+            next.push(a);
+          }
+          filtered = next;
+        }
+        if (filtered.length <= 1) {
+          const p = filtered[0];
+          if (!p || (p.w > 0.85 && p.h > 0.85)) return [];
+        }
+      }
+      // El corte XY ya devuelve orden de lectura; solo reordenar tras fusionar
+      if (reordered) {
+        filtered.sort((a, b) => (Math.abs(a.y - b.y) > 0.03 ? a.y - b.y : (rtl ? b.x - a.x : a.x - b.x)));
+      }
+      if (maxPanels > 0 && filtered.length > maxPanels) {
+        filtered = filtered
+          .map((p, i) => ({ p, i, a: p.w * p.h }))
+          .sort((u, v) => v.a - u.a)
+          .slice(0, maxPanels)
+          .sort((u, v) => u.i - v.i)
+          .map((u) => u.p);
+      }
+      return filtered;
+    } catch {
       return [];
-    } finally {
-      if (im) { im.onload = null; im.onerror = null; }
     }
   }
 
@@ -1197,10 +1140,6 @@ export function createReader(state, d) {
 
         const pagePanelsCache = new Map();
         let panels = [];
-        let panelLoadToken = 0;
-        let panelLoading = false;
-        let detectedSettingsKey = '';
-        botRight.append(cnt);
         let pIdx = 0;
         let fullView = true;
         let panX = 0, panY = 0;
@@ -1283,57 +1222,37 @@ export function createReader(state, d) {
 
         const loadPage = async (i, opts = {}) => {
           i = Math.max(0, Math.min(pages.length - 1, i));
-          const mine = ++panelLoadToken;
-          panelLoading = true;
-          panels = [];
-          fullView = true;
-          pIdx = 0;
-          panX = 0; panY = 0;
           n = i;
           savePage(n);
           setCount();
-          closeNextCard();
-          const settings = readPanelSettings(pref);
-          const signature = JSON.stringify(settings);
-          const key = i + ':' + signature;
+          fullView = opts.fullView !== false;
+          pIdx = 0;
+          panX = 0;
+          panY = 0;
           try {
             const u = await load(i);
-            if (mine !== panelLoadToken || !rd.isConnected) return;
             img.src = u;
-            await img.decode();
-            if (mine !== panelLoadToken || !rd.isConnected) return;
-            applyFocus();
-            let result = pagePanelsCache.get(key);
-            if (!result) {
-              result = await detectPanelsFromUrl(u, settings);
-              if (mine !== panelLoadToken || !rd.isConnected) return;
-              pagePanelsCache.set(key, result);
-              while (pagePanelsCache.size > 32) pagePanelsCache.delete(pagePanelsCache.keys().next().value);
+            await img.decode().catch(() => {});
+            const ck = i + '|' + ['panelGutter','panelBandMin','panelMinArea','panelDetectW','panelMerge','panelMax','panelRtl'].map((k) => pref(k, '')).join(',');
+            if (pagePanelsCache.has(ck)) panels = pagePanelsCache.get(ck) || [];
+            else {
+              panels = await detectPanelsFromUrl(u);
+              pagePanelsCache.set(ck, panels);
             }
-            panels = result;
-            detectedSettingsKey = signature;
-            fullView = opts.fullView !== false || !panels.length;
-            if (opts.enterLast && panels.length) { fullView = false; pIdx = panels.length - 1; }
-            else if (opts.enterFirst && panels.length) { fullView = false; pIdx = 0; }
+            if (opts.enterLast && panels.length) {
+              fullView = false;
+              pIdx = panels.length - 1;
+            } else if (opts.enterFirst && panels.length) {
+              fullView = false;
+              pIdx = 0;
+            }
             applyFocus();
-            const preloadToken = ++token;
-            preloadAround(i, token, preloadToken);
-            const keep = networkPreloadRadius() + 2;
-            for (const idx of [...urls.keys()]) if (Math.abs(idx - i) > keep) drop(idx);
-          } catch (error) {
-            if (mine !== panelLoadToken || !rd.isConnected) return;
-            panels = []; fullView = true;
-            cnt.textContent = 'Error';
-            console.warn('[panel]', error);
-          } finally {
-            if (mine === panelLoadToken) panelLoading = false;
+            token++;
+            const mine = token;
+            preloadAround(i, token, mine);
+          } catch (e) {
+            console.warn('[panel]', e);
           }
-        };
-
-        const refreshPanelSettings = async () => {
-          if (detectedSettingsKey === JSON.stringify(readPanelSettings(pref))) return false;
-          await loadPage(n);
-          return true;
         };
 
         const enterPanel = (idx) => {
@@ -1346,7 +1265,6 @@ export function createReader(state, d) {
         };
 
         const nextPanel = async () => {
-          if (panelLoading || await refreshPanelSettings()) return true;
           if (fullView) {
             if (panels.length) { enterPanel(0); return true; }
             if (n >= pages.length - 1) { showNextCard({ auto: false }); return false; }
@@ -1355,7 +1273,6 @@ export function createReader(state, d) {
           }
           if (pIdx < panels.length - 1) {
             pIdx++;
-            panX = 0; panY = 0;
             applyFocus();
             return true;
           }
@@ -1365,7 +1282,6 @@ export function createReader(state, d) {
         };
 
         const prevPanel = async () => {
-          if (panelLoading || await refreshPanelSettings()) return true;
           // Orden inverso de nextPanel:
           // next: fullView → 1ª viñeta → … → última → pág siguiente (full)
           // prev: fullView → pág anterior última viñeta → … → 1ª → full de esa pág
@@ -1381,7 +1297,6 @@ export function createReader(state, d) {
           }
           if (pIdx > 0) {
             pIdx--;
-            panX = 0; panY = 0;
             applyFocus();
             return true;
           }
@@ -1465,7 +1380,7 @@ export function createReader(state, d) {
         pageHost.addEventListener('wheel', onWheelPanel, { passive: false });
         observers._wheel = onWheelPanel;
 
-        const onResizePanel = () => { try { sizeReaderEl(rd); applyFocus(); } catch (_) {} };
+        const onResizePanel = () => { try { applyFocus(); } catch (_) {} };
         addEventListener('resize', onResizePanel);
         observers._resize = onResizePanel;
 
@@ -1475,7 +1390,6 @@ export function createReader(state, d) {
           else if (ev.key === 'Escape') { fullView = true; applyFocus(); }
         };
 
-        rd._dragCleanups = [...(rd._dragCleanups || []), () => { panelLoadToken++; pagePanelsCache.clear(); }];
         loadPage(n);
         try { pokeUI(); } catch (_) {}
         try { armUiHide(); } catch (_) {}
@@ -2564,7 +2478,6 @@ export function createReader(state, d) {
         clearTimeout(uiTimer);
         clearTimeout(autoT);
         try { autoCancelAnim(); } catch (_) {}
-        for (const cleanup of rd._dragCleanups || []) { try { cleanup(); } catch (_) {} }
         observers.forEach((o) => { try { o.disconnect(); } catch (_) {} });
         if (observers._scroll) rd.removeEventListener('scroll', observers._scroll);
         if (observers._wheel) rd.removeEventListener('wheel', observers._wheel);
