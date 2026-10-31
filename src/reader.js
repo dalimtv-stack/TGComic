@@ -90,6 +90,36 @@ export function createReader(state, d) {
 
 
   /** Detecta viñetas por medianiles. Rects normalizados 0–1. */
+  /** Migración one-shot: defaults v2 (cómic occidental). No deja prefs viejas rotas. */
+  function migratePanelDetectPrefs() {
+    const VER = '2';
+    if (pref('panelDetectCfgV', '') === VER) return;
+    const defaults = {
+      panelDetectW: '480',
+      panelGutterRow: '18',
+      panelGutterCol: '22',
+      panelBandMin: '4',
+      panelMinArea: '3',
+      panelMerge: '0',
+      panelMax: '0',
+      panelUseEdges: '1',
+      panelEdgeMul: '20',
+    };
+    for (const [k, v] of Object.entries(defaults)) {
+      try { setPref(k, v); } catch (_) {}
+    }
+    try { setPref('panelDetectCfgV', VER); } catch (_) {}
+    try { setPref('panelDetectRev', String(Date.now())); } catch (_) {}
+  }
+
+  function panelDetectSig() {
+    const keys = [
+      'panelGutterRow', 'panelGutterCol', 'panelGutter', 'panelBandMin', 'panelMinArea',
+      'panelDetectW', 'panelMerge', 'panelMax', 'panelUseEdges', 'panelEdgeMul', 'panelDetectRev',
+    ];
+    return keys.map((k) => pref(k, '')).join('|');
+  }
+
   async function detectPanelsFromUrl(url) {
     try {
       const im = await new Promise((res, rej) => {
@@ -103,14 +133,27 @@ export function createReader(state, d) {
         if (!Number.isFinite(n)) n = def;
         return Math.max(min, Math.min(max, n));
       };
-      // Defaults = valores del detector original (antes de exponer ajustes)
-      const gutterMul = numP('panelGutter', 18, 5, 50) / 100;
+      // Compat: panelGutter antiguo → fila si no hay row
+      // Fila: panelGutterRow (default 18); si no existe, legacy panelGutter
+      const rowGutterPct = (() => {
+        const raw = pref('panelGutterRow', '');
+        if (raw !== '' && raw != null && Number.isFinite(Number(raw))) {
+          return Math.max(5, Math.min(50, Number(raw)));
+        }
+        const legacy = Number(pref('panelGutter', '18'));
+        return Number.isFinite(legacy) ? Math.max(5, Math.min(50, legacy)) : 18;
+      })();
+      const colGutterPct = numP('panelGutterCol', 22, 5, 50);
+      const rowMul = rowGutterPct / 100;
+      const colMul = colGutterPct / 100;
       const bandMinH = numP('panelBandMin', 4, 1, 20) / 100;
-      const bandMinW = Math.max(bandMinH, 0.06); // original: filas 4%, columnas 6%
-      const minArea = numP('panelMinArea', 4, 1, 30) / 100;
-      const maxW = numP('panelDetectW', 360, 160, 720);
-      const mergeGap = numP('panelMerge', 0, 0, 15) / 100; // 0 = off (comportamiento original)
-      const maxPanels = numP('panelMax', 0, 0, 60); // 0 = sin límite
+      const bandMinW = Math.max(bandMinH, 0.06);
+      const minArea = numP('panelMinArea', 3, 1, 30) / 100;
+      const maxW = numP('panelDetectW', 480, 160, 960);
+      const mergeGap = numP('panelMerge', 0, 0, 15) / 100;
+      const maxPanels = numP('panelMax', 0, 0, 60);
+      const useEdges = numP('panelUseEdges', 1, 0, 1) === 1;
+      const edgeMul = numP('panelEdgeMul', 20, 5, 50) / 100;
 
       const scale = Math.min(1, maxW / Math.max(1, im.naturalWidth));
       const w = Math.max(32, Math.round(im.naturalWidth * scale));
@@ -120,26 +163,81 @@ export function createReader(state, d) {
       const ctx = cv.getContext('2d', { willReadFrequently: true });
       ctx.drawImage(im, 0, 0, w, h);
       const data = ctx.getImageData(0, 0, w, h).data;
-      const lum = new Float32Array(w * h);
+      // Luminancia
+      let lum = new Float32Array(w * h);
       for (let i = 0, p = 0; i < lum.length; i++, p += 4) {
         lum[i] = 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2];
       }
+      // Blur 3×3 (caja) — reduce JPEG/ruido
+      {
+        const src = lum;
+        const dst = new Float32Array(w * h);
+        for (let y = 0; y < h; y++) {
+          for (let x = 0; x < w; x++) {
+            let s = 0, c = 0;
+            for (let dy = -1; dy <= 1; dy++) {
+              const yy = y + dy;
+              if (yy < 0 || yy >= h) continue;
+              for (let dx = -1; dx <= 1; dx++) {
+                const xx = x + dx;
+                if (xx < 0 || xx >= w) continue;
+                s += src[yy * w + xx];
+                c++;
+              }
+            }
+            dst[y * w + x] = s / c;
+          }
+        }
+        lum = dst;
+      }
+      // Sobel opcional → magnitud de borde por píxel
+      let edge = null;
+      if (useEdges) {
+        edge = new Float32Array(w * h);
+        for (let y = 1; y < h - 1; y++) {
+          for (let x = 1; x < w - 1; x++) {
+            const i = y * w + x;
+            const gx =
+              -lum[i - w - 1] + lum[i - w + 1] +
+              -2 * lum[i - 1] + 2 * lum[i + 1] +
+              -lum[i + w - 1] + lum[i + w + 1];
+            const gy =
+              -lum[i - w - 1] - 2 * lum[i - w] - lum[i - w + 1] +
+               lum[i + w - 1] + 2 * lum[i + w] + lum[i + w + 1];
+            edge[i] = Math.abs(gx) + Math.abs(gy);
+          }
+        }
+      }
+
       const rowVar = new Float32Array(h);
+      const rowEdge = new Float32Array(h);
       for (let y = 0; y < h; y++) {
-        let sum = 0, sum2 = 0;
+        let sum = 0, sum2 = 0, eSum = 0;
         const off = y * w;
         for (let x = 0; x < w; x++) {
           const v = lum[off + x];
           sum += v; sum2 += v * v;
+          if (edge) eSum += edge[off + x];
         }
         const mean = sum / w;
         rowVar[y] = sum2 / w - mean * mean;
+        rowEdge[y] = eSum / w;
       }
-      const med = (() => {
+      const medVar = (() => {
         const a = Array.from(rowVar).sort((a, b) => a - b);
         return a[Math.floor(a.length / 2)] || 1;
       })();
-      const gutterRow = (y) => rowVar[y] < med * gutterMul;
+      const medEdge = (() => {
+        if (!edge) return 1;
+        const a = Array.from(rowEdge).sort((a, b) => a - b);
+        return a[Math.floor(a.length / 2)] || 1;
+      })();
+      const gutterRow = (y) => {
+        const lowVar = rowVar[y] < medVar * rowMul;
+        if (!useEdges || !edge) return lowVar;
+        return lowVar && rowEdge[y] < medEdge * edgeMul;
+      };
+
       const bands = [];
       let y = 0;
       while (y < h) {
@@ -151,24 +249,37 @@ export function createReader(state, d) {
         if (y1 - y0 > h * bandMinH) bands.push([y0, y1]);
       }
       if (bands.length < 1) return [];
+
       const panels = [];
       for (const [y0, y1] of bands) {
         const bh = y1 - y0;
         const colVar = new Float32Array(w);
+        const colEdge = new Float32Array(w);
         for (let x = 0; x < w; x++) {
-          let sum = 0, sum2 = 0;
+          let sum = 0, sum2 = 0, eSum = 0;
           for (let yy = y0; yy < y1; yy++) {
             const v = lum[yy * w + x];
             sum += v; sum2 += v * v;
+            if (edge) eSum += edge[yy * w + x];
           }
           const mean = sum / bh;
           colVar[x] = sum2 / bh - mean * mean;
+          colEdge[x] = eSum / bh;
         }
-        const cmed = (() => {
+        const cmedVar = (() => {
           const a = Array.from(colVar).sort((a, b) => a - b);
           return a[Math.floor(a.length / 2)] || 1;
         })();
-        const gutterCol = (x) => colVar[x] < cmed * gutterMul;
+        const cmedEdge = (() => {
+          if (!edge) return 1;
+          const a = Array.from(colEdge).sort((a, b) => a - b);
+          return a[Math.floor(a.length / 2)] || 1;
+        })();
+        const gutterCol = (x) => {
+          const lowVar = colVar[x] < cmedVar * colMul;
+          if (!useEdges || !edge) return lowVar;
+          return lowVar && colEdge[x] < cmedEdge * edgeMul;
+        };
         let x = 0;
         const cols = [];
         while (x < w) {
@@ -184,12 +295,13 @@ export function createReader(state, d) {
           panels.push({ x: x0 / w, y: y0 / h, w: (x1 - x0) / w, h: (y1 - y0) / h });
         }
       }
+
       let filtered = panels.filter((p) => p.w * p.h > minArea);
       if (filtered.length <= 1) {
         const p = filtered[0];
-        if (!p || (p.w > 0.85 && p.h > 0.85)) return [];
+        // Splash: umbral 0.90 (antes 0.85)
+        if (!p || (p.w > 0.90 && p.h > 0.90)) return [];
       }
-      // Fusión de viñetas cercanas
       if (mergeGap > 0 && filtered.length > 1) {
         let changed = true;
         while (changed) {
@@ -223,10 +335,8 @@ export function createReader(state, d) {
           filtered = next;
         }
       }
-      // Orden lectura: arriba→abajo, izq→der
       filtered.sort((a, b) => (a.y - b.y) || (a.x - b.x));
       if (maxPanels > 0 && filtered.length > maxPanels) {
-        // Demasiadas: quedarse con las de mayor área
         filtered = filtered
           .map((p, i) => ({ p, i, a: p.w * p.h }))
           .sort((u, v) => v.a - u.a)
@@ -239,6 +349,8 @@ export function createReader(state, d) {
       return [];
     }
   }
+
+  migratePanelDetectPrefs();
 
   async function resolveQueue(ch, f) {
     try {
@@ -1076,11 +1188,16 @@ export function createReader(state, d) {
         pageHost.append(sheet, dimHole);
         rd.append(pageHost, top, bot);
 
+        migratePanelDetectPrefs();
         const pagePanelsCache = new Map();
+        const onPanelPrefs = () => { try { pagePanelsCache.clear(); } catch (_) {} };
+        try { window.addEventListener('tgcomic:panel-prefs', onPanelPrefs); } catch (_) {}
+        observers._panelPrefs = onPanelPrefs;
         let panels = [];
         let pIdx = 0;
         let fullView = true;
         let panX = 0, panY = 0;
+        let panelSrcKey = String(src?.id ?? f?.id ?? '') + '|' + panelDetectSig();
 
         const layoutImage = () => {
           const rect = pageHost.getBoundingClientRect();
@@ -1168,13 +1285,22 @@ export function createReader(state, d) {
           panX = 0;
           panY = 0;
           try {
+            // Si cambió la versión del cómic (calidad / IA / archivo), recalcular viñetas
+            const srcNow = String((typeof pickSrc === 'function' ? pickSrc() : src)?.id ?? f?.id ?? '');
+            const keyNow = srcNow + '|' + panelDetectSig();
+            if (keyNow !== panelSrcKey) {
+              pagePanelsCache.clear();
+              panelSrcKey = keyNow;
+            }
             const u = await load(i);
             img.src = u;
             await img.decode().catch(() => {});
-            if (pagePanelsCache.has(i)) panels = pagePanelsCache.get(i) || [];
+            const sig = panelDetectSig();
+            const cacheKey = srcNow + '::' + i + '::' + sig;
+            if (pagePanelsCache.has(cacheKey)) panels = pagePanelsCache.get(cacheKey) || [];
             else {
               panels = await detectPanelsFromUrl(u);
-              pagePanelsCache.set(i, panels);
+              pagePanelsCache.set(cacheKey, panels);
             }
             if (opts.enterLast && panels.length) {
               fullView = false;
@@ -1316,6 +1442,7 @@ export function createReader(state, d) {
         };
         pageHost.addEventListener('wheel', onWheelPanel, { passive: false });
         observers._wheel = onWheelPanel;
+        observers._wheelTarget = pageHost;
 
         const onResizePanel = () => { try { applyFocus(); } catch (_) {} };
         addEventListener('resize', onResizePanel);
@@ -2417,7 +2544,16 @@ export function createReader(state, d) {
         try { autoCancelAnim(); } catch (_) {}
         observers.forEach((o) => { try { o.disconnect(); } catch (_) {} });
         if (observers._scroll) rd.removeEventListener('scroll', observers._scroll);
-        if (observers._wheel) rd.removeEventListener('wheel', observers._wheel);
+        if (observers._wheel) {
+          try {
+            (observers._wheelTarget || rd).removeEventListener('wheel', observers._wheel);
+          } catch (_) {
+            try { rd.removeEventListener('wheel', observers._wheel); } catch (_) {}
+          }
+        }
+        if (observers._panelPrefs) {
+          try { window.removeEventListener('tgcomic:panel-prefs', observers._panelPrefs); } catch (_) {}
+        }
         if (observers._touchStart) rd.removeEventListener('touchstart', observers._touchStart);
         if (observers._touchMove) rd.removeEventListener('touchmove', observers._touchMove);
         if (observers._touchEnd) {
