@@ -1116,8 +1116,25 @@ function showViewerConfig() {
   bindNum(panelPaperFracInp, 'panelPaperFrac', 40, 15, 80);
   panelPaperFracField.append(panelPaperFracInp);
 
+  const panelDebugField = el('div', 'cfg-field');
+  panelDebugField.append(el('label', 'sync-label', 'Depuración: mostrar todas las viñetas de la página'));
+  const panelDebugSel = el('select', 'edit-input');
+  [['0', 'No'], ['1', 'Sí — contornos sobre la página completa']].forEach(([v, lab]) => {
+    const o = el('option', '', lab);
+    o.value = v;
+    panelDebugSel.append(o);
+  });
+  panelDebugSel.value = pref('panelDebug', '0') === '1' ? '1' : '0';
+  panelDebugSel.onchange = () => {
+    setPref('panelDebug', panelDebugSel.value);
+    setPref('panelDetectRev', String(Date.now()));
+    try { window.dispatchEvent(new CustomEvent('tgcomic:panel-prefs')); } catch (_) {}
+  };
+  panelDebugField.append(panelDebugSel);
+
   panelWrap.append(
     panelShadowField, panelMarginField, panelCropField,
+    panelDebugField,
     panelGutterRowField, panelGutterColField, panelBandField, panelAreaField,
     panelResField, panelMergeField, panelMaxField,
     panelPaperLumField, panelPaperFracField
