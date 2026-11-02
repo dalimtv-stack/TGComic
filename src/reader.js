@@ -90,12 +90,12 @@ export function createReader(state, d) {
 
 
   function migratePanelDetectPrefs() {
-    const VER = '3';
+    const VER = '4';
     if (pref('panelDetectCfgV', '') === VER) return;
     const defaults = {
-      panelDetectW: '480', panelGutterRow: '18', panelGutterCol: '22',
+      panelDetectW: '480', panelGutterRow: '12', panelGutterCol: '12',
       panelBandMin: '4', panelMinArea: '3', panelMerge: '0', panelMax: '0',
-      panelUseEdges: '1', panelEdgeMul: '20',
+      panelPaperLum: '185', panelPaperFrac: '40',
     };
     for (const [k, v] of Object.entries(defaults)) {
       try { setPref(k, v); } catch (_) {}
@@ -107,7 +107,7 @@ export function createReader(state, d) {
   function panelDetectSig() {
     const keys = [
       'panelGutterRow', 'panelGutterCol', 'panelBandMin', 'panelMinArea',
-      'panelDetectW', 'panelMerge', 'panelMax', 'panelUseEdges', 'panelEdgeMul', 'panelDetectRev',
+      'panelDetectW', 'panelMerge', 'panelMax', 'panelPaperLum', 'panelPaperFrac', 'panelDetectRev',
     ];
     return keys.map((k) => String(pref(k, ''))).join('|');
   }
@@ -125,20 +125,20 @@ export function createReader(state, d) {
         if (!Number.isFinite(n)) n = def;
         return Math.max(min, Math.min(max, n));
       };
-      const rawRow = pref('panelGutterRow', '');
-      const rowMul = (rawRow !== '' && Number.isFinite(Number(rawRow))
-        ? Math.max(5, Math.min(50, Number(rawRow)))
-        : (Number.isFinite(Number(pref('panelGutter', '18'))) ? Math.max(5, Math.min(50, Number(pref('panelGutter', '18')))) : 18)
-      ) / 100;
-      const colMul = numP('panelGutterCol', 22, 5, 50) / 100;
-      const bandMinH = numP('panelBandMin', 4, 1, 20) / 100;
-      const bandMinW = Math.max(bandMinH, 0.06);
-      const minArea = numP('panelMinArea', 3, 1, 30) / 100;
+      // Resolución de análisis
       const maxW = numP('panelDetectW', 480, 160, 960);
+      // Umbral de “papel” (luminancia 0–255). Medianiles blancos de cómic occidental ≈ 185+
+      const paperLum = numP('panelPaperLum', 185, 140, 250);
+      // Sensibilidad picos de papel: % sobre la mediana local (filas / columnas)
+      const peakRow = numP('panelGutterRow', 12, 5, 40) / 100;
+      const peakCol = numP('panelGutterCol', 12, 5, 40) / 100;
+      // Fracción mínima de papel para marcar medianil “fuerte”
+      const absPaper = numP('panelPaperFrac', 40, 15, 80) / 100;
+      const bandMinH = numP('panelBandMin', 4, 1, 20) / 100;
+      const bandMinW = Math.max(bandMinH, 0.08);
+      const minArea = numP('panelMinArea', 3, 1, 30) / 100;
       const mergeGap = numP('panelMerge', 0, 0, 15) / 100;
       const maxPanels = numP('panelMax', 0, 0, 60);
-      const useEdges = numP('panelUseEdges', 1, 0, 1) === 1;
-      const edgeMul = numP('panelEdgeMul', 20, 5, 50) / 100;
 
       const sc = Math.min(1, maxW / Math.max(1, im.naturalWidth));
       const w = Math.max(32, Math.round(im.naturalWidth * sc));
@@ -149,101 +149,117 @@ export function createReader(state, d) {
       if (!ctx) return [];
       ctx.drawImage(im, 0, 0, w, h);
       const data = ctx.getImageData(0, 0, w, h).data;
-      let lum = new Float32Array(w * h);
+      const lum = new Float32Array(w * h);
       for (let i = 0, p = 0; i < lum.length; i++, p += 4) {
         lum[i] = 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2];
       }
-      // blur 3x3
-      {
-        const src = lum, dst = new Float32Array(w * h);
-        for (let y = 0; y < h; y++) {
-          for (let x = 0; x < w; x++) {
-            let s = 0, c = 0;
-            for (let dy = -1; dy <= 1; dy++) {
-              const yy = y + dy; if (yy < 0 || yy >= h) continue;
-              for (let dx = -1; dx <= 1; dx++) {
-                const xx = x + dx; if (xx < 0 || xx >= w) continue;
-                s += src[yy * w + xx]; c++;
-              }
-            }
-            dst[y * w + x] = s / c;
+
+      const smooth1d = (arr, k) => {
+        const n = arr.length;
+        const kk = k | 1;
+        const half = (kk - 1) >> 1;
+        const out = new Float32Array(n);
+        for (let i = 0; i < n; i++) {
+          let s = 0, c = 0;
+          for (let d = -half; d <= half; d++) {
+            const j = i + d;
+            if (j < 0 || j >= n) continue;
+            s += arr[j]; c++;
           }
+          out[i] = s / c;
         }
-        lum = dst;
-      }
-      let edge = null;
-      if (useEdges) {
-        edge = new Float32Array(w * h);
-        for (let y = 1; y < h - 1; y++) {
-          for (let x = 1; x < w - 1; x++) {
-            const i = y * w + x;
-            const gx = -lum[i - w - 1] + lum[i - w + 1] - 2 * lum[i - 1] + 2 * lum[i + 1] - lum[i + w - 1] + lum[i + w + 1];
-            const gy = -lum[i - w - 1] - 2 * lum[i - w] - lum[i - w + 1] + lum[i + w - 1] + 2 * lum[i + w] + lum[i + w + 1];
-            edge[i] = Math.abs(gx) + Math.abs(gy);
-          }
-        }
-      }
-      const rowVar = new Float32Array(h);
-      const rowEdge = new Float32Array(h);
-      for (let y = 0; y < h; y++) {
-        let sum = 0, sum2 = 0, eSum = 0;
-        const off = y * w;
-        for (let x = 0; x < w; x++) {
-          const v = lum[off + x]; sum += v; sum2 += v * v;
-          if (edge) eSum += edge[off + x];
-        }
-        const mean = sum / w;
-        rowVar[y] = sum2 / w - mean * mean;
-        rowEdge[y] = eSum / w;
-      }
-      const medVar = Array.from(rowVar).sort((a, b) => a - b)[Math.floor(h / 2)] || 1;
-      const medEdge = edge ? (Array.from(rowEdge).sort((a, b) => a - b)[Math.floor(h / 2)] || 1) : 1;
-      const gutterRow = (y) => {
-        const low = rowVar[y] < medVar * rowMul;
-        return useEdges && edge ? (low && rowEdge[y] < medEdge * edgeMul) : low;
+        return out;
       };
+
+      // Fracción de píxeles “papel” por fila
+      const rowPaperRaw = new Float32Array(h);
+      for (let y = 0; y < h; y++) {
+        let c = 0;
+        const off = y * w;
+        for (let x = 0; x < w; x++) if (lum[off + x] >= paperLum) c++;
+        rowPaperRaw[y] = c / w;
+      }
+      const rowPaper = smooth1d(rowPaperRaw, 5);
+
+      // Medianil horizontal: margen muy claro, o pico local de papel, o papel alto absoluto
+      const gutterRow = new Uint8Array(h);
+      for (let y = 0; y < h; y++) {
+        if (rowPaper[y] > 0.85) { gutterRow[y] = 1; continue; }
+        if (y >= 10 && y < h - 10) {
+          let med = 0;
+          const vals = [];
+          for (let d = -10; d <= 10; d++) vals.push(rowPaper[y + d]);
+          vals.sort((a, b) => a - b);
+          med = vals[(vals.length - 1) >> 1];
+          if (rowPaper[y] > med + peakRow && rowPaper[y] > 0.20) gutterRow[y] = 1;
+          else if (rowPaper[y] > absPaper && y > 25 && y < h - 25) gutterRow[y] = 1;
+        }
+      }
+      // Dilatar 2 px
+      const gRow = new Uint8Array(h);
+      for (let y = 0; y < h; y++) {
+        if (!gutterRow[y]) continue;
+        for (let d = -2; d <= 2; d++) {
+          const yy = y + d;
+          if (yy >= 0 && yy < h) gRow[yy] = 1;
+        }
+      }
+
       const bands = [];
       let y = 0;
       while (y < h) {
-        while (y < h && gutterRow(y)) y++;
+        while (y < h && gRow[y]) y++;
         if (y >= h) break;
         const y0 = y;
-        while (y < h && !gutterRow(y)) y++;
+        while (y < h && !gRow[y]) y++;
         if (y - y0 > h * bandMinH) bands.push([y0, y]);
       }
       if (!bands.length) return [];
-      const panels = [];
-      for (const [y0, y1] of bands) {
+
+      const splitCols = (y0, y1) => {
         const bh = y1 - y0;
-        const colVar = new Float32Array(w);
-        const colEdge = new Float32Array(w);
+        const colPaperRaw = new Float32Array(w);
         for (let x = 0; x < w; x++) {
-          let sum = 0, sum2 = 0, eSum = 0;
-          for (let yy = y0; yy < y1; yy++) {
-            const v = lum[yy * w + x]; sum += v; sum2 += v * v;
-            if (edge) eSum += edge[yy * w + x];
-          }
-          const mean = sum / bh;
-          colVar[x] = sum2 / bh - mean * mean;
-          colEdge[x] = eSum / bh;
+          let c = 0;
+          for (let yy = y0; yy < y1; yy++) if (lum[yy * w + x] >= paperLum) c++;
+          colPaperRaw[x] = c / bh;
         }
-        const cmedVar = Array.from(colVar).sort((a, b) => a - b)[Math.floor(w / 2)] || 1;
-        const cmedEdge = edge ? (Array.from(colEdge).sort((a, b) => a - b)[Math.floor(w / 2)] || 1) : 1;
-        const gutterCol = (x) => {
-          const low = colVar[x] < cmedVar * colMul;
-          return useEdges && edge ? (low && colEdge[x] < cmedEdge * edgeMul) : low;
-        };
-        let x = 0;
+        const colPaper = smooth1d(colPaperRaw, 5);
+        const gutterCol = new Uint8Array(w);
+        for (let x = 0; x < w; x++) {
+          if (colPaper[x] > 0.85) { gutterCol[x] = 1; continue; }
+          if (x >= 8 && x < w - 8) {
+            const vals = [];
+            for (let d = -8; d <= 8; d++) vals.push(colPaper[x + d]);
+            vals.sort((a, b) => a - b);
+            const med = vals[(vals.length - 1) >> 1];
+            if (colPaper[x] > med + peakCol && colPaper[x] > 0.22) gutterCol[x] = 1;
+            else if (colPaper[x] > absPaper) gutterCol[x] = 1;
+          }
+        }
+        const gCol = new Uint8Array(w);
+        for (let x = 0; x < w; x++) {
+          if (!gutterCol[x]) continue;
+          for (let d = -2; d <= 2; d++) {
+            const xx = x + d;
+            if (xx >= 0 && xx < w) gCol[xx] = 1;
+          }
+        }
         const cols = [];
+        let x = 0;
         while (x < w) {
-          while (x < w && gutterCol(x)) x++;
+          while (x < w && gCol[x]) x++;
           if (x >= w) break;
           const x0 = x;
-          while (x < w && !gutterCol(x)) x++;
+          while (x < w && !gCol[x]) x++;
           if (x - x0 > w * bandMinW) cols.push([x0, x]);
         }
-        if (!cols.length) cols.push([0, w]);
-        for (const [x0, x1] of cols) {
+        return cols.length ? cols : [[0, w]];
+      };
+
+      let panels = [];
+      for (const [y0, y1] of bands) {
+        for (const [x0, x1] of splitCols(y0, y1)) {
           panels.push({ x: x0 / w, y: y0 / h, w: (x1 - x0) / w, h: (y1 - y0) / h });
         }
       }
@@ -281,7 +297,12 @@ export function createReader(state, d) {
       }
       filtered.sort((a, b) => (a.y - b.y) || (a.x - b.x));
       if (maxPanels > 0 && filtered.length > maxPanels) {
-        filtered = filtered.map((p, i) => ({ p, i, a: p.w * p.h })).sort((u, v) => v.a - u.a).slice(0, maxPanels).sort((u, v) => u.i - v.i).map((u) => u.p);
+        filtered = filtered
+          .map((p, i) => ({ p, i, a: p.w * p.h }))
+          .sort((u, v) => v.a - u.a)
+          .slice(0, maxPanels)
+          .sort((u, v) => u.i - v.i)
+          .map((u) => u.p);
       }
       return filtered;
     } catch (e) {
