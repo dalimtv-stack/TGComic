@@ -1540,3 +1540,15 @@ html:has(.sf-root){
     gap:2px!important;
   }
 }
+
+/* Depuración viñetas: contornos de todos los paneles */
+#rd .panel-debug-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 6;
+  overflow: hidden;
+}
+#rd .panel-debug-box {
+  pointer-events: none;
+}
