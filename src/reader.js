@@ -89,12 +89,29 @@ export function createReader(state, d) {
   }
 
 
-  /**
-   * Detecta viñetas por medianiles (v2). Rects normalizados 0–1.
-   * Mejoras: media de luminancia vs fondo, umbral con suelo, morfología 1D,
-   * corte XY recursivo, fallback progresivo, orden de lectura natural y flag RTL (manga).
-   * Defaults y claves de preferencias iguales que antes; nuevas: panelRtl (0/1).
-   */
+  function migratePanelDetectPrefs() {
+    const VER = '3';
+    if (pref('panelDetectCfgV', '') === VER) return;
+    const defaults = {
+      panelDetectW: '480', panelGutterRow: '18', panelGutterCol: '22',
+      panelBandMin: '4', panelMinArea: '3', panelMerge: '0', panelMax: '0',
+      panelUseEdges: '1', panelEdgeMul: '20',
+    };
+    for (const [k, v] of Object.entries(defaults)) {
+      try { setPref(k, v); } catch (_) {}
+    }
+    try { setPref('panelDetectCfgV', VER); } catch (_) {}
+    try { setPref('panelDetectRev', String(Date.now())); } catch (_) {}
+  }
+
+  function panelDetectSig() {
+    const keys = [
+      'panelGutterRow', 'panelGutterCol', 'panelBandMin', 'panelMinArea',
+      'panelDetectW', 'panelMerge', 'panelMax', 'panelUseEdges', 'panelEdgeMul', 'panelDetectRev',
+    ];
+    return keys.map((k) => String(pref(k, ''))).join('|');
+  }
+
   async function detectPanelsFromUrl(url) {
     try {
       const im = await new Promise((res, rej) => {
@@ -108,142 +125,133 @@ export function createReader(state, d) {
         if (!Number.isFinite(n)) n = def;
         return Math.max(min, Math.min(max, n));
       };
-      const baseMul = numP('panelGutter', 18, 5, 50) / 100;
+      const rawRow = pref('panelGutterRow', '');
+      const rowMul = (rawRow !== '' && Number.isFinite(Number(rawRow))
+        ? Math.max(5, Math.min(50, Number(rawRow)))
+        : (Number.isFinite(Number(pref('panelGutter', '18'))) ? Math.max(5, Math.min(50, Number(pref('panelGutter', '18')))) : 18)
+      ) / 100;
+      const colMul = numP('panelGutterCol', 22, 5, 50) / 100;
       const bandMinH = numP('panelBandMin', 4, 1, 20) / 100;
       const bandMinW = Math.max(bandMinH, 0.06);
-      const minArea = numP('panelMinArea', 4, 1, 30) / 100;
-      const maxW = numP('panelDetectW', 360, 160, 720);
+      const minArea = numP('panelMinArea', 3, 1, 30) / 100;
+      const maxW = numP('panelDetectW', 480, 160, 960);
       const mergeGap = numP('panelMerge', 0, 0, 15) / 100;
       const maxPanels = numP('panelMax', 0, 0, 60);
-      const rtl = String(pref('panelRtl', '0')) === '1';
+      const useEdges = numP('panelUseEdges', 1, 0, 1) === 1;
+      const edgeMul = numP('panelEdgeMul', 20, 5, 50) / 100;
 
-      const scale = Math.min(1, maxW / Math.max(1, im.naturalWidth));
-      const w = Math.max(32, Math.round(im.naturalWidth * scale));
-      const h = Math.max(32, Math.round(im.naturalHeight * scale));
+      const sc = Math.min(1, maxW / Math.max(1, im.naturalWidth));
+      const w = Math.max(32, Math.round(im.naturalWidth * sc));
+      const h = Math.max(32, Math.round(im.naturalHeight * sc));
       const cv = document.createElement('canvas');
       cv.width = w; cv.height = h;
       const ctx = cv.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return [];
       ctx.drawImage(im, 0, 0, w, h);
       const data = ctx.getImageData(0, 0, w, h).data;
-      const lum = new Float32Array(w * h);
+      let lum = new Float32Array(w * h);
       for (let i = 0, p = 0; i < lum.length; i++, p += 4) {
         lum[i] = 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2];
       }
-
-      // Luminancia de fondo (margen de la página): mediana del anillo exterior
-      const ring = [];
-      const rx = Math.max(1, Math.round(w * 0.02));
-      const ry = Math.max(1, Math.round(h * 0.02));
-      for (let y = 0; y < h; y += 2) {
-        for (let x = 0; x < w; x++) {
-          if (y < ry || y >= h - ry || x < rx || x >= w - rx) ring.push(lum[y * w + x]);
-        }
-      }
-      ring.sort((a, b) => a - b);
-      const bgLum = ring.length ? ring[Math.floor(ring.length / 2)] : 255;
-      const ringSpread = ring.length ? ring[Math.floor(ring.length * 0.9)] - ring[Math.floor(ring.length * 0.1)] : 255;
-      const useMean = ringSpread < 60; // margen homogéneo → medianil debe parecerse al fondo
-      const MEAN_TOL = 45;
-
-      const medianOf = (arr) => {
-        const a = Array.from(arr).sort((p, q) => p - q);
-        return a[Math.floor(a.length / 2)] || 0;
-      };
-
-      // Perfil (media, varianza) por fila o columna dentro de un rectángulo
-      const profile = (x0, y0, x1, y1, byRow) => {
-        const n = byRow ? y1 - y0 : x1 - x0;
-        const m = new Float32Array(n), v = new Float32Array(n);
-        for (let k = 0; k < n; k++) {
-          let s = 0, s2 = 0, c = 0;
-          if (byRow) {
-            const off = (y0 + k) * w;
-            for (let x = x0; x < x1; x++) { const q = lum[off + x]; s += q; s2 += q * q; c++; }
-          } else {
-            const xx = x0 + k;
-            for (let y = y0; y < y1; y++) { const q = lum[y * w + xx]; s += q; s2 += q * q; c++; }
-          }
-          const mean = s / Math.max(1, c);
-          m[k] = mean;
-          v[k] = s2 / Math.max(1, c) - mean * mean;
-        }
-        return { m, v, n };
-      };
-
-      // Segmenta un perfil en tramos de contenido [a,b) relativos al inicio
-      const segments = (prof, mul, minLen, minGutterLen) => {
-        const { m, v, n } = prof;
-        const med = medianOf(v);
-        const thr = Math.min(300, Math.max(med * mul, 2));
-        const isG = new Uint8Array(n);
-        for (let k = 0; k < n; k++) {
-          isG[k] = v[k] < thr && (!useMean || Math.abs(m[k] - bgLum) < MEAN_TOL) ? 1 : 0;
-        }
-        // Cierre: medianiles más cortos que minGutterLen (interiores) cuentan como contenido
-        let k = 0;
-        while (k < n) {
-          if (isG[k]) {
-            let e = k; while (e < n && isG[e]) e++;
-            if (k > 0 && e < n && e - k < minGutterLen) for (let j = k; j < e; j++) isG[j] = 0;
-            k = e;
-          } else k++;
-        }
-        const out = [];
-        k = 0;
-        while (k < n) {
-          while (k < n && isG[k]) k++;
-          if (k >= n) break;
-          const a = k;
-          while (k < n && !isG[k]) k++;
-          if (k - a > minLen) out.push([a, k]);
-        }
-        return out;
-      };
-
-      const run = (mul) => {
-        const minGutterLen = Math.max(1, Math.round(h * 0.004));
-        const leaves = [];
-        const cut = (x0, y0, x1, y1, rowsFirst, depth) => {
-          if (x1 - x0 < 8 || y1 - y0 < 8) return;
-          const tryAxis = (byRow) => {
-            const prof = profile(x0, y0, x1, y1, byRow);
-            const minLen = byRow ? h * bandMinH : w * bandMinW;
-            return segments(prof, mul, minLen, minGutterLen);
-          };
-          if (depth < 6) {
-            for (const byRow of rowsFirst ? [true, false] : [false, true]) {
-              const segs = tryAxis(byRow);
-              const full = segs.length === 1 && segs[0][0] === 0 &&
-                segs[0][1] === (byRow ? y1 - y0 : x1 - x0);
-              if (segs.length > 1 || (segs.length === 1 && !full)) {
-                let list = segs;
-                if (!byRow && rtl) list = segs.slice().reverse();
-                for (const [a, b] of list) {
-                  if (byRow) cut(x0, y0 + a, x1, y0 + b, false, depth + 1);
-                  else cut(x0 + a, y0, x0 + b, y1, true, depth + 1);
-                }
-                return;
+      // blur 3x3
+      {
+        const src = lum, dst = new Float32Array(w * h);
+        for (let y = 0; y < h; y++) {
+          for (let x = 0; x < w; x++) {
+            let s = 0, c = 0;
+            for (let dy = -1; dy <= 1; dy++) {
+              const yy = y + dy; if (yy < 0 || yy >= h) continue;
+              for (let dx = -1; dx <= 1; dx++) {
+                const xx = x + dx; if (xx < 0 || xx >= w) continue;
+                s += src[yy * w + xx]; c++;
               }
             }
+            dst[y * w + x] = s / c;
           }
-          leaves.push({ x: x0 / w, y: y0 / h, w: (x1 - x0) / w, h: (y1 - y0) / h });
-        };
-        cut(0, 0, w, h, true, 0);
-        return leaves.filter((p) => p.w * p.h > minArea);
-      };
-
-      // Fallback progresivo: si sale 0/1 viñeta, probar umbrales de medianil más permisivos
-      let filtered = [];
-      for (const k of [1, 1.7, 2.8]) {
-        filtered = run(Math.min(0.6, baseMul * k));
-        if (filtered.length >= 2) break;
+        }
+        lum = dst;
       }
+      let edge = null;
+      if (useEdges) {
+        edge = new Float32Array(w * h);
+        for (let y = 1; y < h - 1; y++) {
+          for (let x = 1; x < w - 1; x++) {
+            const i = y * w + x;
+            const gx = -lum[i - w - 1] + lum[i - w + 1] - 2 * lum[i - 1] + 2 * lum[i + 1] - lum[i + w - 1] + lum[i + w + 1];
+            const gy = -lum[i - w - 1] - 2 * lum[i - w] - lum[i - w + 1] + lum[i + w - 1] + 2 * lum[i + w] + lum[i + w + 1];
+            edge[i] = Math.abs(gx) + Math.abs(gy);
+          }
+        }
+      }
+      const rowVar = new Float32Array(h);
+      const rowEdge = new Float32Array(h);
+      for (let y = 0; y < h; y++) {
+        let sum = 0, sum2 = 0, eSum = 0;
+        const off = y * w;
+        for (let x = 0; x < w; x++) {
+          const v = lum[off + x]; sum += v; sum2 += v * v;
+          if (edge) eSum += edge[off + x];
+        }
+        const mean = sum / w;
+        rowVar[y] = sum2 / w - mean * mean;
+        rowEdge[y] = eSum / w;
+      }
+      const medVar = Array.from(rowVar).sort((a, b) => a - b)[Math.floor(h / 2)] || 1;
+      const medEdge = edge ? (Array.from(rowEdge).sort((a, b) => a - b)[Math.floor(h / 2)] || 1) : 1;
+      const gutterRow = (y) => {
+        const low = rowVar[y] < medVar * rowMul;
+        return useEdges && edge ? (low && rowEdge[y] < medEdge * edgeMul) : low;
+      };
+      const bands = [];
+      let y = 0;
+      while (y < h) {
+        while (y < h && gutterRow(y)) y++;
+        if (y >= h) break;
+        const y0 = y;
+        while (y < h && !gutterRow(y)) y++;
+        if (y - y0 > h * bandMinH) bands.push([y0, y]);
+      }
+      if (!bands.length) return [];
+      const panels = [];
+      for (const [y0, y1] of bands) {
+        const bh = y1 - y0;
+        const colVar = new Float32Array(w);
+        const colEdge = new Float32Array(w);
+        for (let x = 0; x < w; x++) {
+          let sum = 0, sum2 = 0, eSum = 0;
+          for (let yy = y0; yy < y1; yy++) {
+            const v = lum[yy * w + x]; sum += v; sum2 += v * v;
+            if (edge) eSum += edge[yy * w + x];
+          }
+          const mean = sum / bh;
+          colVar[x] = sum2 / bh - mean * mean;
+          colEdge[x] = eSum / bh;
+        }
+        const cmedVar = Array.from(colVar).sort((a, b) => a - b)[Math.floor(w / 2)] || 1;
+        const cmedEdge = edge ? (Array.from(colEdge).sort((a, b) => a - b)[Math.floor(w / 2)] || 1) : 1;
+        const gutterCol = (x) => {
+          const low = colVar[x] < cmedVar * colMul;
+          return useEdges && edge ? (low && colEdge[x] < cmedEdge * edgeMul) : low;
+        };
+        let x = 0;
+        const cols = [];
+        while (x < w) {
+          while (x < w && gutterCol(x)) x++;
+          if (x >= w) break;
+          const x0 = x;
+          while (x < w && !gutterCol(x)) x++;
+          if (x - x0 > w * bandMinW) cols.push([x0, x]);
+        }
+        if (!cols.length) cols.push([0, w]);
+        for (const [x0, x1] of cols) {
+          panels.push({ x: x0 / w, y: y0 / h, w: (x1 - x0) / w, h: (y1 - y0) / h });
+        }
+      }
+      let filtered = panels.filter((p) => p.w * p.h > minArea);
       if (filtered.length <= 1) {
         const p = filtered[0];
-        if (!p || (p.w > 0.85 && p.h > 0.85)) return [];
+        if (!p || (p.w > 0.90 && p.h > 0.90)) return [];
       }
-
-      let reordered = false;
       if (mergeGap > 0 && filtered.length > 1) {
         let changed = true;
         while (changed) {
@@ -260,44 +268,24 @@ export function createReader(state, d) {
               const gapY = Math.max(0, Math.max(a.y, b.y) - Math.min(a.y + a.h, b.y + b.h));
               const overlapX = a.x < b.x + b.w && b.x < a.x + a.w;
               const overlapY = a.y < b.y + b.h && b.y < a.y + a.h;
-              const near = (overlapX && gapY <= mergeGap) || (overlapY && gapX <= mergeGap) || (gapX <= mergeGap && gapY <= mergeGap);
-              if (near) {
-                const x2 = Math.max(a.x + a.w, b.x + b.w);
-                const y2 = Math.max(a.y + a.h, b.y + b.h);
-                const x0 = Math.min(a.x, b.x);
-                const y0 = Math.min(a.y, b.y);
-                const cand = { x: x0, y: y0, w: x2 - x0, h: y2 - y0 };
-                if (cand.w * cand.h > 0.7) continue; // nunca fusionar hasta "casi splash"
-                a = cand;
-                used[j] = true;
-                changed = true;
-                reordered = true;
+              if ((overlapX && gapY <= mergeGap) || (overlapY && gapX <= mergeGap) || (gapX <= mergeGap && gapY <= mergeGap)) {
+                const x0 = Math.min(a.x, b.x), y0 = Math.min(a.y, b.y);
+                a = { x: x0, y: y0, w: Math.max(a.x + a.w, b.x + b.w) - x0, h: Math.max(a.y + a.h, b.y + b.h) - y0 };
+                used[j] = true; changed = true;
               }
             }
-            used[i] = true;
-            next.push(a);
+            used[i] = true; next.push(a);
           }
           filtered = next;
         }
-        if (filtered.length <= 1) {
-          const p = filtered[0];
-          if (!p || (p.w > 0.85 && p.h > 0.85)) return [];
-        }
       }
-      // El corte XY ya devuelve orden de lectura; solo reordenar tras fusionar
-      if (reordered) {
-        filtered.sort((a, b) => (Math.abs(a.y - b.y) > 0.03 ? a.y - b.y : (rtl ? b.x - a.x : a.x - b.x)));
-      }
+      filtered.sort((a, b) => (a.y - b.y) || (a.x - b.x));
       if (maxPanels > 0 && filtered.length > maxPanels) {
-        filtered = filtered
-          .map((p, i) => ({ p, i, a: p.w * p.h }))
-          .sort((u, v) => v.a - u.a)
-          .slice(0, maxPanels)
-          .sort((u, v) => u.i - v.i)
-          .map((u) => u.p);
+        filtered = filtered.map((p, i) => ({ p, i, a: p.w * p.h })).sort((u, v) => v.a - u.a).slice(0, maxPanels).sort((u, v) => u.i - v.i).map((u) => u.p);
       }
       return filtered;
-    } catch {
+    } catch (e) {
+      console.warn('[panel-detect]', e);
       return [];
     }
   }
@@ -840,19 +828,14 @@ export function createReader(state, d) {
       infoBtn.onclick = (ev) => {
         try { ev.stopPropagation(); } catch (_) {}
         try {
-          if (typeof showComicInfo !== 'function') return;
-          showComicInfo(ctx.ch, f);
-          requestAnimationFrame(() => {
-            document.querySelectorAll('.info-frame, .edit-frame, .desc-panel').forEach((node) => {
-              try {
-                node.style.zIndex = '200';
-                node.style.position = 'fixed';
-                if (node.classList.contains('info-frame') || node.classList.contains('edit-frame')) {
-                  node.style.background = 'rgba(0,0,0,.45)';
-                }
-              } catch (_) {}
+          if (typeof showComicInfo === 'function') {
+            showComicInfo(ctx.ch, f);
+            requestAnimationFrame(() => {
+              document.querySelectorAll('.info-frame, .edit-frame').forEach((node) => {
+                try { node.style.zIndex = '200'; node.style.position = 'fixed'; } catch (_) {}
+              });
             });
-          });
+          }
         } catch (e) { console.warn('[reader] info', e); }
       };
       rd.append(cfgBtn, infoBtn, playBtn);
@@ -1127,6 +1110,8 @@ export function createReader(state, d) {
       let goToPage = (i) => {}; // se asigna en cada modo
 
       if (panelMode) {
+        try {
+        migratePanelDetectPrefs();
         setRdClass('page panel-mode fit-screen');
         const pageHost = el('div', 'page-host panel-host');
         const sheet = el('div', 'panel-sheet');
@@ -1139,10 +1124,14 @@ export function createReader(state, d) {
         rd.append(pageHost, top, bot);
 
         const pagePanelsCache = new Map();
+        const onPanelPrefs = () => { try { pagePanelsCache.clear(); } catch (_) {} };
+        try { window.addEventListener('tgcomic:panel-prefs', onPanelPrefs); } catch (_) {}
+        observers._panelPrefs = onPanelPrefs;
         let panels = [];
         let pIdx = 0;
         let fullView = true;
         let panX = 0, panY = 0;
+        let panelSrcKey = '';
 
         const layoutImage = () => {
           const rect = pageHost.getBoundingClientRect();
@@ -1177,7 +1166,6 @@ export function createReader(state, d) {
           const panel = panels[Math.max(0, Math.min(panels.length - 1, pIdx))];
           if (!panel) {
             sheet.style.transform = 'translate3d(' + L.offX + 'px,' + L.offY + 'px,0)';
-            pageHost.classList.remove('panel-focus');
             dimHole.style.display = 'none';
             return;
           }
@@ -1203,19 +1191,16 @@ export function createReader(state, d) {
           let shadowPct = Number(pref('panelShadow', '55'));
           if (!Number.isFinite(shadowPct)) shadowPct = 55;
           shadowPct = Math.max(0, Math.min(100, shadowPct));
-          const alpha = (shadowPct / 100).toFixed(2);
           const holeW = Math.max(8, pwN * L.dispW * scale);
           const holeH = Math.max(8, phN * L.dispH * scale);
-          const holeL = (L.pw - holeW) / 2 + panX;
-          const holeT = (L.ph - holeH) / 2 + panY;
           dimHole.style.display = 'block';
           dimHole.style.position = 'absolute';
-          dimHole.style.left = holeL + 'px';
-          dimHole.style.top = holeT + 'px';
+          dimHole.style.left = ((L.pw - holeW) / 2 + panX) + 'px';
+          dimHole.style.top = ((L.ph - holeH) / 2 + panY) + 'px';
           dimHole.style.width = holeW + 'px';
           dimHole.style.height = holeH + 'px';
           dimHole.style.borderRadius = '4px';
-          dimHole.style.boxShadow = '0 0 0 100vmax rgba(0,0,0,' + alpha + ')';
+          dimHole.style.boxShadow = '0 0 0 100vmax rgba(0,0,0,' + (shadowPct / 100).toFixed(2) + ')';
           dimHole.style.pointerEvents = 'none';
           dimHole.style.zIndex = '5';
         };
@@ -1230,14 +1215,20 @@ export function createReader(state, d) {
           panX = 0;
           panY = 0;
           try {
+            const srcId = String((typeof pickSrc === 'function' ? pickSrc() : null)?.id ?? f?.id ?? '');
+            const keyNow = srcId + '|' + panelDetectSig();
+            if (keyNow !== panelSrcKey) {
+              pagePanelsCache.clear();
+              panelSrcKey = keyNow;
+            }
             const u = await load(i);
             img.src = u;
             await img.decode().catch(() => {});
-            const ck = i + '|' + ['panelGutter','panelBandMin','panelMinArea','panelDetectW','panelMerge','panelMax','panelRtl'].map((k) => pref(k, '')).join(',');
-            if (pagePanelsCache.has(ck)) panels = pagePanelsCache.get(ck) || [];
+            const cacheKey = srcId + '::' + i + '::' + panelDetectSig();
+            if (pagePanelsCache.has(cacheKey)) panels = pagePanelsCache.get(cacheKey) || [];
             else {
               panels = await detectPanelsFromUrl(u);
-              pagePanelsCache.set(ck, panels);
+              pagePanelsCache.set(cacheKey, panels);
             }
             if (opts.enterLast && panels.length) {
               fullView = false;
@@ -1248,10 +1239,9 @@ export function createReader(state, d) {
             }
             applyFocus();
             token++;
-            const mine = token;
-            preloadAround(i, token, mine);
+            preloadAround(i, token, token);
           } catch (e) {
-            console.warn('[panel]', e);
+            console.warn('[panel] loadPage', e);
           }
         };
 
@@ -1259,8 +1249,7 @@ export function createReader(state, d) {
           if (!panels.length) return;
           fullView = false;
           pIdx = Math.max(0, Math.min(panels.length - 1, idx));
-          panX = 0;
-          panY = 0;
+          panX = 0; panY = 0;
           applyFocus();
         };
 
@@ -1271,62 +1260,37 @@ export function createReader(state, d) {
             await loadPage(n + 1);
             return true;
           }
-          if (pIdx < panels.length - 1) {
-            pIdx++;
-            applyFocus();
-            return true;
-          }
+          if (pIdx < panels.length - 1) { pIdx++; applyFocus(); return true; }
           if (n >= pages.length - 1) { showNextCard({ auto: false }); return false; }
           await loadPage(n + 1);
           return true;
         };
 
         const prevPanel = async () => {
-          // Orden inverso de nextPanel:
-          // next: fullView → 1ª viñeta → … → última → pág siguiente (full)
-          // prev: fullView → pág anterior última viñeta → … → 1ª → full de esa pág
           if (fullView) {
             if (n <= 0) return false;
             await loadPage(n - 1, { fullView: false, enterLast: true });
-            // si no hay viñetas, loadPage deja fullView según opts; forzar full si vacío
-            if (!panels.length) {
-              fullView = true;
-              applyFocus();
-            }
+            if (!panels.length) { fullView = true; applyFocus(); }
             return true;
           }
-          if (pIdx > 0) {
-            pIdx--;
-            applyFocus();
-            return true;
-          }
-          // Primera viñeta → vista completa de ESTA página (simétrico a entrar desde full a 1ª)
-          fullView = true;
-          panX = 0;
-          panY = 0;
-          applyFocus();
+          if (pIdx > 0) { pIdx--; applyFocus(); return true; }
+          fullView = true; panX = 0; panY = 0; applyFocus();
           return true;
         };
 
-        goToPage = (i) => loadPage(i);
+        goToPage = (i) => { loadPage(i); };
         autoStep = async () => (await nextPanel()) !== false;
 
-        // Tap laterales / centro + arrastre libre (como vertical) para pan en viñeta
-        let ptrStart = null;
-        let dragging = false;
-        let dragOrigin = null;
+        let ptrStart = null, dragging = false, dragOrigin = null;
         pageHost.addEventListener('pointerdown', (ev) => {
           if (ev.target.closest && ev.target.closest('.bar, .btn, .mosaic, .play-fab, .auto-cfg-fab, .q-group, .spread-fab, .rd-info-btn')) return;
           ptrStart = { x: ev.clientX, y: ev.clientY, id: ev.pointerId, t: Date.now() };
           dragging = false;
           dragOrigin = { x: ev.clientX, y: ev.clientY, panX: panX, panY: panY };
-          try { pageHost.setPointerCapture?.(ev.pointerId); } catch (_) {}
         }, { passive: true });
         pageHost.addEventListener('pointermove', (ev) => {
           if (!ptrStart || ptrStart.id !== ev.pointerId) return;
-          const dx = ev.clientX - ptrStart.x;
-          const dy = ev.clientY - ptrStart.y;
-          // Solo pan cuando hay viñeta enfocada (no en página completa)
+          const dx = ev.clientX - ptrStart.x, dy = ev.clientY - ptrStart.y;
           if (!fullView && dragOrigin && (dragging || Math.abs(dx) > 6 || Math.abs(dy) > 6)) {
             dragging = true;
             panX = dragOrigin.panX + (ev.clientX - dragOrigin.x);
@@ -1336,49 +1300,30 @@ export function createReader(state, d) {
         }, { passive: true });
         pageHost.addEventListener('pointerup', (ev) => {
           if (!ptrStart || ptrStart.id !== ev.pointerId) return;
-          const dx = ev.clientX - ptrStart.x;
-          const dy = ev.clientY - ptrStart.y;
-          const dt = Date.now() - ptrStart.t;
+          const dx = ev.clientX - ptrStart.x, dy = ev.clientY - ptrStart.y, dt = Date.now() - ptrStart.t;
           const wasDrag = dragging;
-          ptrStart = null;
-          dragging = false;
-          dragOrigin = null;
-          if (wasDrag) {
-            try { armUiHide(); } catch (_) {}
-            return;
-          }
+          ptrStart = null; dragging = false; dragOrigin = null;
+          if (wasDrag) { try { armUiHide(); } catch (_) {} return; }
           if (dt > 500 || Math.abs(dx) > 18 || Math.abs(dy) > 18) return;
           const rect = pageHost.getBoundingClientRect();
-          const x = ev.clientX - rect.left;
-          const w = rect.width || 1;
-          if (x < w * 0.30) {
-            prevPanel();
-            try { armUiHide(); } catch (_) {}
-          } else if (x > w * 0.70) {
-            nextPanel();
-            try { armUiHide(); } catch (_) {}
-          } else {
-            try { toggleUI(); } catch (_) {}
-          }
-        }, { passive: true });
-        pageHost.addEventListener('pointercancel', () => {
-          ptrStart = null;
-          dragging = false;
-          dragOrigin = null;
+          const x = ev.clientX - rect.left, ww = rect.width || 1;
+          if (x < ww * 0.30) prevPanel();
+          else if (x > ww * 0.70) nextPanel();
+          else try { toggleUI(); } catch (_) {}
+          try { armUiHide(); } catch (_) {}
         }, { passive: true });
 
         const onWheelPanel = (e) => {
-          const dy = e.deltaY || 0;
-          const dx = e.deltaX || 0;
+          const dy = e.deltaY || 0, dx = e.deltaX || 0;
           const dominant = Math.abs(dx) > Math.abs(dy) ? dx : dy;
           if (Math.abs(dominant) < 8) return;
           e.preventDefault();
-          if (dominant > 0) nextPanel();
-          else prevPanel();
+          if (dominant > 0) nextPanel(); else prevPanel();
           try { armUiHide(); } catch (_) {}
         };
         pageHost.addEventListener('wheel', onWheelPanel, { passive: false });
         observers._wheel = onWheelPanel;
+        observers._wheelTarget = pageHost;
 
         const onResizePanel = () => { try { applyFocus(); } catch (_) {} };
         addEventListener('resize', onResizePanel);
@@ -1393,6 +1338,12 @@ export function createReader(state, d) {
         loadPage(n);
         try { pokeUI(); } catch (_) {}
         try { armUiHide(); } catch (_) {}
+        } catch (err) {
+          console.error('[panel mode failed, fallback page]', err);
+          try { setPref('mode', 'page'); } catch (_) {}
+          // Forzar rama página en el mismo mount no es trivial; al menos no dejar el modo roto en bucle
+          setRdClass('page fit-' + pref('fit', 'screen'));
+        }
       } else if (!continuous) {
         setRdClass('page fit-' + pref('fit', 'screen') + (pref('spread', '0') === '1' ? ' spread' : ''));
         const fit = el('button', 'btn');
@@ -2480,7 +2431,14 @@ export function createReader(state, d) {
         try { autoCancelAnim(); } catch (_) {}
         observers.forEach((o) => { try { o.disconnect(); } catch (_) {} });
         if (observers._scroll) rd.removeEventListener('scroll', observers._scroll);
-        if (observers._wheel) rd.removeEventListener('wheel', observers._wheel);
+        if (observers._wheel) {
+          try { (observers._wheelTarget || rd).removeEventListener('wheel', observers._wheel); } catch (_) {
+            try { rd.removeEventListener('wheel', observers._wheel); } catch (_) {}
+          }
+        }
+        if (observers._panelPrefs) {
+          try { window.removeEventListener('tgcomic:panel-prefs', observers._panelPrefs); } catch (_) {}
+        }
         if (observers._touchStart) rd.removeEventListener('touchstart', observers._touchStart);
         if (observers._touchMove) rd.removeEventListener('touchmove', observers._touchMove);
         if (observers._touchEnd) {
