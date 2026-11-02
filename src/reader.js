@@ -188,11 +188,22 @@ export function createReader(state, d) {
       };
 
       const postProcess = (panels) => {
-        let filtered = panels.filter((p) => p.w * p.h > minArea);
+        // Filtrar fragmentos finos (falsos medianiles dentro del dibujo) y áreas mínimas
+        const minW = 0.18, minH = 0.12;
+        let filtered = panels.filter((p) => {
+          if (p.w * p.h <= minArea) return false;
+          if (p.w < minW || p.h < minH) return false;
+          return true;
+        });
         if (filtered.length <= 1) {
           const p = filtered[0];
-          if (!p || (p.w > 0.90 && p.h > 0.90)) return [];
+          // Portada / splash / una sola zona grande → página completa
+          if (!p || (p.w > 0.88 && p.h > 0.88) || (p && p.w * p.h > 0.55)) return [];
         }
+        let area = 0;
+        for (const p of filtered) area += p.w * p.h;
+        // Poca cobertura con pocos recuadros raros → no confiar
+        if (filtered.length >= 2 && area < 0.35) return [];
         if (mergeGap > 0 && filtered.length > 1) {
           let changed = true;
           while (changed) {
@@ -237,10 +248,11 @@ export function createReader(state, d) {
         if (n === 0) return -1;
         let area = 0;
         for (const p of panels) area += p.w * p.h;
-        // Penalizar sobre-segmentación y cobertura absurda
-        if (n > 12) return n * 0.25 + area * 0.5;
-        if (area < 0.25) return n * 0.5;
-        return n + area;
+        if (n > 10) return n * 0.2 + area * 0.5;
+        if (area < 0.30) return n * 0.4;
+        // Preferir rejillas típicas 2–8 viñetas
+        const bonus = (n >= 2 && n <= 8) ? 2 : 0;
+        return n + area + bonus;
       };
 
       // --- Método A: varianza (medianiles oscuros / bajo contraste) ---
@@ -322,7 +334,7 @@ export function createReader(state, d) {
             vals.sort((a, b) => a - b);
             const med = vals[(vals.length - 1) >> 1];
             if (rowPaper[y] > med + peakRow && rowPaper[y] > 0.20) gutterRow[y] = 1;
-            else if (rowPaper[y] > absPaper && y > 25 && y < h - 25) gutterRow[y] = 1;
+            else if (rowPaper[y] > Math.max(absPaper, 0.45) && y > 25 && y < h - 25) gutterRow[y] = 1;
           }
         }
         const gRow = new Uint8Array(h);
@@ -362,7 +374,7 @@ export function createReader(state, d) {
               vals.sort((a, b) => a - b);
               const med = vals[(vals.length - 1) >> 1];
               if (colPaper[x] > med + peakCol && colPaper[x] > 0.22) gutterCol[x] = 1;
-              else if (colPaper[x] > absPaper) gutterCol[x] = 1;
+              else if (colPaper[x] > Math.max(absPaper, 0.48)) gutterCol[x] = 1;
             }
           }
           const gCol = new Uint8Array(w);
@@ -380,7 +392,7 @@ export function createReader(state, d) {
             if (x >= w) break;
             const x0 = x;
             while (x < w && !gCol[x]) x++;
-            if (x - x0 > w * Math.max(bandMinW, 0.08)) cols.push([x0, x]);
+            if (x - x0 > w * Math.max(bandMinW, 0.12)) cols.push([x0, x]);
           }
           if (!cols.length) cols.push([0, w]);
           for (const [x0, x1] of cols) {
