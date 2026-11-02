@@ -107,7 +107,8 @@ export function createReader(state, d) {
   function panelDetectSig() {
     const keys = [
       'panelGutterRow', 'panelGutterCol', 'panelBandMin', 'panelMinArea',
-      'panelDetectW', 'panelMerge', 'panelMax', 'panelPaperLum', 'panelPaperFrac', 'panelDetectRev',
+      'panelDetectW', 'panelMerge', 'panelMax', 'panelPaperLum', 'panelPaperFrac',
+      'panelDebug', 'panelDetectRev',
     ];
     return keys.map((k) => String(pref(k, ''))).join('|');
   }
@@ -1228,7 +1229,9 @@ export function createReader(state, d) {
         sheet.append(img);
         const dimHole = el('div', 'panel-dim-hole');
         dimHole.setAttribute('aria-hidden', 'true');
-        pageHost.append(sheet, dimHole);
+        const debugLayer = el('div', 'panel-debug-layer');
+        debugLayer.setAttribute('aria-hidden', 'true');
+        pageHost.append(sheet, dimHole, debugLayer);
         rd.append(pageHost, top, bot);
 
         const pagePanelsCache = new Map();
@@ -1262,9 +1265,45 @@ export function createReader(state, d) {
           return { dispW, dispH, offX, offY, pw, ph };
         };
 
+        const renderPanelDebug = (L) => {
+          const on = pref('panelDebug', '0') === '1';
+          if (!on || !panels.length) {
+            debugLayer.style.display = 'none';
+            debugLayer.innerHTML = '';
+            return;
+          }
+          debugLayer.style.display = 'block';
+          debugLayer.innerHTML = '';
+          const colors = ['#00e676', '#ffea00', '#00b0ff', '#ff1744', '#e040fb', '#ff9100', '#76ff03', '#18ffff'];
+          panels.forEach((p, idx) => {
+            const box = el('div', 'panel-debug-box');
+            const left = L.offX + p.x * L.dispW;
+            const top = L.offY + p.y * L.dispH;
+            const bw = Math.max(4, p.w * L.dispW);
+            const bh = Math.max(4, p.h * L.dispH);
+            const col = colors[idx % colors.length];
+            box.style.cssText = 'position:absolute;left:' + left + 'px;top:' + top + 'px;width:' + bw + 'px;height:' + bh + 'px;border:2px solid ' + col + ';box-sizing:border-box;background:rgba(0,0,0,.12);';
+            const lab = el('div', 'panel-debug-label', String(idx + 1));
+            lab.style.cssText = 'position:absolute;left:2px;top:2px;min-width:1.1em;padding:1px 4px;font:700 12px/1.2 system-ui,sans-serif;color:#000;background:' + col + ';border-radius:3px;';
+            box.append(lab);
+            debugLayer.append(box);
+          });
+        };
+
         const applyFocus = () => {
           const L = layoutImage();
           sheet.style.transformOrigin = '0 0';
+          const debugOn = pref('panelDebug', '0') === '1';
+          // Depuración: página completa + contornos de todas las viñetas
+          if (debugOn) {
+            sheet.style.transform = 'translate3d(' + L.offX + 'px,' + L.offY + 'px,0)';
+            pageHost.classList.remove('panel-focus');
+            dimHole.style.display = 'none';
+            renderPanelDebug(L);
+            return;
+          }
+          debugLayer.style.display = 'none';
+          debugLayer.innerHTML = '';
           if (fullView || !panels.length) {
             sheet.style.transform = 'translate3d(' + L.offX + 'px,' + L.offY + 'px,0)';
             pageHost.classList.remove('panel-focus');
