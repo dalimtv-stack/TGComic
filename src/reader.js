@@ -120,6 +120,7 @@ export function createReader(state, d) {
     { id: '1980-1990', label: '1980-1990' },
     { id: '1990-2000', label: '1990-2000' },
     { id: '2000-', label: '2000-' },
+    { id: 'Grok', label: 'Grok' },
   ];
   const PANEL_ERA_DEFAULTS = {
     '1900-1950': {
@@ -151,6 +152,13 @@ export function createReader(state, d) {
       panelGutterRow: 13, panelGutterCol: 13, panelBandMin: 3, panelMinArea: 2,
       panelDetectW: 640, panelMerge: 0, panelMax: 20,
       panelPaperLum: 185, panelPaperFrac: 34, panelBorderLum: 75,
+    },
+    // Primer preset Grok (1980-1990 original antes del retune)
+    'Grok': {
+      panelShadow: 55, panelMargin: 8, panelCrop: 4,
+      panelGutterRow: 18, panelGutterCol: 22, panelBandMin: 4, panelMinArea: 4,
+      panelDetectW: 360, panelMerge: 0, panelMax: 0,
+      panelPaperLum: 175, panelPaperFrac: 40, panelBorderLum: 80,
     },
   };
   const PANEL_CFG_KEYS = [
@@ -340,23 +348,35 @@ export function createReader(state, d) {
         // 1) Papel / medianil claro
         const paper = new Uint8Array(N);
         for (let i = 0; i < N; i++) if (lum[i] >= paperLum) paper[i] = 1;
-        // dilatar papel 1px para puente de medianiles estrechos
+        // Dilatar papel: más agresivo si paperFrac es alto (medianiles más “permisivos”)
         const paper2 = new Uint8Array(paper);
-        for (let y = 0; y < h; y++) {
-          for (let x = 0; x < w; x++) {
-            if (!paper[y * w + x]) continue;
-            const i = y * w + x;
-            if (x > 0) paper2[i - 1] = 1;
-            if (x + 1 < w) paper2[i + 1] = 1;
-            if (y > 0) paper2[i - w] = 1;
-            if (y + 1 < h) paper2[i + w] = 1;
+        const dilateR = numP('panelPaperFrac', 40, 15, 80) >= 38 ? 1 : 0;
+        if (dilateR > 0) {
+          for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+              if (!paper[y * w + x]) continue;
+              const i = y * w + x;
+              if (x > 0) paper2[i - 1] = 1;
+              if (x + 1 < w) paper2[i + 1] = 1;
+              if (y > 0) paper2[i - w] = 1;
+              if (y + 1 < h) paper2[i + w] = 1;
+            }
           }
+        } else {
+          paper2.set(paper);
         }
 
         // 2) Muros = runs oscuros largos (marcos H/V), no todo el negro del dibujo
+        // minRun depende de la época: gutter alto → runs más cortos aceptados (más sensible);
+        // bandMin alto → exige segmentos más largos (menos fragmentación).
         const wall = new Uint8Array(N);
-        const minRunW = Math.max(6, Math.floor(w * 0.06));
-        const minRunH = Math.max(6, Math.floor(h * 0.06));
+        const gAvg = (Number(pref('panelGutterRow', '15')) + Number(pref('panelGutterCol', '15'))) / 2;
+        const bandPct = numP('panelBandMin', 4, 1, 20);
+        // base 6% · sube con bandMin · baja un poco con gutter alto
+        let minRunFrac = 0.04 + (bandPct / 100) * 0.8 - Math.max(0, gAvg - 12) * 0.0015;
+        minRunFrac = Math.max(0.03, Math.min(0.14, minRunFrac));
+        const minRunW = Math.max(4, Math.floor(w * minRunFrac));
+        const minRunH = Math.max(4, Math.floor(h * minRunFrac));
         for (let y = 0; y < h; y++) {
           let x = 0;
           while (x < w) {
@@ -1659,10 +1679,22 @@ export function createReader(state, d) {
             img.src = u;
             await img.decode().catch(() => {});
             const cacheKey = srcId + '::' + i + '::' + panelDetectSig();
-            if (pagePanelsCache.has(cacheKey)) panels = pagePanelsCache.get(cacheKey) || [];
-            else {
+            if (!opts.forceDetect && pagePanelsCache.has(cacheKey)) {
+              panels = pagePanelsCache.get(cacheKey) || [];
+            } else {
               panels = await detectPanelsFromUrl(u);
               pagePanelsCache.set(cacheKey, panels);
+              try {
+                console.info('[panel-detect]', {
+                  era: pref('panelEra', ''),
+                  page: i,
+                  n: panels.length,
+                  paperLum: pref('panelPaperLum', ''),
+                  borderLum: pref('panelBorderLum', ''),
+                  detectW: pref('panelDetectW', ''),
+                  gutter: pref('panelGutterRow', '') + '/' + pref('panelGutterCol', ''),
+                });
+              } catch (_) {}
             }
             if (opts.enterLast && panels.length) {
               fullView = false;
@@ -1678,7 +1710,11 @@ export function createReader(state, d) {
             console.warn('[panel] loadPage', e);
           }
         };
-        reloadPanelsNow = () => { try { loadPage(n, { fullView }); } catch (_) {} };
+        reloadPanelsNow = () => {
+          try { pagePanelsCache.clear(); } catch (_) {}
+          panelSrcKey = '';
+          try { loadPage(n, { fullView, forceDetect: true }); } catch (_) {}
+        };
 
         const enterPanel = (idx) => {
           if (!panels.length) return;
