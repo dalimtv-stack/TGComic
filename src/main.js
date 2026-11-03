@@ -959,36 +959,44 @@ function showViewerConfig() {
     { id: '1990-2000', label: '1990-2000' },
     { id: '2000-', label: '2000-' },
   ];
+  // Presets orientados a cómic occidental (marcos + medianiles).
+  // Globals de framing: shadow 55, margin 8, crop 4, merge siempre 0.
+  // Gutters en rango 13–18 (no bajar a 10–12: favorece bandas falsas).
   const PANEL_ERA_DEFAULTS = {
+    // Golden Age: marcos gruesos, layouts regulares, pocas viñetas
     '1900-1950': {
-      panelShadow: 55, panelMargin: 10, panelCrop: 6, panelDebug: 0,
-      panelGutterRow: 14, panelGutterCol: 14, panelBandMin: 6, panelMinArea: 5,
-      panelDetectW: 400, panelMerge: 0, panelMax: 8,
-      panelPaperLum: 170, panelPaperFrac: 32, panelBorderLum: 95,
+      panelShadow: 55, panelMargin: 8, panelCrop: 4, panelDebug: 0,
+      panelGutterRow: 18, panelGutterCol: 18, panelBandMin: 6, panelMinArea: 6,
+      panelDetectW: 420, panelMerge: 0, panelMax: 8,
+      panelPaperLum: 165, panelPaperFrac: 35, panelBorderLum: 100,
     },
+    // Silver + Bronze: marco negro claro, páginas limpias
     '1950-1980': {
       panelShadow: 55, panelMargin: 8, panelCrop: 4, panelDebug: 0,
-      panelGutterRow: 12, panelGutterCol: 12, panelBandMin: 4, panelMinArea: 3,
+      panelGutterRow: 16, panelGutterCol: 16, panelBandMin: 5, panelMinArea: 4,
       panelDetectW: 480, panelMerge: 0, panelMax: 10,
-      panelPaperLum: 175, panelPaperFrac: 38, panelBorderLum: 80,
+      panelPaperLum: 170, panelPaperFrac: 38, panelBorderLum: 90,
     },
+    // 80s (default): Crisis, Watchmen, Marvel ochentera…
     '1980-1990': {
       panelShadow: 55, panelMargin: 8, panelCrop: 4, panelDebug: 0,
-      panelGutterRow: 12, panelGutterCol: 12, panelBandMin: 4, panelMinArea: 3,
-      panelDetectW: 480, panelMerge: 0, panelMax: 12,
-      panelPaperLum: 175, panelPaperFrac: 40, panelBorderLum: 80,
+      panelGutterRow: 15, panelGutterCol: 15, panelBandMin: 4, panelMinArea: 3,
+      panelDetectW: 520, panelMerge: 0, panelMax: 12,
+      panelPaperLum: 175, panelPaperFrac: 40, panelBorderLum: 85,
     },
+    // 90s: Image, WildStorm, layouts agresivos
     '1990-2000': {
-      panelShadow: 55, panelMargin: 7, panelCrop: 3, panelDebug: 0,
-      panelGutterRow: 11, panelGutterCol: 11, panelBandMin: 3, panelMinArea: 2,
-      panelDetectW: 520, panelMerge: 0, panelMax: 14,
-      panelPaperLum: 180, panelPaperFrac: 36, panelBorderLum: 75,
-    },
-    '2000-': {
-      panelShadow: 50, panelMargin: 6, panelCrop: 2, panelDebug: 0,
-      panelGutterRow: 10, panelGutterCol: 10, panelBandMin: 3, panelMinArea: 2,
+      panelShadow: 55, panelMargin: 8, panelCrop: 4, panelDebug: 0,
+      panelGutterRow: 14, panelGutterCol: 14, panelBandMin: 3, panelMinArea: 2,
       panelDetectW: 560, panelMerge: 0, panelMax: 16,
-      panelPaperLum: 185, panelPaperFrac: 34, panelBorderLum: 70,
+      panelPaperLum: 180, panelPaperFrac: 36, panelBorderLum: 80,
+    },
+    // 2000–: bleed, páginas cinematográficas
+    '2000-': {
+      panelShadow: 55, panelMargin: 8, panelCrop: 4, panelDebug: 0,
+      panelGutterRow: 13, panelGutterCol: 13, panelBandMin: 3, panelMinArea: 2,
+      panelDetectW: 640, panelMerge: 0, panelMax: 20,
+      panelPaperLum: 185, panelPaperFrac: 34, panelBorderLum: 75,
     },
   };
   const PANEL_CFG_KEYS = [
@@ -1038,6 +1046,15 @@ function showViewerConfig() {
     let era = pref('panelEra', '1980-1990');
     if (!PANEL_ERA_DEFAULTS[era]) era = '1980-1990';
     setPref('panelEra', era);
+    // v2 de presets occidentales: si no hay perfil custom de la época, reescribe keys con defaults nuevos
+    if (pref('panelEraDefaultsV', '') !== '2') {
+      for (const e of PANEL_ERA_LIST) {
+        const key = panelEraProfileKey(e.id);
+        const raw = pref(key, '');
+        if (!raw) { /* sin custom */ }
+      }
+      setPref('panelEraDefaultsV', '2');
+    }
     applyPanelCfgValues(loadPanelEraProfile(era));
   };
   try { ensurePanelEraApplied(); } catch (_) {}
