@@ -1552,3 +1552,34 @@ html:has(.sf-root){
 #rd .panel-debug-box {
   pointer-events: none;
 }
+
+/* Época de viñetas + botón avanzada */
+.cfg-radio-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.15rem;
+  cursor: pointer;
+  user-select: none;
+}
+.cfg-radio-row input { accent-color: var(--accent, #3b82f6); }
+.panel-era-advanced-btn {
+  margin-top: 0.25rem;
+  margin-bottom: 0.35rem;
+  background: #2563eb !important;
+  color: #fff !important;
+  border: none !important;
+  font-size: 0.85em !important;
+  padding: 0.4rem 0.75rem !important;
+  border-radius: 8px;
+  width: auto;
+  max-width: 100%;
+}
+.panel-era-advanced-btn:hover,
+.panel-era-advanced-btn:active {
+  background: #1d4ed8 !important;
+  color: #fff !important;
+}
+.panel-era-advanced-slot {
+  padding-left: 1.4rem;
+}
