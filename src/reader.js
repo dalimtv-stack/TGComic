@@ -90,7 +90,7 @@ export function createReader(state, d) {
 
 
   function migratePanelDetectPrefs() {
-    const VER = '5';
+    const VER = '7';
     if (pref('panelDetectCfgV', '') === VER) return;
     const defaults = {
       panelDetectW: '480', panelGutterRow: '12', panelGutterCol: '12',
@@ -108,12 +108,40 @@ export function createReader(state, d) {
     const keys = [
       'panelGutterRow', 'panelGutterCol', 'panelBandMin', 'panelMinArea',
       'panelDetectW', 'panelMerge', 'panelMax', 'panelPaperLum', 'panelPaperFrac',
-      'panelDebug', 'panelDetectRev',
+      'panelBorderLum', 'panelDebug', 'panelDetectRev',
     ];
     return keys.map((k) => String(pref(k, ''))).join('|');
   }
 
-  async function detectPanelsFromUrl(url) {
+  /**
+   * ============================================================================
+   * DETECTOR DE VIÑETAS — arquitectura (v7)
+   * ============================================================================
+   * Por qué NO basta proyección H/V (bandas):
+   *   - Falla con viñetas altas, layouts irregulares y viñetas que cruzan
+   *     varias “filas visuales”. Asume rejilla regular.
+   *
+   * Por qué marcos negros importan:
+   *   En cómic occidental los paneles suelen estar cerrados por un trazo
+   *   oscuro. Eso define contornos; las proyecciones los ignoran.
+   *
+   * Método PRINCIPAL (regiones cerradas, no bandas):
+   *   1) “Papel/gutter” = píxeles claros (alta luminancia).
+   *   2) “Muros” = segmentos largos oscuros (trazos H y V de marco) +
+   *      dilación ligera para cerrar micro-roturas de escaneo/WebP.
+   *   3) Flood-fill DESDE LOS BORDES DE LA PÁGINA solo por papel, sin
+   *      cruzar muros. Eso inunda márgenes y medianiles conectados.
+   *   4) Lo no inundado = islas (interiores de viñeta), aunque la viñeta
+   *      sea alta o irregular: es una componente conectada, no una celda
+   *      de rejilla.
+   *   5) Bounding box de cada isla → viñeta; filtros de tamaño/splash.
+   *
+   * Fallback: si no hay ≥2 viñetas, híbrido antiguo proyección
+   * (varianza + papel) para páginas sin medianiles claros.
+   *
+   * Orden de lectura: sort (y, x) LTR.
+   * ============================================================================
+   async function detectPanelsFromUrl(url) {
     try {
       const im = await new Promise((res, rej) => {
         const i = new Image();
@@ -126,8 +154,10 @@ export function createReader(state, d) {
         if (!Number.isFinite(n)) n = def;
         return Math.max(min, Math.min(max, n));
       };
+
       const maxW = numP('panelDetectW', 480, 160, 960);
-      const paperLum = numP('panelPaperLum', 185, 140, 250);
+      const borderLum = numP('panelBorderLum', 80, 20, 140);
+      const paperLum = numP('panelPaperLum', 175, 140, 250);
       const peakRow = numP('panelGutterRow', 12, 5, 40) / 100;
       const peakCol = numP('panelGutterCol', 12, 5, 40) / 100;
       const absPaper = numP('panelPaperFrac', 40, 15, 80) / 100;
@@ -152,23 +182,6 @@ export function createReader(state, d) {
       for (let i = 0, p = 0; i < lum.length; i++, p += 4) {
         lum[i] = 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2];
       }
-      // blur 3x3
-      {
-        const src = Float32Array.from(lum);
-        for (let y = 0; y < h; y++) {
-          for (let x = 0; x < w; x++) {
-            let s = 0, c = 0;
-            for (let dy = -1; dy <= 1; dy++) {
-              const yy = y + dy; if (yy < 0 || yy >= h) continue;
-              for (let dx = -1; dx <= 1; dx++) {
-                const xx = x + dx; if (xx < 0 || xx >= w) continue;
-                s += src[yy * w + xx]; c++;
-              }
-            }
-            lum[y * w + x] = s / c;
-          }
-        }
-      }
 
       const smooth1d = (arr, k) => {
         const n = arr.length;
@@ -188,22 +201,15 @@ export function createReader(state, d) {
       };
 
       const postProcess = (panels) => {
-        // Filtrar fragmentos finos (falsos medianiles dentro del dibujo) y áreas mínimas
-        const minW = 0.18, minH = 0.12;
-        let filtered = panels.filter((p) => {
-          if (p.w * p.h <= minArea) return false;
-          if (p.w < minW || p.h < minH) return false;
-          return true;
-        });
+        const minW = 0.12, minH = 0.08;
+        let filtered = panels.filter((p) => p.w * p.h > minArea && p.w >= minW && p.h >= minH);
         if (filtered.length <= 1) {
           const p = filtered[0];
-          // Portada / splash / una sola zona grande → página completa
-          if (!p || (p.w > 0.88 && p.h > 0.88) || (p && p.w * p.h > 0.55)) return [];
+          if (!p || (p.w > 0.90 && p.h > 0.90) || (p && p.w * p.h > 0.62)) return [];
         }
         let area = 0;
         for (const p of filtered) area += p.w * p.h;
-        // Poca cobertura con pocos recuadros raros → no confiar
-        if (filtered.length >= 2 && area < 0.35) return [];
+        if (filtered.length >= 2 && area < 0.28) return [];
         if (mergeGap > 0 && filtered.length > 1) {
           let changed = true;
           while (changed) {
@@ -248,14 +254,137 @@ export function createReader(state, d) {
         if (n === 0) return -1;
         let area = 0;
         for (const p of panels) area += p.w * p.h;
-        if (n > 10) return n * 0.2 + area * 0.5;
-        if (area < 0.30) return n * 0.4;
-        // Preferir rejillas típicas 2–8 viñetas
-        const bonus = (n >= 2 && n <= 8) ? 2 : 0;
-        return n + area + bonus;
+        if (n > 12) return n * 0.2 + area * 0.5;
+        if (area < 0.28) return n * 0.4;
+        return n + area + ((n >= 2 && n <= 10) ? 3 : 0);
       };
 
-      // --- Método A: varianza (medianiles oscuros / bajo contraste) ---
+      // -----------------------------------------------------------------------
+      // PRINCIPAL: papel (gutter) + muros de trazo oscuro largo → islas cerradas
+      // -----------------------------------------------------------------------
+      const detectClosedRegions = () => {
+        const N = w * h;
+        // 1) Papel / medianil claro
+        const paper = new Uint8Array(N);
+        for (let i = 0; i < N; i++) if (lum[i] >= paperLum) paper[i] = 1;
+        // dilatar papel 1px para puente de medianiles estrechos
+        const paper2 = new Uint8Array(paper);
+        for (let y = 0; y < h; y++) {
+          for (let x = 0; x < w; x++) {
+            if (!paper[y * w + x]) continue;
+            const i = y * w + x;
+            if (x > 0) paper2[i - 1] = 1;
+            if (x + 1 < w) paper2[i + 1] = 1;
+            if (y > 0) paper2[i - w] = 1;
+            if (y + 1 < h) paper2[i + w] = 1;
+          }
+        }
+
+        // 2) Muros = runs oscuros largos (marcos H/V), no todo el negro del dibujo
+        const wall = new Uint8Array(N);
+        const minRunW = Math.max(6, Math.floor(w * 0.06));
+        const minRunH = Math.max(6, Math.floor(h * 0.06));
+        for (let y = 0; y < h; y++) {
+          let x = 0;
+          while (x < w) {
+            if (lum[y * w + x] > borderLum) { x++; continue; }
+            const x0 = x;
+            while (x < w && lum[y * w + x] <= borderLum) x++;
+            if (x - x0 >= minRunW) {
+              for (let t = x0; t < x; t++) wall[y * w + t] = 1;
+            }
+          }
+        }
+        for (let x = 0; x < w; x++) {
+          let y = 0;
+          while (y < h) {
+            if (lum[y * w + x] > borderLum) { y++; continue; }
+            const y0 = y;
+            while (y < h && lum[y * w + x] <= borderLum) y++;
+            if (y - y0 >= minRunH) {
+              for (let t = y0; t < y; t++) wall[t * w + x] = 1;
+            }
+          }
+        }
+        // dilatar muros (cerrar huecos de esquina / WebP)
+        let wall2 = new Uint8Array(wall);
+        for (let pass = 0; pass < 2; pass++) {
+          const next = new Uint8Array(wall2);
+          for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+              if (!wall2[y * w + x]) continue;
+              for (let dy = -1; dy <= 1; dy++) {
+                for (let dx = -1; dx <= 1; dx++) {
+                  const xx = x + dx, yy = y + dy;
+                  if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+                  next[yy * w + xx] = 1;
+                }
+              }
+            }
+          }
+          wall2 = next;
+        }
+
+        // 3) Flood desde el borde: solo por papel y sin cruzar muros
+        const outside = new Uint8Array(N);
+        const qx = new Int32Array(N);
+        const qy = new Int32Array(N);
+        let qh = 0, qt = 0;
+        const push = (x, y) => {
+          if (x < 0 || y < 0 || x >= w || y >= h) return;
+          const i = y * w + x;
+          if (outside[i] || wall2[i] || !paper2[i]) return;
+          outside[i] = 1;
+          qx[qt] = x; qy[qt] = y; qt++;
+        };
+        for (let x = 0; x < w; x++) { push(x, 0); push(x, h - 1); }
+        for (let y = 0; y < h; y++) { push(0, y); push(w - 1, y); }
+        while (qh < qt) {
+          const x = qx[qh], y = qy[qh]; qh++;
+          push(x - 1, y); push(x + 1, y); push(x, y - 1); push(x, y + 1);
+        }
+
+        // 4) Islas = no “outside” (contenido encerrado por papel/muros)
+        const seen = new Uint8Array(N);
+        const panels = [];
+        const cx = new Int32Array(N);
+        const cy = new Int32Array(N);
+        for (let y0 = 0; y0 < h; y0++) {
+          for (let x0 = 0; x0 < w; x0++) {
+            const s = y0 * w + x0;
+            if (seen[s] || outside[s]) continue;
+            let head = 0, tail = 0;
+            cx[tail] = x0; cy[tail] = y0; tail++;
+            seen[s] = 1;
+            let minX = x0, maxX = x0, minY = y0, maxY = y0, count = 0;
+            while (head < tail) {
+              const x = cx[head], y = cy[head]; head++;
+              count++;
+              if (x < minX) minX = x;
+              if (x > maxX) maxX = x;
+              if (y < minY) minY = y;
+              if (y > maxY) maxY = y;
+              const tryN = (nx, ny) => {
+                if (nx < 0 || ny < 0 || nx >= w || ny >= h) return;
+                const j = ny * w + nx;
+                if (seen[j] || outside[j]) return;
+                seen[j] = 1;
+                cx[tail] = nx; cy[tail] = ny; tail++;
+              };
+              tryN(x - 1, y); tryN(x + 1, y); tryN(x, y - 1); tryN(x, y + 1);
+            }
+            if (count < N * 0.008) continue;
+            const bw = (maxX - minX + 1) / w;
+            const bh = (maxY - minY + 1) / h;
+            panels.push({ x: minX / w, y: minY / h, w: bw, h: bh });
+          }
+        }
+        return postProcess(panels);
+      };
+
+      // -----------------------------------------------------------------------
+      // Fallback proyección (varianza / papel) — sin marcos ni medianiles claros
+      // -----------------------------------------------------------------------
       const detectVar = () => {
         const rowVar = new Float32Array(h);
         for (let y = 0; y < h; y++) {
@@ -280,6 +409,19 @@ export function createReader(state, d) {
           const y0 = y;
           while (y < h && !gRow(y)) y++;
           if (y - y0 > h * bandMinH) bands.push([y0, y]);
+        }
+        // Fusionar bandas consecutivas con separación < 2% de la altura (anti-sobresegmentación H)
+        if (bands.length > 1) {
+          const mergedB = [bands[0]];
+          const gapLim = h * 0.02;
+          for (let bi = 1; bi < bands.length; bi++) {
+            const prev = mergedB[mergedB.length - 1];
+            const cur = bands[bi];
+            if (cur[0] - prev[1] < gapLim) prev[1] = cur[1];
+            else mergedB.push(cur);
+          }
+          bands.length = 0;
+          for (const b of mergedB) bands.push(b);
         }
         const panels = [];
         for (const [y0, y1] of bands) {
@@ -315,8 +457,7 @@ export function createReader(state, d) {
         return postProcess(panels);
       };
 
-      // --- Método B: papel/brillo (medianiles blancos cómic occidental) ---
-      const detectPaper = () => {
+      const detectPaperProj = () => {
         const rowPaperRaw = new Float32Array(h);
         for (let y = 0; y < h; y++) {
           let c = 0;
@@ -353,6 +494,18 @@ export function createReader(state, d) {
           const y0 = y;
           while (y < h && !gRow[y]) y++;
           if (y - y0 > h * bandMinH) bands.push([y0, y]);
+        }
+        if (bands.length > 1) {
+          const mergedB = [bands[0]];
+          const gapLim = h * 0.02;
+          for (let bi = 1; bi < bands.length; bi++) {
+            const prev = mergedB[mergedB.length - 1];
+            const cur = bands[bi];
+            if (cur[0] - prev[1] < gapLim) prev[1] = cur[1];
+            else mergedB.push(cur);
+          }
+          bands.length = 0;
+          for (const b of mergedB) bands.push(b);
         }
         if (!bands.length) return [];
         const panels = [];
@@ -402,9 +555,14 @@ export function createReader(state, d) {
         return postProcess(panels);
       };
 
+      const closed = detectClosedRegions();
+      if (closed.length >= 2) return closed;
+
       const a = detectVar();
-      const b = detectPaper();
-      return scorePanels(b) >= scorePanels(a) ? b : a;
+      const b = detectPaperProj();
+      const best = scorePanels(b) >= scorePanels(a) ? b : a;
+      if (scorePanels(closed) > scorePanels(best)) return closed;
+      return best;
     } catch (e) {
       console.warn('[panel-detect]', e);
       return [];
