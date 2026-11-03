@@ -965,42 +965,42 @@ function showViewerConfig() {
   const PANEL_ERA_DEFAULTS = {
     // Golden Age: marcos gruesos, layouts regulares, pocas viñetas
     '1900-1950': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4, panelDebug: 0,
+      panelShadow: 55, panelMargin: 8, panelCrop: 4,
       panelGutterRow: 18, panelGutterCol: 18, panelBandMin: 6, panelMinArea: 6,
       panelDetectW: 420, panelMerge: 0, panelMax: 8,
       panelPaperLum: 165, panelPaperFrac: 35, panelBorderLum: 100,
     },
     // Silver + Bronze: marco negro claro, páginas limpias
     '1950-1980': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4, panelDebug: 0,
+      panelShadow: 55, panelMargin: 8, panelCrop: 4,
       panelGutterRow: 16, panelGutterCol: 16, panelBandMin: 5, panelMinArea: 4,
       panelDetectW: 480, panelMerge: 0, panelMax: 10,
       panelPaperLum: 170, panelPaperFrac: 38, panelBorderLum: 90,
     },
     // 80s (default): Crisis, Watchmen, Marvel ochentera…
     '1980-1990': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4, panelDebug: 0,
+      panelShadow: 55, panelMargin: 8, panelCrop: 4,
       panelGutterRow: 15, panelGutterCol: 15, panelBandMin: 4, panelMinArea: 3,
       panelDetectW: 520, panelMerge: 0, panelMax: 12,
       panelPaperLum: 175, panelPaperFrac: 40, panelBorderLum: 85,
     },
     // 90s: Image, WildStorm, layouts agresivos
     '1990-2000': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4, panelDebug: 0,
+      panelShadow: 55, panelMargin: 8, panelCrop: 4,
       panelGutterRow: 14, panelGutterCol: 14, panelBandMin: 3, panelMinArea: 2,
       panelDetectW: 560, panelMerge: 0, panelMax: 16,
       panelPaperLum: 180, panelPaperFrac: 36, panelBorderLum: 80,
     },
     // 2000–: bleed, páginas cinematográficas
     '2000-': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4, panelDebug: 0,
+      panelShadow: 55, panelMargin: 8, panelCrop: 4,
       panelGutterRow: 13, panelGutterCol: 13, panelBandMin: 3, panelMinArea: 2,
       panelDetectW: 640, panelMerge: 0, panelMax: 20,
       panelPaperLum: 185, panelPaperFrac: 34, panelBorderLum: 75,
     },
   };
   const PANEL_CFG_KEYS = [
-    'panelShadow', 'panelMargin', 'panelCrop', 'panelDebug',
+    'panelShadow', 'panelMargin', 'panelCrop',
     'panelGutterRow', 'panelGutterCol', 'panelBandMin', 'panelMinArea',
     'panelDetectW', 'panelMerge', 'panelMax',
     'panelPaperLum', 'panelPaperFrac', 'panelBorderLum',
@@ -1097,7 +1097,6 @@ function showViewerConfig() {
     addNum('panelShadow', 'Oscurecido alrededor de la viñeta (%).', 0, 100, 5);
     addNum('panelMargin', 'Zoom de seguridad (%).', 0, 25, 1);
     addNum('panelCrop', 'Ajuste del recuadro detectado (%).', -30, 40, 1);
-    addNum('panelDebug', 'Depuraci\u00f3n: 0 = no, 1 = contornos de todas las viñetas.', 0, 1, 1);
     addNum('panelGutterRow', 'Sensibilidad medianil horizontal (%).', 5, 40, 1);
     addNum('panelGutterCol', 'Sensibilidad medianil vertical (%).', 5, 40, 1);
     addNum('panelBandMin', 'Tama\u00f1o m\u00ednimo de banda/columna (%).', 1, 20, 1);
@@ -1197,6 +1196,24 @@ function showViewerConfig() {
       renderAdvancedButton(active.id);
     }
   }
+
+  // Depuración global (no depende de la época)
+  const panelDebugField = el('div', 'cfg-field');
+  panelDebugField.append(el('label', 'sync-label', 'Depuración: mostrar todas las viñetas'));
+  const panelDebugSel = el('select', 'edit-input');
+  [['0', 'No'], ['1', 'Sí — contornos sobre la página completa']].forEach(([v, lab]) => {
+    const o = el('option', '', lab);
+    o.value = v;
+    panelDebugSel.append(o);
+  });
+  panelDebugSel.value = pref('panelDebug', '0') === '1' ? '1' : '0';
+  panelDebugSel.onchange = () => {
+    setPref('panelDebug', panelDebugSel.value === '1' ? '1' : '0');
+    setPref('panelDetectRev', String(Date.now()));
+    try { window.dispatchEvent(new CustomEvent('tgcomic:panel-prefs')); } catch (_) {}
+  };
+  panelDebugField.append(panelDebugSel);
+  panelWrap.append(panelDebugField);
 
   const syncSpreadVis = (mode) => {
     const m = mode || (() => {
