@@ -948,199 +948,250 @@ function showViewerConfig() {
     spreadWrap.append(b);
   }
   paintSpread();
+
+
+  // Subopciones Modo Viñeta: épocas + configuración avanzada
+  // Perfiles por época. Activa: pref('panelEra'). Overrides: pref('panelEraProfile:<id>') JSON.
+  const PANEL_ERA_LIST = [
+    { id: '1900-1950', label: '1900-1950' },
+    { id: '1950-1980', label: '1950-1980' },
+    { id: '1980-1990', label: '1980-1990' },
+    { id: '1990-2000', label: '1990-2000' },
+    { id: '2000-', label: '2000-' },
+  ];
+  const PANEL_ERA_DEFAULTS = {
+    '1900-1950': {
+      panelShadow: 55, panelMargin: 10, panelCrop: 6, panelDebug: 0,
+      panelGutterRow: 14, panelGutterCol: 14, panelBandMin: 6, panelMinArea: 5,
+      panelDetectW: 400, panelMerge: 0, panelMax: 8,
+      panelPaperLum: 170, panelPaperFrac: 32, panelBorderLum: 95,
+    },
+    '1950-1980': {
+      panelShadow: 55, panelMargin: 8, panelCrop: 4, panelDebug: 0,
+      panelGutterRow: 12, panelGutterCol: 12, panelBandMin: 4, panelMinArea: 3,
+      panelDetectW: 480, panelMerge: 0, panelMax: 10,
+      panelPaperLum: 175, panelPaperFrac: 38, panelBorderLum: 80,
+    },
+    '1980-1990': {
+      panelShadow: 55, panelMargin: 8, panelCrop: 4, panelDebug: 0,
+      panelGutterRow: 12, panelGutterCol: 12, panelBandMin: 4, panelMinArea: 3,
+      panelDetectW: 480, panelMerge: 0, panelMax: 12,
+      panelPaperLum: 175, panelPaperFrac: 40, panelBorderLum: 80,
+    },
+    '1990-2000': {
+      panelShadow: 55, panelMargin: 7, panelCrop: 3, panelDebug: 0,
+      panelGutterRow: 11, panelGutterCol: 11, panelBandMin: 3, panelMinArea: 2,
+      panelDetectW: 520, panelMerge: 0, panelMax: 14,
+      panelPaperLum: 180, panelPaperFrac: 36, panelBorderLum: 75,
+    },
+    '2000-': {
+      panelShadow: 50, panelMargin: 6, panelCrop: 2, panelDebug: 0,
+      panelGutterRow: 10, panelGutterCol: 10, panelBandMin: 3, panelMinArea: 2,
+      panelDetectW: 560, panelMerge: 0, panelMax: 16,
+      panelPaperLum: 185, panelPaperFrac: 34, panelBorderLum: 70,
+    },
+  };
+  const PANEL_CFG_KEYS = [
+    'panelShadow', 'panelMargin', 'panelCrop', 'panelDebug',
+    'panelGutterRow', 'panelGutterCol', 'panelBandMin', 'panelMinArea',
+    'panelDetectW', 'panelMerge', 'panelMax',
+    'panelPaperLum', 'panelPaperFrac', 'panelBorderLum',
+  ];
+  const panelEraProfileKey = (eraId) => 'panelEraProfile:' + eraId;
+  const getPanelEraDefaults = (eraId) => ({ ...(PANEL_ERA_DEFAULTS[eraId] || PANEL_ERA_DEFAULTS['1980-1990']) });
+  const loadPanelEraProfile = (eraId) => {
+    const base = getPanelEraDefaults(eraId);
+    try {
+      const raw = pref(panelEraProfileKey(eraId), '');
+      if (!raw) return base;
+      const obj = JSON.parse(raw);
+      if (!obj || typeof obj !== 'object') return base;
+      const out = { ...base };
+      for (const k of PANEL_CFG_KEYS) {
+        if (obj[k] != null && Number.isFinite(Number(obj[k]))) out[k] = Number(obj[k]);
+      }
+      return out;
+    } catch (_) {
+      return base;
+    }
+  };
+  const savePanelEraProfile = (eraId, values) => {
+    const payload = {};
+    for (const k of PANEL_CFG_KEYS) {
+      const n = Number(values[k]);
+      payload[k] = Number.isFinite(n) ? n : getPanelEraDefaults(eraId)[k];
+    }
+    setPref(panelEraProfileKey(eraId), JSON.stringify(payload));
+  };
+  const clearPanelEraProfile = (eraId) => {
+    try { setPref(panelEraProfileKey(eraId), ''); } catch (_) {}
+  };
+  const applyPanelCfgValues = (values) => {
+    for (const k of PANEL_CFG_KEYS) {
+      const n = Number(values[k]);
+      if (Number.isFinite(n)) setPref(k, String(n));
+    }
+    setPref('panelDetectRev', String(Date.now()));
+    try { window.dispatchEvent(new CustomEvent('tgcomic:panel-prefs')); } catch (_) {}
+  };
+  const ensurePanelEraApplied = () => {
+    let era = pref('panelEra', '1980-1990');
+    if (!PANEL_ERA_DEFAULTS[era]) era = '1980-1990';
+    setPref('panelEra', era);
+    applyPanelCfgValues(loadPanelEraProfile(era));
+  };
+  try { ensurePanelEraApplied(); } catch (_) {}
+
+  const panelWrap = el('div', 'cfg-group cfg-sub');
+
+  const advancedSlot = el('div', 'cfg-field panel-era-advanced-slot');
+
+  const showPanelAdvancedForm = (eraId) => {
+    const defaults = getPanelEraDefaults(eraId);
+    const current = loadPanelEraProfile(eraId);
+    const frame = el('div', 'info-frame cfg panel-adv-frame');
+    frame.setAttribute('role', 'dialog');
+    frame.setAttribute('aria-label', 'Configuración avanzada de viñetas');
+    const box = el('div', 'info-box');
+    const head = el('div', 'info-head');
+    head.append(el('div', 'info-title', 'Viñetas · ' + eraId));
+    const xBtn = el('button', 'btn ghost', '\u2715');
+    xBtn.type = 'button';
+    head.append(xBtn);
+    box.append(head);
+    const bodyAdv = el('div', 'info-body');
+    bodyAdv.append(el('p', 'muted', 'Ajustes del detector y del encuadre para esta \u00e9poca. \u00abPor defecto\u00bb restaura el perfil base de ' + eraId + '.'));
+
+    const fields = {};
+    const addNum = (key, label, min, max, step) => {
+      const field = el('div', 'cfg-field');
+      field.append(el('label', 'sync-label', label));
+      const inp = el('input', 'edit-input');
+      inp.type = 'number';
+      inp.min = String(min);
+      inp.max = String(max);
+      inp.step = String(step);
+      const v = current[key] != null ? current[key] : defaults[key];
+      inp.value = String(v);
+      field.append(inp);
+      bodyAdv.append(field);
+      fields[key] = inp;
+    };
+    addNum('panelShadow', 'Oscurecido alrededor de la viñeta (%).', 0, 100, 5);
+    addNum('panelMargin', 'Zoom de seguridad (%).', 0, 25, 1);
+    addNum('panelCrop', 'Ajuste del recuadro detectado (%).', -30, 40, 1);
+    addNum('panelDebug', 'Depuraci\u00f3n: 0 = no, 1 = contornos de todas las viñetas.', 0, 1, 1);
+    addNum('panelGutterRow', 'Sensibilidad medianil horizontal (%).', 5, 40, 1);
+    addNum('panelGutterCol', 'Sensibilidad medianil vertical (%).', 5, 40, 1);
+    addNum('panelBandMin', 'Tama\u00f1o m\u00ednimo de banda/columna (%).', 1, 20, 1);
+    addNum('panelMinArea', '\u00c1rea m\u00ednima de viñeta (%).', 1, 30, 1);
+    addNum('panelDetectW', 'Resoluci\u00f3n de an\u00e1lisis (px).', 160, 960, 20);
+    addNum('panelMerge', 'Fusi\u00f3n de viñetas cercanas (0 = off).', 0, 15, 1);
+    addNum('panelMax', 'M\u00e1x. viñetas por p\u00e1gina (0 = sin l\u00edmite).', 0, 60, 1);
+    addNum('panelPaperLum', 'Luminancia de papel (0\u2013255).', 140, 250, 5);
+    addNum('panelPaperFrac', 'Fracci\u00f3n m\u00ednima de papel en medianil (%).', 15, 80, 1);
+    addNum('panelBorderLum', 'Luminancia de marco negro (0\u2013255).', 20, 140, 5);
+
+    const readFields = () => {
+      const out = { ...defaults };
+      for (const k of PANEL_CFG_KEYS) {
+        const inp = fields[k];
+        if (!inp) continue;
+        let n = Number(String(inp.value ?? '').trim());
+        if (!Number.isFinite(n)) n = defaults[k];
+        out[k] = n;
+      }
+      return out;
+    };
+    const fillFields = (vals) => {
+      for (const k of PANEL_CFG_KEYS) {
+        if (fields[k] && vals[k] != null) fields[k].value = String(vals[k]);
+      }
+    };
+
+    const actions = el('div', 'info-actions');
+    const btnBack = el('button', 'btn', 'Volver');
+    btnBack.type = 'button';
+    const btnDef = el('button', 'btn ghost', 'Por defecto');
+    btnDef.type = 'button';
+    const btnSave = el('button', 'btn primary', 'Guardar');
+    btnSave.type = 'button';
+    actions.append(btnBack, btnDef, btnSave);
+    bodyAdv.append(actions);
+    box.append(bodyAdv);
+    frame.append(box);
+    document.body.append(frame);
+
+    const close = () => { try { frame.remove(); } catch (_) {} };
+    xBtn.onclick = close;
+    btnBack.onclick = close;
+    btnDef.onclick = () => {
+      clearPanelEraProfile(eraId);
+      const d = getPanelEraDefaults(eraId);
+      fillFields(d);
+      if (pref('panelEra', '1980-1990') === eraId) applyPanelCfgValues(d);
+    };
+    btnSave.onclick = () => {
+      const vals = readFields();
+      savePanelEraProfile(eraId, vals);
+      if (pref('panelEra', '1980-1990') === eraId) applyPanelCfgValues(vals);
+      close();
+    };
+  };
+
+  const renderAdvancedButton = (eraId) => {
+    advancedSlot.innerHTML = '';
+    const btn = el('button', 'btn panel-era-advanced-btn', 'Configuraci\u00f3n avanzada');
+    btn.type = 'button';
+    btn.onclick = (ev) => {
+      ev.preventDefault();
+      showPanelAdvancedForm(eraId);
+    };
+    advancedSlot.append(btn);
+  };
+
+  const eraRadios = [];
+  PANEL_ERA_LIST.forEach((era) => {
+    const row = el('label', 'cfg-radio-row');
+    const inp = el('input');
+    inp.type = 'radio';
+    inp.name = 'panel-era';
+    inp.value = era.id;
+    inp.checked = pref('panelEra', '1980-1990') === era.id;
+    const span = el('span', '', era.label);
+    row.append(inp, span);
+    inp.onchange = () => {
+      if (!inp.checked) return;
+      setPref('panelEra', era.id);
+      applyPanelCfgValues(loadPanelEraProfile(era.id));
+      eraRadios.forEach((r) => { try { r.row.classList.remove('panel-era-active'); } catch (_) {} });
+      row.classList.add('panel-era-active');
+      try { row.after(advancedSlot); } catch (_) { panelWrap.append(advancedSlot); }
+      renderAdvancedButton(era.id);
+    };
+    eraRadios.push({ id: era.id, row, inp });
+    panelWrap.append(row);
+  });
+  {
+    const active = eraRadios.find((r) => r.inp.checked) || eraRadios[2];
+    if (active) {
+      active.row.classList.add('panel-era-active');
+      try { active.row.after(advancedSlot); } catch (_) { panelWrap.append(advancedSlot); }
+      renderAdvancedButton(active.id);
+    }
+  }
+
   const syncSpreadVis = (mode) => {
     const m = mode || (() => {
       const x = pref('mode', 'page');
       return (x === 'vertical' || x === 'horizontal' || x === 'panel') ? x : 'page';
     })();
     spreadWrap.hidden = m !== 'page';
+    try { panelWrap.hidden = m !== 'panel'; } catch (_) {}
   };
+  try { panelWrap.hidden = pref('mode', 'page') !== 'panel'; } catch (_) {}
 
-  // Subopciones Modo Viñeta (siempre visibles)
-  const panelWrap = el('div', 'cfg-group cfg-sub');
-  const numPref = (key, def, min, max) => {
-    const raw = pref(key, String(def));
-    if (raw === '' || raw == null) return def;
-    const n = Number(raw);
-    if (!Number.isFinite(n)) return def;
-    return Math.max(min, Math.min(max, n));
-  };
-  const bindNum = (inp, key, def, min, max) => {
-    const apply = () => {
-      const raw = String(inp.value ?? '').trim();
-      let v = raw === '' ? def : Number(raw);
-      if (!Number.isFinite(v)) v = def;
-      v = Math.max(min, Math.min(max, v));
-      inp.value = String(v);
-      setPref(key, String(v));
-      // Invalida caché de viñetas en el lector (si está abierto)
-      if (/^panel(Gutter|Band|MinArea|DetectW|Merge|Max|Paper)/.test(key) || key === 'panelGutterRow' || key === 'panelGutterCol') {
-        setPref('panelDetectRev', String(Date.now()));
-        try { window.dispatchEvent(new CustomEvent('tgcomic:panel-prefs')); } catch (_) {}
-      }
-    };
-    inp.onchange = apply;
-    inp.onblur = apply;
-  };
-  const panelShadowField = el('div', 'cfg-field');
-  panelShadowField.append(el('label', 'sync-label', 'Oscurecido alrededor de la viñeta (%). Por defecto 55.'));
-  const panelShadowInp = el('input', 'edit-input');
-  panelShadowInp.type = 'number';
-  panelShadowInp.min = '0';
-  panelShadowInp.max = '100';
-  panelShadowInp.step = '5';
-  panelShadowInp.value = String(numPref('panelShadow', 55, 0, 100));
-  bindNum(panelShadowInp, 'panelShadow', 55, 0, 100);
-  panelShadowField.append(panelShadowInp);
-
-  const panelMarginField = el('div', 'cfg-field');
-  panelMarginField.append(el('label', 'sync-label', 'Zoom de seguridad (%). Por defecto 8.'));
-  const panelMarginInp = el('input', 'edit-input');
-  panelMarginInp.type = 'number';
-  panelMarginInp.min = '0';
-  panelMarginInp.max = '25';
-  panelMarginInp.step = '1';
-  panelMarginInp.value = String(numPref('panelMargin', 8, 0, 25));
-  bindNum(panelMarginInp, 'panelMargin', 8, 0, 25);
-  panelMarginField.append(panelMarginInp);
-
-  const panelCropField = el('div', 'cfg-field');
-  // Antes había un margen fijo ~4% del recuadro detectado
-  panelCropField.append(el('label', 'sync-label', 'Ajuste del recuadro detectado (%). Por defecto 4.'));
-  const panelCropInp = el('input', 'edit-input');
-  panelCropInp.type = 'number';
-  panelCropInp.min = '-30';
-  panelCropInp.max = '40';
-  panelCropInp.step = '1';
-  panelCropInp.value = String(numPref('panelCrop', 4, -30, 40));
-  bindNum(panelCropInp, 'panelCrop', 4, -30, 40);
-  panelCropField.append(panelCropInp);
-
-  // Detección de viñetas (defaults orientados a cómic occidental)
-  const panelGutterRowField = el('div', 'cfg-field');
-  panelGutterRowField.append(el('label', 'sync-label', 'Sensibilidad medianil horizontal (% sobre papel local). Por defecto 12.'));
-  const panelGutterRowInp = el('input', 'edit-input');
-  panelGutterRowInp.type = 'number';
-  panelGutterRowInp.min = '5';
-  panelGutterRowInp.max = '40';
-  panelGutterRowInp.step = '1';
-  panelGutterRowInp.value = String(numPref('panelGutterRow', 12, 5, 40));
-  bindNum(panelGutterRowInp, 'panelGutterRow', 12, 5, 40);
-  panelGutterRowField.append(panelGutterRowInp);
-
-  const panelGutterColField = el('div', 'cfg-field');
-  panelGutterColField.append(el('label', 'sync-label', 'Sensibilidad medianil vertical (% sobre papel local). Por defecto 12.'));
-  const panelGutterColInp = el('input', 'edit-input');
-  panelGutterColInp.type = 'number';
-  panelGutterColInp.min = '5';
-  panelGutterColInp.max = '40';
-  panelGutterColInp.step = '1';
-  panelGutterColInp.value = String(numPref('panelGutterCol', 12, 5, 40));
-  bindNum(panelGutterColInp, 'panelGutterCol', 12, 5, 40);
-  panelGutterColField.append(panelGutterColInp);
-
-  const panelBandField = el('div', 'cfg-field');
-  panelBandField.append(el('label', 'sync-label', 'Tamaño mínimo de banda/columna (%). Por defecto 4.'));
-  const panelBandInp = el('input', 'edit-input');
-  panelBandInp.type = 'number';
-  panelBandInp.min = '1';
-  panelBandInp.max = '20';
-  panelBandInp.step = '1';
-  panelBandInp.value = String(numPref('panelBandMin', 4, 1, 20));
-  bindNum(panelBandInp, 'panelBandMin', 4, 1, 20);
-  panelBandField.append(panelBandInp);
-
-  const panelAreaField = el('div', 'cfg-field');
-  panelAreaField.append(el('label', 'sync-label', 'Área mínima de viñeta (%). Por defecto 3.'));
-  const panelAreaInp = el('input', 'edit-input');
-  panelAreaInp.type = 'number';
-  panelAreaInp.min = '1';
-  panelAreaInp.max = '30';
-  panelAreaInp.step = '1';
-  panelAreaInp.value = String(numPref('panelMinArea', 3, 1, 30));
-  bindNum(panelAreaInp, 'panelMinArea', 3, 1, 30);
-  panelAreaField.append(panelAreaInp);
-
-  const panelResField = el('div', 'cfg-field');
-  panelResField.append(el('label', 'sync-label', 'Resolución de análisis (px). Por defecto 480.'));
-  const panelResInp = el('input', 'edit-input');
-  panelResInp.type = 'number';
-  panelResInp.min = '160';
-  panelResInp.max = '960';
-  panelResInp.step = '20';
-  panelResInp.value = String(numPref('panelDetectW', 480, 160, 960));
-  bindNum(panelResInp, 'panelDetectW', 480, 160, 960);
-  panelResField.append(panelResInp);
-
-  const panelMergeField = el('div', 'cfg-field');
-  panelMergeField.append(el('label', 'sync-label', 'Fusión de viñetas cercanas (hueco máx. %). 0 = off. Por defecto 0.'));
-  const panelMergeInp = el('input', 'edit-input');
-  panelMergeInp.type = 'number';
-  panelMergeInp.min = '0';
-  panelMergeInp.max = '15';
-  panelMergeInp.step = '1';
-  panelMergeInp.value = String(numPref('panelMerge', 0, 0, 15));
-  bindNum(panelMergeInp, 'panelMerge', 0, 0, 15);
-  panelMergeField.append(panelMergeInp);
-
-  const panelMaxField = el('div', 'cfg-field');
-  panelMaxField.append(el('label', 'sync-label', 'Máx. viñetas por página. 0 = sin límite. Por defecto 0.'));
-  const panelMaxInp = el('input', 'edit-input');
-  panelMaxInp.type = 'number';
-  panelMaxInp.min = '0';
-  panelMaxInp.max = '60';
-  panelMaxInp.step = '1';
-  panelMaxInp.value = String(numPref('panelMax', 0, 0, 60));
-  bindNum(panelMaxInp, 'panelMax', 0, 0, 60);
-  panelMaxField.append(panelMaxInp);
-
-  const panelPaperLumField = el('div', 'cfg-field');
-  panelPaperLumField.append(el('label', 'sync-label', 'Luminancia de papel (0–255). Por defecto 185.'));
-  const panelPaperLumInp = el('input', 'edit-input');
-  panelPaperLumInp.type = 'number';
-  panelPaperLumInp.min = '140';
-  panelPaperLumInp.max = '250';
-  panelPaperLumInp.step = '5';
-  panelPaperLumInp.value = String(numPref('panelPaperLum', 185, 140, 250));
-  bindNum(panelPaperLumInp, 'panelPaperLum', 185, 140, 250);
-  panelPaperLumField.append(panelPaperLumInp);
-
-  const panelPaperFracField = el('div', 'cfg-field');
-  panelPaperFracField.append(el('label', 'sync-label', 'Fracción mínima de papel en medianil (%). Por defecto 40.'));
-  const panelPaperFracInp = el('input', 'edit-input');
-  panelPaperFracInp.type = 'number';
-  panelPaperFracInp.min = '15';
-  panelPaperFracInp.max = '80';
-  panelPaperFracInp.step = '1';
-  panelPaperFracInp.value = String(numPref('panelPaperFrac', 40, 15, 80));
-  bindNum(panelPaperFracInp, 'panelPaperFrac', 40, 15, 80);
-  panelPaperFracField.append(panelPaperFracInp);
-
-  const panelDebugField = el('div', 'cfg-field');
-  panelDebugField.append(el('label', 'sync-label', 'Depuración: mostrar todas las viñetas de la página'));
-  const panelDebugSel = el('select', 'edit-input');
-  [['0', 'No'], ['1', 'Sí — contornos sobre la página completa']].forEach(([v, lab]) => {
-    const o = el('option', '', lab);
-    o.value = v;
-    panelDebugSel.append(o);
-  });
-  panelDebugSel.value = pref('panelDebug', '0') === '1' ? '1' : '0';
-  panelDebugSel.onchange = () => {
-    setPref('panelDebug', panelDebugSel.value);
-    setPref('panelDetectRev', String(Date.now()));
-    try { window.dispatchEvent(new CustomEvent('tgcomic:panel-prefs')); } catch (_) {}
-  };
-  panelDebugField.append(panelDebugSel);
-
-  panelWrap.append(
-    panelShadowField, panelMarginField, panelCropField,
-    panelDebugField,
-    panelGutterRowField, panelGutterColField, panelBandField, panelAreaField,
-    panelResField, panelMergeField, panelMaxField,
-    panelPaperLumField, panelPaperFracField
-  );
-
-  const modeGrp = toggleGroup(
+const modeGrp = toggleGroup(
     [
       ['page', 'Modo Página'],
       ['vertical', 'Modo Vertical'],
