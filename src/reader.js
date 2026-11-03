@@ -140,8 +140,9 @@ export function createReader(state, d) {
    * (varianza + papel) para páginas sin medianiles claros.
    *
    * Orden de lectura: sort (y, x) LTR.
-   * ============================================================================
-   async function detectPanelsFromUrl(url) {
+   * ========================================================================
+   */
+  async function detectPanelsFromUrl(url) {
     try {
       const im = await new Promise((res, rej) => {
         const i = new Image();
