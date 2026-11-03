@@ -106,12 +106,84 @@ export function createReader(state, d) {
 
   function panelDetectSig() {
     const keys = [
+      'panelEra',
       'panelGutterRow', 'panelGutterCol', 'panelBandMin', 'panelMinArea',
       'panelDetectW', 'panelMerge', 'panelMax', 'panelPaperLum', 'panelPaperFrac',
       'panelBorderLum', 'panelDebug', 'panelDetectRev',
     ];
     return keys.map((k) => String(pref(k, ''))).join('|');
   }
+
+  const PANEL_ERA_LIST = [
+    { id: '1900-1950', label: '1900-1950' },
+    { id: '1950-1980', label: '1950-1980' },
+    { id: '1980-1990', label: '1980-1990' },
+    { id: '1990-2000', label: '1990-2000' },
+    { id: '2000-', label: '2000-' },
+  ];
+  const PANEL_ERA_DEFAULTS = {
+    '1900-1950': {
+      panelShadow: 55, panelMargin: 8, panelCrop: 4, panelDebug: 0,
+      panelGutterRow: 18, panelGutterCol: 18, panelBandMin: 6, panelMinArea: 6,
+      panelDetectW: 420, panelMerge: 0, panelMax: 8,
+      panelPaperLum: 165, panelPaperFrac: 35, panelBorderLum: 100,
+    },
+    '1950-1980': {
+      panelShadow: 55, panelMargin: 8, panelCrop: 4, panelDebug: 0,
+      panelGutterRow: 16, panelGutterCol: 16, panelBandMin: 5, panelMinArea: 4,
+      panelDetectW: 480, panelMerge: 0, panelMax: 10,
+      panelPaperLum: 170, panelPaperFrac: 38, panelBorderLum: 90,
+    },
+    '1980-1990': {
+      panelShadow: 55, panelMargin: 8, panelCrop: 4, panelDebug: 0,
+      panelGutterRow: 15, panelGutterCol: 15, panelBandMin: 4, panelMinArea: 3,
+      panelDetectW: 520, panelMerge: 0, panelMax: 12,
+      panelPaperLum: 175, panelPaperFrac: 40, panelBorderLum: 85,
+    },
+    '1990-2000': {
+      panelShadow: 55, panelMargin: 8, panelCrop: 4, panelDebug: 0,
+      panelGutterRow: 14, panelGutterCol: 14, panelBandMin: 3, panelMinArea: 2,
+      panelDetectW: 560, panelMerge: 0, panelMax: 16,
+      panelPaperLum: 180, panelPaperFrac: 36, panelBorderLum: 80,
+    },
+    '2000-': {
+      panelShadow: 55, panelMargin: 8, panelCrop: 4, panelDebug: 0,
+      panelGutterRow: 13, panelGutterCol: 13, panelBandMin: 3, panelMinArea: 2,
+      panelDetectW: 640, panelMerge: 0, panelMax: 20,
+      panelPaperLum: 185, panelPaperFrac: 34, panelBorderLum: 75,
+    },
+  };
+  const PANEL_CFG_KEYS = [
+    'panelShadow', 'panelMargin', 'panelCrop', 'panelDebug',
+    'panelGutterRow', 'panelGutterCol', 'panelBandMin', 'panelMinArea',
+    'panelDetectW', 'panelMerge', 'panelMax',
+    'panelPaperLum', 'panelPaperFrac', 'panelBorderLum',
+  ];
+  const loadEraProfile = (eraId) => {
+    const base = { ...(PANEL_ERA_DEFAULTS[eraId] || PANEL_ERA_DEFAULTS['1980-1990']) };
+    try {
+      const raw = pref('panelEraProfile:' + eraId, '');
+      if (!raw) return base;
+      const obj = JSON.parse(raw);
+      if (!obj || typeof obj !== 'object') return base;
+      for (const k of PANEL_CFG_KEYS) {
+        if (obj[k] != null && Number.isFinite(Number(obj[k]))) base[k] = Number(obj[k]);
+      }
+    } catch (_) {}
+    return base;
+  };
+  const applyEraProfile = (eraId) => {
+    const id = PANEL_ERA_DEFAULTS[eraId] ? eraId : '1980-1990';
+    setPref('panelEra', id);
+    const vals = loadEraProfile(id);
+    for (const k of PANEL_CFG_KEYS) {
+      if (vals[k] != null) setPref(k, String(vals[k]));
+    }
+    setPref('panelDetectRev', String(Date.now()));
+    try { window.dispatchEvent(new CustomEvent('tgcomic:panel-prefs', { detail: { era: id } })); } catch (_) {}
+  };
+
+
 
   /**
    * ============================================================================
@@ -925,6 +997,7 @@ export function createReader(state, d) {
             try { ev.stopPropagation(); } catch (_) {}
             if (!exists || ctx?.q === q) return;
             setPref('quality', q);
+            try { setPref('panelDetectRev', String(Date.now())); } catch (_) {}
             savePage(n);
             openComic(ctx.ch, f, ctx.list, { replace: true, quality: q, fromTotal: pages.length, fromIdx: n });
           };
@@ -941,6 +1014,7 @@ export function createReader(state, d) {
           ab.append(ico);
           const reopen = (aiId) => {
             savePage(n);
+            try { setPref('panelDetectRev', String(Date.now())); } catch (_) {}
             openComic(ctx.ch, f, ctx.list, { replace: true, ai: aiId, quality: ctx?.q || undefined, fromTotal: pages.length, fromIdx: n });
           };
           ab.onclick = (ev) => {
@@ -1070,8 +1144,8 @@ export function createReader(state, d) {
         document.querySelector('.rd-auto-cfg')?.remove();
         const overlay = el('div', 'rd-auto-cfg');
         const box = el('div', 'rd-auto-cfg-box');
-        box.append(el('div', 'rd-auto-cfg-title', 'Reproducción automática'));
-        box.append(el('p', 'rd-auto-cfg-hint', 'Segundos entre páginas (2–120)'));
+        box.append(el('div', 'rd-auto-cfg-title', 'Ajustes del visor'));
+        box.append(el('p', 'rd-auto-cfg-hint', 'Segundos entre páginas / viñetas (2–120)'));
         const inp = el('input', 'edit-input');
         inp.type = 'number';
         inp.min = '2';
@@ -1079,13 +1153,35 @@ export function createReader(state, d) {
         inp.step = '1';
         inp.value = String(Math.max(2, Math.min(120, +(pref('autoPlaySec', '7') || 7))));
         box.append(inp);
+
+        box.append(el('div', 'rd-auto-cfg-title', 'Detector de viñetas'));
+        box.append(el('p', 'rd-auto-cfg-hint', 'Época del cómic · se reaplica al instante'));
+        const eraBox = el('div', 'rd-era-list');
+        let curEra = pref('panelEra', '1980-1990');
+        if (!PANEL_ERA_DEFAULTS[curEra]) curEra = '1980-1990';
+        PANEL_ERA_LIST.forEach((era) => {
+          const row = el('label', 'rd-era-row');
+          const radio = el('input');
+          radio.type = 'radio';
+          radio.name = 'rd-panel-era';
+          radio.value = era.id;
+          radio.checked = era.id === curEra;
+          row.append(radio, el('span', '', era.label));
+          radio.onchange = () => {
+            if (!radio.checked) return;
+            applyEraProfile(era.id);
+          };
+          eraBox.append(row);
+        });
+        box.append(eraBox);
+
         const ok = el('button', 'btn edit-save', 'Aceptar');
         ok.onclick = () => {
-          let n = parseInt(inp.value, 10);
-          if (!Number.isFinite(n)) n = 7;
-          n = Math.max(2, Math.min(120, n));
-          try { setPref('autoPlaySec', String(n)); } catch (_) {
-            try { localStorage.setItem('pref:autoPlaySec', String(n)); } catch (_) {}
+          let sec = parseInt(inp.value, 10);
+          if (!Number.isFinite(sec)) sec = 7;
+          sec = Math.max(2, Math.min(120, sec));
+          try { setPref('autoPlaySec', String(sec)); } catch (_) {
+            try { localStorage.setItem('pref:autoPlaySec', String(sec)); } catch (_) {}
           }
           overlay.remove();
           if (wasOn) {
@@ -1406,14 +1502,19 @@ export function createReader(state, d) {
         rd.append(pageHost, top, bot);
 
         const pagePanelsCache = new Map();
-        const onPanelPrefs = () => { try { pagePanelsCache.clear(); } catch (_) {} };
-        try { window.addEventListener('tgcomic:panel-prefs', onPanelPrefs); } catch (_) {}
-        observers._panelPrefs = onPanelPrefs;
         let panels = [];
         let pIdx = 0;
         let fullView = true;
         let panX = 0, panY = 0;
         let panelSrcKey = '';
+        let reloadPanelsNow = () => {};
+        const onPanelPrefs = () => {
+          try { pagePanelsCache.clear(); } catch (_) {}
+          panelSrcKey = '';
+          try { reloadPanelsNow(); } catch (_) {}
+        };
+        try { window.addEventListener('tgcomic:panel-prefs', onPanelPrefs); } catch (_) {}
+        observers._panelPrefs = onPanelPrefs;
 
         const layoutImage = () => {
           const rect = pageHost.getBoundingClientRect();
@@ -1562,6 +1663,7 @@ export function createReader(state, d) {
             console.warn('[panel] loadPage', e);
           }
         };
+        reloadPanelsNow = () => { try { loadPage(n, { fullView }); } catch (_) {} };
 
         const enterPanel = (idx) => {
           if (!panels.length) return;
