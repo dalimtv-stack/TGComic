@@ -123,38 +123,38 @@ export function createReader(state, d) {
   ];
   const PANEL_ERA_DEFAULTS = {
     '1900-1950': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4, panelDebug: 0,
+      panelShadow: 55, panelMargin: 8, panelCrop: 4,
       panelGutterRow: 18, panelGutterCol: 18, panelBandMin: 6, panelMinArea: 6,
       panelDetectW: 420, panelMerge: 0, panelMax: 8,
       panelPaperLum: 165, panelPaperFrac: 35, panelBorderLum: 100,
     },
     '1950-1980': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4, panelDebug: 0,
+      panelShadow: 55, panelMargin: 8, panelCrop: 4,
       panelGutterRow: 16, panelGutterCol: 16, panelBandMin: 5, panelMinArea: 4,
       panelDetectW: 480, panelMerge: 0, panelMax: 10,
       panelPaperLum: 170, panelPaperFrac: 38, panelBorderLum: 90,
     },
     '1980-1990': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4, panelDebug: 0,
+      panelShadow: 55, panelMargin: 8, panelCrop: 4,
       panelGutterRow: 15, panelGutterCol: 15, panelBandMin: 4, panelMinArea: 3,
       panelDetectW: 520, panelMerge: 0, panelMax: 12,
       panelPaperLum: 175, panelPaperFrac: 40, panelBorderLum: 85,
     },
     '1990-2000': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4, panelDebug: 0,
+      panelShadow: 55, panelMargin: 8, panelCrop: 4,
       panelGutterRow: 14, panelGutterCol: 14, panelBandMin: 3, panelMinArea: 2,
       panelDetectW: 560, panelMerge: 0, panelMax: 16,
       panelPaperLum: 180, panelPaperFrac: 36, panelBorderLum: 80,
     },
     '2000-': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4, panelDebug: 0,
+      panelShadow: 55, panelMargin: 8, panelCrop: 4,
       panelGutterRow: 13, panelGutterCol: 13, panelBandMin: 3, panelMinArea: 2,
       panelDetectW: 640, panelMerge: 0, panelMax: 20,
       panelPaperLum: 185, panelPaperFrac: 34, panelBorderLum: 75,
     },
   };
   const PANEL_CFG_KEYS = [
-    'panelShadow', 'panelMargin', 'panelCrop', 'panelDebug',
+    'panelShadow', 'panelMargin', 'panelCrop',
     'panelGutterRow', 'panelGutterCol', 'panelBandMin', 'panelMinArea',
     'panelDetectW', 'panelMerge', 'panelMax',
     'panelPaperLum', 'panelPaperFrac', 'panelBorderLum',
@@ -1174,6 +1174,21 @@ export function createReader(state, d) {
           eraBox.append(row);
         });
         box.append(eraBox);
+
+        box.append(el('p', 'rd-auto-cfg-hint', 'Depuración de viñetas (global)'));
+        const dbgSel = el('select', 'edit-input');
+        [['0', 'No'], ['1', 'Sí — contornos en página completa']].forEach(([v, lab]) => {
+          const o = el('option', '', lab);
+          o.value = v;
+          dbgSel.append(o);
+        });
+        dbgSel.value = pref('panelDebug', '0') === '1' ? '1' : '0';
+        dbgSel.onchange = () => {
+          setPref('panelDebug', dbgSel.value === '1' ? '1' : '0');
+          setPref('panelDetectRev', String(Date.now()));
+          try { window.dispatchEvent(new CustomEvent('tgcomic:panel-prefs')); } catch (_) {}
+        };
+        box.append(dbgSel);
 
         const ok = el('button', 'btn edit-save', 'Aceptar');
         ok.onclick = () => {
