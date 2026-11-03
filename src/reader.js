@@ -344,45 +344,65 @@ export function createReader(state, d) {
       // PRINCIPAL: papel (gutter) + muros de trazo oscuro largo → islas cerradas
       // -----------------------------------------------------------------------
       const detectClosedRegions = () => {
+        /**
+         * Detector estilo Kumiko / paneldet (sin OpenCV):
+         * 1) Umbrales adaptativos (histograma) sesgados por prefs de época.
+         * 2) Medianil (papel claro) + marcos (runs oscuros H/V dilatados).
+         * 3) Componentes conectadas del contenido (no papel), cortadas por marcos.
+         * 4) Alternativa: flood desde bordes por papel (islas cerradas).
+         * Se elige el mejor score entre ambos.
+         */
         const N = w * h;
-        // 1) Papel / medianil claro
-        const paper = new Uint8Array(N);
-        for (let i = 0; i < N; i++) if (lum[i] >= paperLum) paper[i] = 1;
-        // Dilatar papel: más agresivo si paperFrac es alto (medianiles más “permisivos”)
-        const paper2 = new Uint8Array(paper);
-        const dilateR = numP('panelPaperFrac', 40, 15, 80) >= 38 ? 1 : 0;
-        if (dilateR > 0) {
+
+        // --- histograma ligero para umbrales adaptativos ---
+        const sample = [];
+        const step = Math.max(1, Math.floor(N / 6000));
+        for (let i = 0; i < N; i += step) sample.push(lum[i]);
+        sample.sort((a, b) => a - b);
+        const pct = (p) => sample[Math.min(sample.length - 1, Math.floor(sample.length * p))];
+        // Mezcla percentil + preferencia de época
+        let thrPaper = pct(0.72) * 0.45 + paperLum * 0.55;
+        thrPaper = Math.max(145, Math.min(245, thrPaper));
+        let thrBorder = pct(0.12) * 0.35 + borderLum * 0.65;
+        thrBorder = Math.max(18, Math.min(135, thrBorder));
+
+        const dilateMask = (src, rad) => {
+          if (rad <= 0) return src;
+          const out = new Uint8Array(src);
           for (let y = 0; y < h; y++) {
             for (let x = 0; x < w; x++) {
-              if (!paper[y * w + x]) continue;
-              const i = y * w + x;
-              if (x > 0) paper2[i - 1] = 1;
-              if (x + 1 < w) paper2[i + 1] = 1;
-              if (y > 0) paper2[i - w] = 1;
-              if (y + 1 < h) paper2[i + w] = 1;
+              if (!src[y * w + x]) continue;
+              for (let dy = -rad; dy <= rad; dy++) {
+                for (let dx = -rad; dx <= rad; dx++) {
+                  const nx = x + dx, ny = y + dy;
+                  if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+                  out[ny * w + nx] = 1;
+                }
+              }
             }
           }
-        } else {
-          paper2.set(paper);
-        }
+          return out;
+        };
 
-        // 2) Muros = runs oscuros largos (marcos H/V), no todo el negro del dibujo
-        // minRun depende de la época: gutter alto → runs más cortos aceptados (más sensible);
-        // bandMin alto → exige segmentos más largos (menos fragmentación).
+        // Papel / medianil
+        const paper = new Uint8Array(N);
+        for (let i = 0; i < N; i++) if (lum[i] >= thrPaper) paper[i] = 1;
+        const paperDil = dilateMask(paper, absPaper >= 0.38 ? 1 : 0);
+
+        // Marcos: runs oscuros (más cortos que antes → mejor en marcos finos)
         const wall = new Uint8Array(N);
-        const gAvg = (Number(pref('panelGutterRow', '15')) + Number(pref('panelGutterCol', '15'))) / 2;
-        const bandPct = numP('panelBandMin', 4, 1, 20);
-        // base 6% · sube con bandMin · baja un poco con gutter alto
-        let minRunFrac = 0.04 + (bandPct / 100) * 0.8 - Math.max(0, gAvg - 12) * 0.0015;
-        minRunFrac = Math.max(0.03, Math.min(0.14, minRunFrac));
-        const minRunW = Math.max(4, Math.floor(w * minRunFrac));
-        const minRunH = Math.max(4, Math.floor(h * minRunFrac));
+        const gAvg = (peakRow * 100 + peakCol * 100) / 2;
+        const bandPct = bandMinH * 100;
+        let minRunFrac = 0.028 + (bandPct / 100) * 0.55 - Math.max(0, gAvg - 12) * 0.0012;
+        minRunFrac = Math.max(0.02, Math.min(0.12, minRunFrac));
+        const minRunW = Math.max(3, Math.floor(w * minRunFrac));
+        const minRunH = Math.max(3, Math.floor(h * minRunFrac));
         for (let y = 0; y < h; y++) {
           let x = 0;
           while (x < w) {
-            if (lum[y * w + x] > borderLum) { x++; continue; }
+            if (lum[y * w + x] > thrBorder) { x++; continue; }
             const x0 = x;
-            while (x < w && lum[y * w + x] <= borderLum) x++;
+            while (x < w && lum[y * w + x] <= thrBorder) x++;
             if (x - x0 >= minRunW) {
               for (let t = x0; t < x; t++) wall[y * w + t] = 1;
             }
@@ -391,34 +411,71 @@ export function createReader(state, d) {
         for (let x = 0; x < w; x++) {
           let y = 0;
           while (y < h) {
-            if (lum[y * w + x] > borderLum) { y++; continue; }
+            if (lum[y * w + x] > thrBorder) { y++; continue; }
             const y0 = y;
-            while (y < h && lum[y * w + x] <= borderLum) y++;
+            while (y < h && lum[y * w + x] <= thrBorder) y++;
             if (y - y0 >= minRunH) {
               for (let t = y0; t < y; t++) wall[t * w + x] = 1;
             }
           }
         }
-        // dilatar muros (cerrar huecos de esquina / WebP)
-        let wall2 = new Uint8Array(wall);
-        for (let pass = 0; pass < 2; pass++) {
-          const next = new Uint8Array(wall2);
-          for (let y = 0; y < h; y++) {
-            for (let x = 0; x < w; x++) {
-              if (!wall2[y * w + x]) continue;
-              for (let dy = -1; dy <= 1; dy++) {
-                for (let dx = -1; dx <= 1; dx++) {
-                  const xx = x + dx, yy = y + dy;
-                  if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
-                  next[yy * w + xx] = 1;
-                }
+        // Cerrar huecos de esquina (tipo morfología 1–2 px)
+        const wallDil = dilateMask(wall, 2);
+
+        // Contenido = no medianil (tinta / dibujo). Los marcos cortan componentes.
+        const content = new Uint8Array(N);
+        for (let i = 0; i < N; i++) {
+          if (!paperDil[i]) content[i] = 1;
+        }
+        // Los muros no son “contenido” para no unir viñetas por el trazo del marco
+        for (let i = 0; i < N; i++) if (wallDil[i]) content[i] = 0;
+
+        const ccFromMask = (mask) => {
+          const seen = new Uint8Array(N);
+          const panels = [];
+          const cx = new Int32Array(N);
+          const cy = new Int32Array(N);
+          const minPix = Math.max(20, Math.floor(N * 0.006));
+          for (let y0 = 0; y0 < h; y0++) {
+            for (let x0 = 0; x0 < w; x0++) {
+              const s = y0 * w + x0;
+              if (seen[s] || !mask[s]) continue;
+              let head = 0, tail = 0;
+              cx[tail] = x0; cy[tail] = y0; tail++;
+              seen[s] = 1;
+              let minX = x0, maxX = x0, minY = y0, maxY = y0, count = 0;
+              while (head < tail) {
+                const x = cx[head], y = cy[head]; head++;
+                count++;
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+                const tryN = (nx, ny) => {
+                  if (nx < 0 || ny < 0 || nx >= w || ny >= h) return;
+                  const j = ny * w + nx;
+                  if (seen[j] || !mask[j]) return;
+                  seen[j] = 1;
+                  cx[tail] = nx; cy[tail] = ny; tail++;
+                };
+                tryN(x - 1, y); tryN(x + 1, y); tryN(x, y - 1); tryN(x, y + 1);
               }
+              if (count < minPix) continue;
+              panels.push({
+                x: minX / w,
+                y: minY / h,
+                w: (maxX - minX + 1) / w,
+                h: (maxY - minY + 1) / h,
+              });
             }
           }
-          wall2 = next;
-        }
+          return postProcess(panels);
+        };
 
-        // 3) Flood desde el borde: solo por papel y sin cruzar muros
+        // Método A: CC de contenido cortado por marcos (Kumiko-like)
+        const byContent = ccFromMask(content);
+
+        // Método B: flood desde bordes por papel → islas interiores
         const outside = new Uint8Array(N);
         const qx = new Int32Array(N);
         const qy = new Int32Array(N);
@@ -426,7 +483,7 @@ export function createReader(state, d) {
         const push = (x, y) => {
           if (x < 0 || y < 0 || x >= w || y >= h) return;
           const i = y * w + x;
-          if (outside[i] || wall2[i] || !paper2[i]) return;
+          if (outside[i] || wallDil[i] || !paperDil[i]) return;
           outside[i] = 1;
           qx[qt] = x; qy[qt] = y; qt++;
         };
@@ -436,43 +493,21 @@ export function createReader(state, d) {
           const x = qx[qh], y = qy[qh]; qh++;
           push(x - 1, y); push(x + 1, y); push(x, y - 1); push(x, y + 1);
         }
-
-        // 4) Islas = no “outside” (contenido encerrado por papel/muros)
-        const seen = new Uint8Array(N);
-        const panels = [];
-        const cx = new Int32Array(N);
-        const cy = new Int32Array(N);
-        for (let y0 = 0; y0 < h; y0++) {
-          for (let x0 = 0; x0 < w; x0++) {
-            const s = y0 * w + x0;
-            if (seen[s] || outside[s]) continue;
-            let head = 0, tail = 0;
-            cx[tail] = x0; cy[tail] = y0; tail++;
-            seen[s] = 1;
-            let minX = x0, maxX = x0, minY = y0, maxY = y0, count = 0;
-            while (head < tail) {
-              const x = cx[head], y = cy[head]; head++;
-              count++;
-              if (x < minX) minX = x;
-              if (x > maxX) maxX = x;
-              if (y < minY) minY = y;
-              if (y > maxY) maxY = y;
-              const tryN = (nx, ny) => {
-                if (nx < 0 || ny < 0 || nx >= w || ny >= h) return;
-                const j = ny * w + nx;
-                if (seen[j] || outside[j]) return;
-                seen[j] = 1;
-                cx[tail] = nx; cy[tail] = ny; tail++;
-              };
-              tryN(x - 1, y); tryN(x + 1, y); tryN(x, y - 1); tryN(x, y + 1);
-            }
-            if (count < N * 0.008) continue;
-            const bw = (maxX - minX + 1) / w;
-            const bh = (maxY - minY + 1) / h;
-            panels.push({ x: minX / w, y: minY / h, w: bw, h: bh });
-          }
+        const island = new Uint8Array(N);
+        for (let i = 0; i < N; i++) {
+          if (!outside[i] && !wallDil[i]) island[i] = 1;
         }
-        return postProcess(panels);
+        const byFlood = ccFromMask(island);
+
+        // Elegir el mejor (más viñetas plausibles y mejor score)
+        const score = (arr) => {
+          if (!arr || !arr.length) return -1;
+          if (arr.length === 1 && arr[0].w > 0.9 && arr[0].h > 0.9) return 0;
+          let s = arr.length * 10;
+          for (const p of arr) s += Math.min(p.w, p.h) * 5;
+          return s;
+        };
+        return score(byContent) >= score(byFlood) ? byContent : byFlood;
       };
 
       // -----------------------------------------------------------------------
