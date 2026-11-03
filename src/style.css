@@ -1583,3 +1583,25 @@ html:has(.sf-root){
 .panel-era-advanced-slot {
   padding-left: 1.4rem;
 }
+
+/* Selectores de época en ajustes del visor */
+.rd-auto-cfg-box .rd-era-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0.4rem 0 0.75rem;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.rd-auto-cfg-box .rd-era-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.15rem;
+  cursor: pointer;
+  font-size: 0.95em;
+  user-select: none;
+}
+.rd-auto-cfg-box .rd-era-row input {
+  accent-color: #2563eb;
+}
