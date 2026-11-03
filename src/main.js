@@ -958,6 +958,7 @@ function showViewerConfig() {
     { id: '1980-1990', label: '1980-1990' },
     { id: '1990-2000', label: '1990-2000' },
     { id: '2000-', label: '2000-' },
+    { id: 'Grok', label: 'Grok' },
   ];
   // Presets orientados a cómic occidental (marcos + medianiles).
   // Globals de framing: shadow 55, margin 8, crop 4, merge siempre 0.
@@ -997,6 +998,13 @@ function showViewerConfig() {
       panelGutterRow: 13, panelGutterCol: 13, panelBandMin: 3, panelMinArea: 2,
       panelDetectW: 640, panelMerge: 0, panelMax: 20,
       panelPaperLum: 185, panelPaperFrac: 34, panelBorderLum: 75,
+    },
+    // Primer preset Grok (1980-1990 original antes del retune)
+    'Grok': {
+      panelShadow: 55, panelMargin: 8, panelCrop: 4,
+      panelGutterRow: 18, panelGutterCol: 22, panelBandMin: 4, panelMinArea: 4,
+      panelDetectW: 360, panelMerge: 0, panelMax: 0,
+      panelPaperLum: 175, panelPaperFrac: 40, panelBorderLum: 80,
     },
   };
   const PANEL_CFG_KEYS = [
