@@ -6,12 +6,41 @@ import { isComicRead as isComicReadImport, readProgress as readProgressImport } 
 export function createCovers(state, d) {
   const {
     el, kv, zip,
-    TgReader, getMsg, pageBlob, sniff, pagesOf,
+    TgReader, getMsg, pageBlob, sniff, pagesOf, openPages,
     readProgress: readProgressDep, isComicRead: isComicReadDep, stripExt,
     getCoverFit,
   } = d;
   const isComicRead = isComicReadDep || isComicReadImport;
   const readProgress = readProgressDep || readProgressImport;
+
+
+  /** Primera página legible: ZIP directo o openPages (PDF / RAR). */
+  async function firstPageBlobFromMsg(ch, f, msg, size) {
+    const r = new TgReader(msg, size);
+    const kind = await sniff(r);
+    if (kind === 'zip') {
+      const zr = new zip.ZipReader(r);
+      try {
+        const first = pagesOf(await zr.getEntries())[0];
+        if (!first) return null;
+        return await pageBlob(first);
+      } finally {
+        try { await zr.close(); } catch (_) {}
+      }
+    }
+    if (typeof openPages === 'function') {
+      const ac = { cancelled: false };
+      const arc = await openPages(msg, size, () => {}, ac);
+      try {
+        const pages = arc?.pages || [];
+        if (!pages.length) return null;
+        return await pageBlob(pages[0]);
+      } finally {
+        try { arc?.close?.(); } catch (_) {}
+      }
+    }
+    return null;
+  }
 
   const cq = [];
   let crun = 0;
@@ -127,13 +156,26 @@ export function createCovers(state, d) {
       if (msg?.document?.size != null) size = Number(msg.document.size.toString()) || size;
     } catch (_) {}
     if (!size) return null;
-    const r = new TgReader(msg, size);
-    if ((await sniff(r)) !== 'zip') return null;
-    const zr = new zip.ZipReader(r);
     try {
-      const pgs = pagesOf(await zr.getEntries());
-      if (!pgs.length) return null;
-      const src = await pageBlob(pgs[Math.min(cfg.page, pgs.length - 1)]);
+      const r = new TgReader(msg, size);
+      const kind = await sniff(r);
+      let src = null;
+      if (kind === 'zip') {
+        const zr = new zip.ZipReader(r);
+        try {
+          const pgs = pagesOf(await zr.getEntries());
+          if (!pgs.length) return null;
+          src = await pageBlob(pgs[Math.min(cfg.page, pgs.length - 1)]);
+        } finally { zr.close().catch(() => {}); }
+      } else if (typeof openPages === 'function') {
+        const ac = { cancelled: false };
+        const arc = await openPages(msg, size, () => {}, ac);
+        try {
+          const pgs = arc?.pages || [];
+          if (!pgs.length) return null;
+          src = await pageBlob(pgs[Math.min(cfg.page, pgs.length - 1)]);
+        } finally { try { arc?.close?.(); } catch (_) {} }
+      } else return null;
       if (!src) return null;
       const cropped = await cropForCover(src, cfg.mode, cfg.half);
       const out = await thumbFromBlob(cropped || src);
@@ -142,7 +184,7 @@ export function createCovers(state, d) {
     } catch (e) {
       console.warn('portada personalizada', e);
       return null;
-    } finally { zr.close().catch(() => {}); }
+    }
   }
 
   let _webpOk = null;
@@ -334,39 +376,31 @@ export function createCovers(state, d) {
       if (msg?.document?.size != null) size = Number(msg.document.size.toString()) || size;
     } catch (_) {}
     if (!size) return null;
-    const r = new TgReader(msg, size);
-    if ((await sniff(r)) !== 'zip') return null;
-    const zr = new zip.ZipReader(r);
     try {
-      const first = pagesOf(await zr.getEntries())[0];
-      if (!first) return null;
-      const out = await thumbFromBlob(await pageBlob(first));
+      const src = await firstPageBlobFromMsg(ch, f, msg, size);
+      if (!src) return null;
+      const out = await thumbFromBlob(src);
       if (out) await kv.set(key, out);
       return out;
     } catch (e) {
       const em = String(e?.message || e || '');
       if (/central directory|end of central|invalid zip|corrupt/i.test(em)) {
-        // Reintento con otro getMsg por si quedó un mensaje a medias
         try {
           const msg2 = await getMsg(ch, f, { force: true });
           let size2 = size;
           try {
             if (msg2?.document?.size != null) size2 = Number(msg2.document.size.toString()) || size2;
           } catch (_) {}
-          const r2 = new TgReader(msg2, size2);
-          if ((await sniff(r2)) !== 'zip') return null;
-          const zr2 = new zip.ZipReader(r2);
-          try {
-            const first2 = pagesOf(await zr2.getEntries())[0];
-            if (!first2) return null;
-            const out2 = await thumbFromBlob(await pageBlob(first2));
-            if (out2) await kv.set(key, out2);
-            return out2;
-          } finally { zr2.close().catch(() => {}); }
+          const src2 = await firstPageBlobFromMsg(ch, f, msg2, size2);
+          if (!src2) return null;
+          const out2 = await thumbFromBlob(src2);
+          if (out2) await kv.set(key, out2);
+          return out2;
         } catch (_) { return null; }
       }
-      throw e;
-    } finally { zr.close().catch(() => {}); }
+      console.warn('portada auto', e);
+      return null;
+    }
   }
 
   const io = new IntersectionObserver((es) => es.forEach((x) => {
