@@ -7,7 +7,7 @@
 import * as zip from '@zip.js/zip.js';
 import { createExtractorFromData } from 'node-unrar-js';
 import rarWasm from 'node-unrar-js/esm/js/unrar.wasm?url';
-import { buildComicCaption } from './parse.js';
+import { buildComicCaption, parseComicCaption } from './parse.js';
 import { fitTelegramCaption } from './caption.js';
 import { withQualityTags, stripQualityTags, existingCopy, flattenVersions, parseQuality, QUALITY_LABEL } from './quality.js';
 
@@ -457,11 +457,13 @@ export function createUploadTool(d) {
         level: 0,
       });
       let nImg = 0;
-      const files = ex.extract().files;
+      const extracted = ex.extract();
+      const files = (extracted && extracted.files) || [];
       for (const x of files) {
         if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
+        if (!x || !x.fileHeader) continue;
         const n = x.fileHeader.name || '';
-        if (x.fileHeader.flags.directory || !x.extraction) continue;
+        if (x.fileHeader.flags?.directory || !x.extraction) continue;
         const base = n.split(/[/\\]/).pop() || n;
         if (!/\.(jpe?g|png|webp|gif|avif)$/i.test(base)) continue;
         const raw = x.extraction;
@@ -535,7 +537,23 @@ export function createUploadTool(d) {
     return /MEDIA_CAPTION_TOO_LONG|CAPTION_TOO_LONG/i.test(m);
   }
 
-  async function uploadCbz(ch, fileName, blob, caption, status) {
+  /** Caption con el Nombre de archivo correcto para cada variante (alta / WebP / 2400). */
+  function captionForVariant(baseCaption, outName) {
+    const name = String(outName || '').trim();
+    try {
+      const fields = parseComicCaption(baseCaption || '') || {};
+      fields.fileName = name || fields.fileName || '';
+      return fitTelegramCaption(buildComicCaption(fields), 1024);
+    } catch (_) {
+      try {
+        return fitTelegramCaption(buildComicCaption({ fileName: name }), 1024);
+      } catch {
+        return fitTelegramCaption(String(baseCaption || name || ''), 1024);
+      }
+    }
+  }
+
+    async function uploadCbz(ch, fileName, blob, caption, status) {
     await getReady();
     const peer = peerOf(ch);
     const client = getClient();
@@ -1409,37 +1427,56 @@ export function createUploadTool(d) {
                 });
               }
               const nVar = variants.length;
+              const uploadedNames = [];
+              // 1) Una sola conversión CBR→CBZ (calidad alta); las WebP salen de ese CBZ (no re-extraer el RAR)
+              st('[' + variants[0].outName + '] ' + (nVar > 1 ? '(1/' + nVar + ') ' : '') + 'Convirtiendo a CBZ si hace falta…');
+              await yieldTick();
+              let baseCbz = await localFileToCbzBlob(fileRef, st, { asWebp: false });
+              if (!baseCbz || !baseCbz.size) throw new Error('Archivo vacío tras conversión');
+              ctx.setProgress(30);
+
               for (let vi = 0; vi < nVar; vi++) {
                 const v = variants[vi];
                 const tag = nVar > 1 ? `(${vi + 1}/${nVar}) ` : '';
-                st('[' + v.outName + '] ' + tag + (v.asWebp ? 'Convirtiendo a CBZ WebP…' : 'Convirtiendo a CBZ si hace falta…'));
-                await yieldTick();
-                let blob = await localFileToCbzBlob(fileRef, st, { asWebp: v.asWebp, webpOpts: v.webpOpts });
-                ctx.setProgress(20 + Math.round(((vi + 0.5) / nVar) * 70));
+                await ctx.waitWhilePaused?.();
+                if (ctx.isAborted?.()) throw Object.assign(new Error('cancelado'), { cancelled: true });
+
+                // Evitar duplicados si el job se reintenta tras un fallo a medias
+                try {
+                  const existing = flattenVersions((await kv.get('f:' + ch.id)) || []);
+                  if (existingCopy(existing, v.outName) || uploadedNames.includes(v.outName)) {
+                    st('[' + v.outName + '] ' + tag + 'Ya en el canal, se omite');
+                    if (!uploadedNames.includes(v.outName)) uploadedNames.push(v.outName);
+                    continue;
+                  }
+                } catch (_) {}
+
+                let blob = baseCbz;
+                if (v.asWebp) {
+                  st('[' + v.outName + '] ' + tag + 'Convirtiendo a CBZ WebP…');
+                  await yieldTick();
+                  // Partir del CBZ ya generado (no del CBR original)
+                  blob = await localFileToCbzBlob(baseCbz, st, { asWebp: true, webpOpts: v.webpOpts });
+                  if (!blob || !blob.size) throw new Error('WebP vacío');
+                }
+                ctx.setProgress(30 + Math.round(((vi + 0.5) / nVar) * 60));
+                const cap = captionForVariant(captionText, v.outName);
                 st('[' + v.outName + '] Preparando subida… (' + (formatBytes?.(blob.size) || blob.size) + ')');
                 await yieldTick();
                 await ctx.waitWhilePaused?.();
                 if (ctx.isAborted?.()) throw Object.assign(new Error('cancelado'), { cancelled: true });
-                let cap = captionText;
-                try {
-                  if (typeof parseComicCaption === 'function' && typeof buildComicCaption === 'function' && cap) {
-                    const fields = parseComicCaption(cap);
-                    fields.fileName = v.outName;
-                    cap = buildComicCaption(fields);
-                  }
-                } catch (_) {}
                 st('[' + v.outName + '] Subiendo…');
                 await uploadCbz(ch, v.outName, blob, cap, st);
                 st('[' + v.outName + '] Listo');
+                uploadedNames.push(v.outName);
+                try { await fetchFiles(ch); } catch (_) {}
               }
+              // liberar referencia al CBZ base
+              try { baseCbz = null; } catch (_) {}
               ctx.setProgress(100);
-              // Actualizar caché del canal y refrescar la vista actual si es ese canal/serie
-              try {
-                await fetchFiles(ch);
-              } catch (_) {}
               try {
                 if (typeof onUploadDone === 'function') {
-                  await onUploadDone(ch, { outName, outNames: [outName] });
+                  await onUploadDone(ch, { outName, outNames: uploadedNames.slice() });
                 }
               } catch (e) {
                 console.warn('[upload] onUploadDone', e);
