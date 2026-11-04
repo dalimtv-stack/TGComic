@@ -107,7 +107,7 @@ export function createCovers(state, d) {
         else if (mode === 'right') sx = Math.max(0, sw - cw);
       }
     }
-    const scale = Math.min(1, 560 / Math.max(cw, chh));
+    const scale = Math.min(1, coverGenMaxEdge('comic', 560) / Math.max(cw, chh));
     const cv = el('canvas');
     cv.width = Math.max(1, Math.round(cw * scale));
     cv.height = Math.max(1, Math.round(chh * scale));
@@ -269,8 +269,29 @@ export function createCovers(state, d) {
     return out && out.size ? out : null;
   }
 
-  // Lado mayor 280 px; en rejilla se ve bien y limita peso en iPhone (JPEG)
-  const thumbFromBlob = (blob) => optimizeImageBlob(blob, 280, 0.72);
+  /**
+   * Si «Generar portadas con esta resolución» está activo (device:coverGenAtRes*),
+   * el lado mayor de la miniatura = altura configurada (coverH*). Si no, fallback.
+   */
+  function coverGenMaxEdge(kind, fallback) {
+    try {
+      const flag = kind === 'series' ? 'coverGenAtResSeries'
+        : kind === 'channel' ? 'coverGenAtResChannel'
+        : 'coverGenAtResComic';
+      if (localStorage.getItem('device:' + flag) !== '1') return fallback;
+      const hKey = kind === 'series' ? 'coverHSeries'
+        : kind === 'channel' ? 'coverHChannel'
+        : 'coverHComic';
+      const h = Math.max(100, Math.min(400, Number(localStorage.getItem('device:' + hKey) || 225) || 225));
+      return h;
+    } catch (_) {
+      return fallback;
+    }
+  }
+
+  // Lado mayor por defecto 280 px; si el check de resolución está on, usa coverH*
+  const thumbFromBlob = (blob, kind = 'comic') =>
+    optimizeImageBlob(blob, coverGenMaxEdge(kind, 280), 0.72);
 
   /** Marca de portada elegida/adaptada por el usuario (no la pisa el lector). */
   const coverCustomKey = (ch, f) => `ccustom:${ch.id}:${f.id}`;
@@ -417,6 +438,7 @@ export function createCovers(state, d) {
     isCustomCover,
     markCustomCover,
     optimizeImageBlob,
+    coverGenMaxEdge,
     comicCover,
     pump,
     io,
