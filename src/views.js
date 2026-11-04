@@ -1186,6 +1186,11 @@ function groupsView() {
       authorsFold.addEventListener('toggle', () => setPref('authorsOpen', authorsFold.open ? '1' : '0'));
       homeBody.append(authorsFold);
 
+      // Spacer bajo Autores: permite llegar al summary aunque Editoriales esté abierto
+      const homeSpacer = el('div', 'home-bottom-spacer');
+      homeSpacer.setAttribute('aria-hidden', 'true');
+      homeBody.append(homeSpacer);
+
       const extractWriters = (caption) => {
         const people = [];
         try {
