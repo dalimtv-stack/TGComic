@@ -10,6 +10,8 @@ export function createProTools(d) {
     el,
     kv,
     getCover,
+    generateCover,
+    pump: coverPump,
     groupSeries,
     seriesOverrideFor,
     groupDisplayName,
@@ -682,18 +684,39 @@ export function createProTools(d) {
     );
     if (!ok) return;
     const prog = showProgressFrame('Cargar portadas faltantes');
-    let done = 0, okN = 0, fail = 0;
+    let done = 0, okN = 0, fail = 0, skip = 0;
     prog.setProgress(0, missing.length || 1);
+    const COVER_MS = 90000;
+    const withTimeout = (p, ms) => {
+      let t;
+      const timeout = new Promise((_, rej) => {
+        t = setTimeout(() => rej(Object.assign(new Error('timeout'), { timeout: true })), ms);
+      });
+      return Promise.race([p, timeout]).finally(() => { try { clearTimeout(t); } catch (_) {} });
+    };
+    const gen = typeof generateCover === 'function' ? generateCover : getCover;
     for (const { ch, f } of missing) {
-      prog.setStatus((f.name || f.id || '').slice(0, 60));
+      const label = String(f.name || f.id || '').slice(0, 50);
+      prog.setStatus(`(${done + 1}/${missing.length}) ${label}`);
+      try { coverPump?.({ force: true }); } catch (_) {}
       try {
-        const b = await getCover(ch, f);
+        const b = await withTimeout(gen(ch, f), COVER_MS);
         if (b) okN++;
         else fail++;
-      } catch (_) { fail++; }
+      } catch (e) {
+        if (e?.timeout) {
+          skip++;
+          // Marcar ausencia temporal para no reintentar eterno en el mismo batch
+          try { await kv.set(`c:${ch.id}:${f.id}`, 'none'); } catch (_) {}
+          prog.setStatus(`Omitido (timeout 90s): ${label}`);
+          await new Promise((r) => setTimeout(r, 400));
+        } else {
+          fail++;
+        }
+      }
       done++;
       prog.setProgress(done, missing.length);
-      if (done % 3 === 0) await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
     }
     let custom = { ok: 0, fail: 0, total: 0 };
     if (typeof d.restoreCustomCovers === 'function') {
@@ -705,7 +728,9 @@ export function createProTools(d) {
     prog.close();
     try { onCoversChanged?.(); } catch (_) {}
     await appAlert(
-      `Portadas de cómics: ${okN} cargadas` + (fail ? `, ${fail} sin imagen` : '') + '.'
+      `Portadas de cómics: ${okN} cargadas`
+      + (fail ? `, ${fail} sin imagen` : '')
+      + (skip ? `, ${skip} omitidas (timeout)` : '') + '.'
       + `\nPortadas personalizadas: ${custom.ok} recuperadas` + (custom.fail ? `, ${custom.fail} fallidas` : '') + '.',
       'Portadas'
     );
