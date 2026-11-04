@@ -747,7 +747,7 @@ export function createProTools(d) {
       parent.append(row);
     };
 
-    const block = (title, coverKey, textKey, coverDef, textDef, autoKey) => {
+    const block = (title, coverKey, textKey, coverDef, textDef, autoKey, genKey) => {
       const boxB = el('div', 'cfg-block');
       boxB.append(el('div', 'info-sec', title));
 
@@ -776,6 +776,25 @@ export function createProTools(d) {
       rowH.append(hintHEl);
       rowH.append(inpH);
       boxB.append(rowH);
+
+      if (genKey) {
+        const genLab = el('label', 'cfg-auto');
+        genLab.style.display = 'flex';
+        genLab.style.alignItems = 'center';
+        genLab.style.gap = '0.4rem';
+        genLab.style.margin = '0.35rem 0 0.5rem';
+        const genChk = el('input');
+        genChk.type = 'checkbox';
+        genChk.checked = devPref(genKey, '0') === '1';
+        genChk.onchange = () => {
+          setDevPref(genKey, genChk.checked ? '1' : '0');
+        };
+        genLab.append(genChk, document.createTextNode('Generar portadas con esta resolución'));
+        boxB.append(genLab);
+        boxB.append(el('p', 'cfg-hint',
+          'Si está marcado, al crear o regenerar portadas de este tipo se limita el lado mayor a la altura configurada arriba.'
+        ));
+      }
 
       const inpT = el('input', 'edit-input');
       inpT.type = 'number';
@@ -818,9 +837,9 @@ export function createProTools(d) {
       body.append(boxB);
     };
 
-    block('Cómics', 'coverHComic', 'coverTextComic', 225, 15, 'textAutoComic');
-    block('Series', 'coverHSeries', 'coverTextSeries', 225, 15, 'textAutoSeries');
-    block('Canales', 'coverHChannel', 'coverTextChannel', 225, 15, 'textAutoChannel');
+    block('Cómics', 'coverHComic', 'coverTextComic', 225, 15, 'textAutoComic', 'coverGenAtResComic');
+    block('Series', 'coverHSeries', 'coverTextSeries', 225, 15, 'textAutoSeries', 'coverGenAtResSeries');
+    block('Canales', 'coverHChannel', 'coverTextChannel', 225, 15, 'textAutoChannel', 'coverGenAtResChannel');
 
     const actions = el('div', 'edit-actions');
     const reset = el('button', 'btn', 'Restaurar valores');
@@ -834,6 +853,9 @@ export function createProTools(d) {
       setDevPref('textAutoComic', '0');
       setDevPref('textAutoSeries', '0');
       setDevPref('textAutoChannel', '0');
+      setDevPref('coverGenAtResComic', '0');
+      setDevPref('coverGenAtResSeries', '0');
+      setDevPref('coverGenAtResChannel', '0');
       applyNow();
       frame.remove();
       showImageConfig();
