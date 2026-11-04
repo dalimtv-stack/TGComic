@@ -75,36 +75,174 @@ export function createProTools(d) {
     return out.sort(cmp || ((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true })));
   }
 
-  /** Pantalla de progreso (bloqueo de fondo). */
-  function showProgressFrame(title) {
+  /** Título de la app (mismo patrón que «Actualizando…»). */
+  function appTitleEl() {
+    try { return document.querySelector('#title'); } catch { return null; }
+  }
+
+  /**
+   * Pantalla de progreso con slots concurrentes, Cancelar y Segundo plano.
+   * opts.slots = número de líneas de trabajo en paralelo (p. ej. 3 → 6 líneas: nombre + estado).
+   */
+  function showProgressFrame(title, opts = {}) {
     document.querySelector('.info-frame.protools-progress')?.remove();
     const frame = el('div', 'info-frame protools-progress');
     const box = el('div', 'info-box');
     const head = el('div', 'info-head');
-    head.append(el('span', '', title || 'Progreso'));
+    const titleSpan = el('span', '', title || 'Progreso');
+    head.append(titleSpan);
     box.append(head);
     const body = el('div', 'info-body');
-    const status = el('p', 'cover-pick-hint', 'Preparando…');
-    status.id = 'protools-status';
+
+    // Estado global (1 línea) + slots concurrentes (2 líneas cada uno: título + detalle)
+    const status = el('p', 'cover-pick-hint protools-status-main', 'Preparando…');
+    body.append(status);
+
+    const nSlots = Math.max(0, Math.min(8, Number(opts.slots) || 0));
+    const slotEls = [];
+    const slotsWrap = el('div', 'protools-slots');
+    slotsWrap.style.cssText = 'display:flex;flex-direction:column;gap:8px;margin:0.5rem 0 0.75rem;';
+    if (nSlots > 0) {
+      for (let i = 0; i < nSlots; i++) {
+        const row = el('div', 'protools-slot');
+        row.hidden = true;
+        row.style.cssText = 'padding:8px 10px;border-radius:10px;background:#ffffff0c;border:1px solid #ffffff12;';
+        const name = el('div', 'protools-slot-name', '');
+        name.style.cssText = 'font-size:0.88rem;font-weight:600;word-break:break-word;line-height:1.3;';
+        const detail = el('div', 'protools-slot-detail', '');
+        detail.style.cssText = 'font-size:0.78rem;color:var(--mut,#8b8d94);margin-top:2px;line-height:1.3;';
+        row.append(name, detail);
+        slotsWrap.append(row);
+        slotEls.push({ row, name, detail, busy: false });
+      }
+      body.append(slotsWrap);
+    }
+
     const bar = el('div', 'repack-panel-bar');
     const fill = el('div', 'repack-panel-fill');
     fill.style.width = '0%';
     bar.append(fill);
     const count = el('p', 'cover-pick-hint', '');
-    body.append(status, bar, count);
+    body.append(bar, count);
+
+    const actions = el('div', 'edit-actions protools-progress-actions');
+    const btnCancel = el('button', 'btn', 'Cancelar');
+    const btnBg = el('button', 'btn edit-save', 'Segundo plano');
+    actions.append(btnCancel, btnBg);
+    body.append(actions);
+
     box.append(body);
     frame.append(box);
     document.body.append(frame);
-    return {
-      frame,
-      setStatus(t) { status.textContent = t; },
-      setProgress(done, total) {
-        const pct = total > 0 ? Math.round((done / total) * 100) : 0;
-        fill.style.width = pct + '%';
-        count.textContent = total ? `${done} / ${total} (${pct}%)` : '';
-      },
-      close() { try { frame.remove(); } catch (_) {} },
+
+    const state = {
+      cancelled: false,
+      background: false,
+      done: 0,
+      total: 0,
+      title: title || 'Progreso',
+      prevTitle: '',
     };
+    try {
+      const te = appTitleEl();
+      if (te) state.prevTitle = te.textContent || 'TGComics';
+    } catch (_) {}
+
+    const paintTitleBg = () => {
+      if (!state.background) return;
+      try {
+        const te = appTitleEl();
+        if (!te) return;
+        const pct = state.total > 0 ? Math.round((state.done / state.total) * 100) : 0;
+        te.textContent = state.total
+          ? `${state.title}… ${state.done}/${state.total} (${pct}%)`
+          : `${state.title}…`;
+      } catch (_) {}
+    };
+
+    const api = {
+      frame,
+      get cancelled() { return state.cancelled; },
+      get background() { return state.background; },
+      setTitle(t) {
+        state.title = t || state.title;
+        try { titleSpan.textContent = state.title; } catch (_) {}
+        paintTitleBg();
+      },
+      setStatus(t) {
+        try { status.textContent = t || ''; } catch (_) {}
+      },
+      /** Asigna un slot libre; devuelve id o -1 */
+      acquireSlot() {
+        for (let i = 0; i < slotEls.length; i++) {
+          if (!slotEls[i].busy) {
+            slotEls[i].busy = true;
+            slotEls[i].row.hidden = false;
+            return i;
+          }
+        }
+        return -1;
+      },
+      releaseSlot(id) {
+        const s = slotEls[id];
+        if (!s) return;
+        s.busy = false;
+        s.row.hidden = true;
+        s.name.textContent = '';
+        s.detail.textContent = '';
+      },
+      /** Actualiza nombre (línea 1) y detalle (línea 2) de un slot */
+      setSlot(id, nameText, detailText) {
+        const s = slotEls[id];
+        if (!s) return;
+        s.busy = true;
+        s.row.hidden = false;
+        try {
+          s.name.textContent = nameText || '';
+          s.detail.textContent = detailText || '';
+        } catch (_) {}
+      },
+      setProgress(done, total) {
+        state.done = done;
+        state.total = total;
+        const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+        try {
+          fill.style.width = pct + '%';
+          count.textContent = total ? `${done} / ${total} (${pct}%)` : '';
+        } catch (_) {}
+        paintTitleBg();
+      },
+      close() {
+        try { frame.remove(); } catch (_) {}
+        if (state.background) {
+          try {
+            const te = appTitleEl();
+            if (te && state.prevTitle) te.textContent = state.prevTitle;
+          } catch (_) {}
+        }
+      },
+      /** Restaura el título al terminar en segundo plano */
+      restoreTitle() {
+        try {
+          const te = appTitleEl();
+          if (te && state.prevTitle) te.textContent = state.prevTitle;
+        } catch (_) {}
+        state.background = false;
+      },
+    };
+
+    btnCancel.onclick = () => {
+      state.cancelled = true;
+      try { status.textContent = 'Cancelando…'; } catch (_) {}
+      try { btnCancel.disabled = true; btnBg.disabled = true; } catch (_) {}
+    };
+    btnBg.onclick = () => {
+      state.background = true;
+      try { frame.style.display = 'none'; } catch (_) {}
+      paintTitleBg();
+    };
+
+    return api;
   }
 
   /**
@@ -179,27 +317,47 @@ export function createProTools(d) {
     return done - keep.length;
   }
 
-  async function regenerateCovers(targets, onProgress) {
+  async function regenerateCovers(targets, onProgress, prog) {
     let done = 0;
     let okN = 0;
     const total = targets.length;
     const skip = new Set(targets.keep || []);
-    for (const t of targets) {
-      if (skip.has(t)) { done++; onProgress?.(done, total); continue; }
-      try {
-        // force: no usar portada en caché ni mensaje Telegram en memoria
-        if (typeof d.invalidateComicLocal === 'function') {
-          try { await d.invalidateComicLocal(t.ch, t.f); } catch (_) {}
-        }
-        if (typeof getCover === 'function') {
-          const b = await getCover(t.ch, t.f, { force: true });
-          if (b) okN++;
-        }
-      } catch (_) {}
-      done++;
-      onProgress?.(done, total);
-      if (done % 3 === 0) await new Promise((r) => setTimeout(r, 0));
-    }
+    const CONC = 3;
+    const queue = targets.filter((t) => !skip.has(t));
+    // Los "keep" ya cuentan como hechos
+    done = total - queue.length;
+    onProgress?.(done, total);
+    let next = 0;
+    const worker = async () => {
+      while (true) {
+        if (prog?.cancelled) return;
+        const i = next++;
+        if (i >= queue.length) return;
+        const t = queue[i];
+        const label = String(t.f?.name || t.f?.id || '').slice(0, 60);
+        const slot = prog?.acquireSlot?.() ?? -1;
+        if (slot >= 0) prog.setSlot(slot, label, 'Generando…');
+        try {
+          if (typeof d.invalidateComicLocal === 'function') {
+            try { await d.invalidateComicLocal(t.ch, t.f); } catch (_) {}
+          }
+          if (typeof generateCover === 'function') {
+            const b = await generateCover(t.ch, t.f, {
+              status: (tx) => { if (slot >= 0) prog.setSlot(slot, label, String(tx || '')); },
+            });
+            if (b) okN++;
+          } else if (typeof getCover === 'function') {
+            const b = await getCover(t.ch, t.f, { force: true });
+            if (b) okN++;
+          }
+        } catch (_) {}
+        if (slot >= 0) prog.releaseSlot(slot);
+        done++;
+        onProgress?.(done, total);
+        await new Promise((r) => setTimeout(r, 0));
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(CONC, queue.length || 1) }, () => worker()));
     return okN;
   }
 
@@ -378,36 +536,44 @@ export function createProTools(d) {
       if (!ok) return;
       frame.remove();
 
-      const prog = showProgressFrame('Borrando portadas');
+      const CONC = 3;
+      const prog = showProgressFrame('Borrando portadas', { slots: CONC });
       prog.setStatus('Eliminando de la caché…');
       let deleted = 0;
       try {
         deleted = await deleteCoverKeys(targets, (done, total) => {
+          if (prog.cancelled) return;
           prog.setProgress(done, total);
           prog.setStatus(`Borrando portadas… ${done}/${total}`);
         });
       } catch (e) {
         prog.close();
+        prog.restoreTitle();
         await appAlert('Error al borrar: ' + (e?.message || e), 'Portadas');
         return;
       }
+      if (prog.cancelled) {
+        prog.close();
+        prog.restoreTitle();
+        await appAlert(`Cancelado tras borrar ${deleted} portada(s).`, 'Portadas');
+        try { onCoversChanged?.(); } catch (_) {}
+        return;
+      }
 
+      prog.setTitle('Regenerando portadas');
       prog.setStatus('Regenerando portadas…');
       prog.setProgress(0, targets.length);
-      // Cambiar título visual
-      try {
-        const titleEl = prog.frame.querySelector('.info-head span');
-        if (titleEl) titleEl.textContent = 'Regenerando portadas';
-      } catch (_) {}
 
       let regenerated = 0;
       try {
         regenerated = await regenerateCovers(targets, (done, total) => {
+          if (prog.cancelled) return;
           prog.setProgress(done, total);
           prog.setStatus(`Generando portadas… ${done}/${total}`);
-        });
+        }, prog);
       } catch (e) {
         prog.close();
+        prog.restoreTitle();
         await appAlert(
           `Borradas: ${deleted}. Error al regenerar: ` + (e?.message || e),
           'Portadas'
@@ -415,17 +581,24 @@ export function createProTools(d) {
         try { onCoversChanged?.(); } catch (_) {}
         return;
       }
+      if (prog.cancelled) {
+        prog.close();
+        prog.restoreTitle();
+        try { onCoversChanged?.(); } catch (_) {}
+        await appAlert(`Cancelado.\nBorradas: ${deleted}\nRegeneradas: ${regenerated}`, 'Portadas');
+        return;
+      }
 
       let structMsg = '';
       if (structChk.checked && typeof reloadStructureCovers === 'function') {
         try {
-          const titleEl = prog.frame.querySelector('.info-head span');
-          if (titleEl) titleEl.textContent = 'Canales / Series / Editoriales';
+          prog.setTitle('Canales / Series / Editoriales');
           prog.setStatus('Regenerando portadas de estructura…');
           prog.setProgress(0, 1);
           const st = await reloadStructureCovers(filters, (done, total, label) => {
+            if (prog.cancelled) return;
             prog.setProgress(done, total);
-            prog.setStatus(label ? String(label).slice(0, 60) : `Estructura… ${done}/${total}`);
+            prog.setStatus(label ? String(label).slice(0, 80) : `Estructura… ${done}/${total}`);
           });
           structMsg = `\nCanales/Series/Editoriales: ${st?.ok || 0} ok`
             + (st?.fail ? `, ${st.fail} fallos` : '');
@@ -434,14 +607,24 @@ export function createProTools(d) {
         }
       }
 
+      const wasBg = prog.background;
       prog.close();
+      prog.restoreTitle();
       try { onCoversChanged?.(); } catch (_) {}
-      await appAlert(
+      const summary =
         `Listo.\nBorradas: ${deleted}\nRegeneradas: ${regenerated}`
-          + (targets.keep?.length ? `\nPersonalizadas mantenidas: ${targets.keep.length}` : '')
-          + structMsg,
-        'Portadas'
-      );
+        + (targets.keep?.length ? `\nPersonalizadas mantenidas: ${targets.keep.length}` : '')
+        + structMsg;
+      if (!wasBg) await appAlert(summary, 'Portadas');
+      else {
+        try {
+          const te = appTitleEl();
+          if (te) {
+            te.textContent = `Portadas: ${regenerated} regeneradas`;
+            setTimeout(() => { try { prog.restoreTitle(); } catch (_) {} }, 4000);
+          }
+        } catch (_) {}
+      }
     };
     actions.append(cancel, go);
     body.append(actions);
@@ -683,9 +866,11 @@ export function createProTools(d) {
       'Cargar portadas faltantes'
     );
     if (!ok) return;
-    const prog = showProgressFrame('Cargar portadas faltantes');
+    const CONCURRENCY = 3;
+    const prog = showProgressFrame('Cargar portadas faltantes', { slots: CONCURRENCY });
     let done = 0, okN = 0, fail = 0, skip = 0;
     prog.setProgress(0, missing.length || 1);
+    prog.setStatus('Generando portadas…');
     // CBZ (ZIP por trozos) suele ser rápido; CBR descarga el archivo entero → más margen
     const isCbr = (f) => /\.cbr$/i.test(String(f?.name || ''));
     const timeoutFor = (f) => (isCbr(f) || /\.pdf$/i.test(String(f?.name || ''))) ? 75000 : 35000;
@@ -697,31 +882,29 @@ export function createProTools(d) {
       return Promise.race([p, timeout]).finally(() => { try { clearTimeout(t); } catch (_) {} });
     };
     const gen = typeof generateCover === 'function' ? generateCover : null;
-    // Concurrencia baja: Telegram tolera 2–3 descargas; CBZ solo pide cabecera/1ª página
-    const CONCURRENCY = 3;
     let next = 0;
     const total = missing.length;
     const worker = async () => {
       while (true) {
+        if (prog.cancelled) return;
         const i = next++;
         if (i >= total) return;
         const { ch, f } = missing[i];
-        const label = String(f.name || f.id || '').slice(0, 48);
-        const tick = (extra) => {
-          try {
-            prog.setStatus(`(${done + 1}/${total}) ${label}` + (extra ? ' · ' + extra : ''));
-          } catch (_) {}
+        const label = String(f.name || f.id || '').slice(0, 60);
+        const slot = prog.acquireSlot();
+        const setDetail = (t) => {
+          if (slot >= 0) prog.setSlot(slot, label, t || '');
         };
-        tick(isCbr(f) ? 'CBR (descarga completa)…' : '');
+        setDetail(isCbr(f) ? 'CBR (descarga completa)…' : 'En cola…');
         try {
+          if (prog.cancelled) break;
           let b = null;
           if (gen) {
             b = await withTimeout(
-              gen(ch, f, { status: (t) => tick(String(t || '').slice(0, 40)) }),
+              gen(ch, f, { status: (t) => setDetail(String(t || '')) }),
               timeoutFor(f)
             );
           } else if (typeof getCover === 'function') {
-            // Fallback: sin force (no re-descargar mensaje ni invalidar custom)
             b = await withTimeout(getCover(ch, f), timeoutFor(f));
           }
           if (b) okN++;
@@ -729,33 +912,56 @@ export function createProTools(d) {
         } catch (e) {
           if (e?.timeout) {
             skip++;
-            tick('omitido (timeout)');
+            setDetail('Omitido (timeout)');
           } else {
             fail++;
+            setDetail('Error');
           }
         }
+        if (slot >= 0) prog.releaseSlot(slot);
         done++;
         prog.setProgress(done, total);
+        if (prog.cancelled) return;
         await new Promise((r) => setTimeout(r, 0));
       }
     };
     await Promise.all(Array.from({ length: Math.min(CONCURRENCY, total) }, () => worker()));
+    if (prog.cancelled) {
+      prog.close();
+      prog.restoreTitle();
+      try { onCoversChanged?.(); } catch (_) {}
+      await appAlert(
+        `Cancelado.\nCompletadas: ${okN}` + (fail ? `, fallos: ${fail}` : '') + (skip ? `, omitidas: ${skip}` : '') + '.',
+        'Portadas'
+      );
+      return;
+    }
     let custom = { ok: 0, fail: 0, total: 0 };
     if (typeof d.restoreCustomCovers === 'function') {
       prog.setStatus('Portadas personalizadas de canales y series…');
       try {
-        custom = (await d.restoreCustomCovers((t) => prog.setStatus(String(t).slice(0, 60)))) || custom;
+        custom = (await d.restoreCustomCovers((t) => prog.setStatus(String(t).slice(0, 80)))) || custom;
       } catch (_) {}
     }
+    const wasBg = prog.background;
     prog.close();
+    prog.restoreTitle();
     try { onCoversChanged?.(); } catch (_) {}
-    await appAlert(
+    const summary =
       `Portadas de cómics: ${okN} cargadas`
       + (fail ? `, ${fail} sin imagen` : '')
       + (skip ? `, ${skip} omitidas (timeout)` : '') + '.'
-      + `\nPortadas personalizadas: ${custom.ok} recuperadas` + (custom.fail ? `, ${custom.fail} fallidas` : '') + '.',
-      'Portadas'
-    );
+      + `\nPortadas personalizadas: ${custom.ok} recuperadas` + (custom.fail ? `, ${custom.fail} fallidas` : '') + '.';
+    if (!wasBg) await appAlert(summary, 'Portadas');
+    else {
+      try {
+        const te = appTitleEl();
+        if (te) {
+          te.textContent = `Portadas: ${okN} ok` + (fail || skip ? ` · ${fail + skip} fallos` : '');
+          setTimeout(() => { try { prog.restoreTitle(); } catch (_) {} }, 4000);
+        }
+      } catch (_) {}
+    }
   }
 
   async function countPagesForComic(ch, f) {
@@ -796,28 +1002,42 @@ export function createProTools(d) {
       'Cargar número de páginas'
     );
     if (!ok) return;
-    const prog = showProgressFrame('Cargar número de páginas');
+    const prog = showProgressFrame('Cargar número de páginas', { slots: 1 });
     let done = 0, okN = 0, fail = 0;
     prog.setProgress(0, missing.length);
     for (const { ch, f } of missing) {
-      prog.setStatus((f.name || f.id || '').slice(0, 60));
+      if (prog.cancelled) break;
+      const label = String(f.name || f.id || '').slice(0, 60);
+      const slot = prog.acquireSlot();
+      if (slot >= 0) prog.setSlot(slot, label, 'Contando páginas…');
+      else prog.setStatus(label);
       try {
         const n = await countPagesForComic(ch, f);
         if (n > 0 && typeof setPagesTotal === 'function') {
           setPagesTotal(ch.id, f.id, n);
           okN++;
-        } else fail++;
-      } catch (_) { fail++; }
+          if (slot >= 0) prog.setSlot(slot, label, n + ' páginas');
+        } else {
+          fail++;
+          if (slot >= 0) prog.setSlot(slot, label, 'Sin páginas');
+        }
+      } catch (_) {
+        fail++;
+        if (slot >= 0) prog.setSlot(slot, label, 'Error');
+      }
+      if (slot >= 0) prog.releaseSlot(slot);
       done++;
       prog.setProgress(done, missing.length);
       if (done % 2 === 0) await new Promise((r) => setTimeout(r, 0));
     }
+    const wasBg = prog.background;
+    const cancelled = prog.cancelled;
     prog.close();
+    prog.restoreTitle();
     try { onCoversChanged?.(); } catch (_) {}
-    await appAlert(
-      `Páginas: ${okN} actualizados` + (fail ? `, ${fail} fallidos` : '') + '.',
-      'Páginas'
-    );
+    const summary = (cancelled ? 'Cancelado. ' : '')
+      + `Páginas: ${okN} actualizados` + (fail ? `, ${fail} fallidos` : '') + '.';
+    if (!wasBg) await appAlert(summary, 'Páginas');
   }
 
 
