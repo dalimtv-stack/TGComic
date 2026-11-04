@@ -313,14 +313,37 @@ export function createRepackTool(d) {
   }
 
   /** Si ya es ZIP: no reextraer; solo cambiar extensión al subir. */
+  /** Caché de descarga por cómic (Media + Baja sin re-descargar). */
+  const dlCache = new Map();
+  const dlCacheKey = (ch, f) => (ch && f != null ? String(ch.id) + ':' + String(f.id) : '');
+  function clearDlCache(key) {
+    try {
+      if (key) dlCache.delete(key);
+      else dlCache.clear();
+    } catch (_) {}
+  }
+
   async function convertToCbzBlob(ch, f, status, opts) {
     const wantWebp = !!(opts && opts.asWebp);
     const webpOpts = (opts && opts.webpOpts) || {};
+    const cacheKey = (opts && opts.cacheKey) || dlCacheKey(ch, f);
     const msg = await getMsg(ch, f);
     if (!msg?.media) throw new Error('Sin media en el mensaje');
 
     const probe = new TgReader(msg, f.size);
     const kind = await sniff(probe);
+
+    const downloadOnce = async () => {
+      if (cacheKey && dlCache.has(cacheKey)) {
+        status('Reutilizando descarga en caché…');
+        return dlCache.get(cacheKey);
+      }
+      const data = await downloadWholeMessage(msg, f.size, status);
+      if (cacheKey && data) {
+        try { dlCache.set(cacheKey, data); } catch (_) {}
+      }
+      return data;
+    };
 
     const mimeOf = (name) => {
       const e = (String(name).split(/[/\\]/).pop() || name).toLowerCase().match(/\.(jpe?g|png|webp|gif|avif)$/);
@@ -487,7 +510,7 @@ export function createRepackTool(d) {
 
     if (kind === 'zip') {
       status('Es ZIP (CBR falso): descarga…');
-      const data = await downloadWholeMessage(msg, f.size, status);
+      const data = await downloadOnce();
       const blob = new Blob([data], { type: 'application/zip' });
       if (!wantWebp) {
         status(`Listo para subir (${formatBytes?.(blob.size) || blob.size + ' B'})`);
@@ -498,7 +521,7 @@ export function createRepackTool(d) {
     }
 
     status('Descargando CBR (RAR)…');
-    let data = await downloadWholeMessage(msg, f.size, status);
+    let data = await downloadOnce();
     if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
     status('Extrayendo RAR → CBZ…');
     const out = await imagesToCbzFromRarData(data);
@@ -800,104 +823,124 @@ export function createRepackTool(d) {
     if (f.size > 40 * 1024 * 1024) {
       status('AVISO: archivo grande; en móvil puede fallar por memoria');
     }
-    let cbz = null;
-    let outName = item.outName || toCbzName(cleanFileBase(f.name) + '.cbr');
+
+    const outputs = (Array.isArray(item.outputs) && item.outputs.length)
+      ? item.outputs
+      : [{
+          outName: item.outName,
+          asWebp: !!(item.asWebp) || !!asWebp,
+          webpOpts: item.webpOpts || webpOpts || {},
+          caption: item.caption,
+        }];
+
+    const cacheKey = dlCacheKey(ch, f);
+    const uploaded = [];
+    let outName = outputs[0]?.outName || toCbzName(cleanFileBase(f.name) + '.cbr');
+
     try {
-      const useWebp = !!(item && item.asWebp) || !!asWebp;
-      const wOpts = (item && item.webpOpts) || webpOpts || {};
-      prog(10);
-      const statusWithProg = (t) => {
-        status(t);
-        // Estimar avance por fase a partir del texto
-        const s = String(t || '');
-        if (/Descargando/i.test(s)) {
-          const m = s.match(/(\d{1,3})\s*%/);
-          prog(m ? 10 + Math.round((Number(m[1]) || 0) * 0.35) : 20);
-        } else if (/Extrayendo|Empaquetando|WebP|Reempaquetando/i.test(s)) {
-          prog(50);
-        } else if (/Subiendo/i.test(s)) {
-          const m = s.match(/(\d{1,3})\s*%/);
-          prog(m ? 70 + Math.round((Number(m[1]) || 0) * 0.25) : 75);
-        } else if (/Preparando subida/i.test(s)) {
-          prog(68);
+      const nOut = outputs.length;
+      for (let oi = 0; oi < nOut; oi++) {
+        if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
+        const out = outputs[oi] || {};
+        const useWebp = !!out.asWebp;
+        const wOpts = out.webpOpts || {};
+        let cbz = null;
+        outName = out.outName || item.outName || toCbzName(cleanFileBase(f.name) + '.cbr');
+
+        const baseProg = (oi / nOut) * 100;
+        const span = 100 / nOut;
+        const statusWithProg = (t) => {
+          status((nOut > 1 ? `(${oi + 1}/${nOut}) ` : '') + t);
+          const s = String(t || '');
+          let local = 40;
+          if (/Descargando|Reutilizando/i.test(s)) {
+            const m = s.match(/(\d{1,3})\s*%/);
+            local = m ? 10 + Math.round((Number(m[1]) || 0) * 0.25) : 20;
+          } else if (/Extrayendo|Empaquetando|WebP|Reempaquetando/i.test(s)) local = 50;
+          else if (/Subiendo/i.test(s)) {
+            const m = s.match(/(\d{1,3})\s*%/);
+            local = m ? 70 + Math.round((Number(m[1]) || 0) * 0.2) : 75;
+          } else if (/Preparando subida/i.test(s)) local = 68;
+          prog(baseProg + (local / 100) * span);
+        };
+
+        cbz = await convertToCbzBlob(ch, f, statusWithProg, {
+          asWebp: useWebp,
+          webpOpts: wOpts,
+          cacheKey,
+        });
+        if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
+
+        if (useWebp && !out.outName) {
+          outName = String(sourceNameOf(f) || 'comic.cbr')
+            .replace(/_/g, ' ').replace(/\s+/g, ' ').trim()
+            .replace(/\.cb[zr]$/i, '.cbz');
+          if (!/\.cbz$/i.test(outName)) outName += '.cbz';
+        } else {
+          outName = String(outName || '').trim().replace(/_/g, ' ').replace(/\s+/g, ' ');
+          if (!/\.cbz$/i.test(outName)) outName = outName.replace(/\.cb[zr]$/i, '') + '.cbz';
         }
-      };
-      cbz = await convertToCbzBlob(ch, f, statusWithProg, { asWebp: useWebp, webpOpts: wOpts });
-      if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
-      // Si no hay outName explícito y es WebP: conservar nombre del original + [WebP]
-      // (evita "Canal - #01" que crea una serie distinta "Canal -")
-      if (useWebp && !item.outName) {
-        outName = String(sourceNameOf(f) || 'comic.cbr')
-          .replace(/_/g, ' ')
-          .replace(/\s+/g, ' ')
-          .trim()
-          .replace(/\.cb[zr]$/i, '.cbz');
-        if (!/\.cbz$/i.test(outName)) outName += '.cbz';
-      } else {
-        outName = String(outName).trim().replace(/_/g, ' ').replace(/\s+/g, ' ');
-        if (!/\.cbz$/i.test(outName)) outName = outName.replace(/\.cb[zr]$/i, '') + '.cbz';
-      }
-      // Etiquetas de calidad: [2400px] (si se redimensiona) y después [WebP]
-      if (useWebp) outName = withQualityTags(outName, { webp: true, resize: wOpts.resize !== false });
-      status(`Nombre de subida: ${outName}`);
-      prog(65);
-      // Caption del original + Nombre de archivo = nombre final (WebP u otro)
-      let caption = String(item.caption || f.caption || '').trim();
-      if (!caption && typeof getMsg === 'function') {
-        try {
-          const msg = await getMsg(ch, f);
-          caption = String(msg?.message || '').trim();
-        } catch (e) {
-          console.warn('[repack] no se pudo leer caption del original', e);
-        }
-      }
-      if (caption && typeof parseComicCaption === 'function' && typeof buildComicCaption === 'function') {
-        try {
-          const fields = parseComicCaption(caption);
-          fields.fileName = outName;
-          caption = buildComicCaption(fields);
-          if (fields.description && !/Descripción:/i.test(caption)) {
-            caption = caption + '\nDescripción: ' + fields.description;
+        if (useWebp) outName = withQualityTags(outName, { webp: true, resize: !!wOpts.resize });
+        status(`Nombre de subida: ${outName}`);
+
+        let caption = String(out.caption || item.caption || f.caption || '').trim();
+        if (!caption && typeof getMsg === 'function') {
+          try {
+            const msg = await getMsg(ch, f);
+            caption = String(msg?.message || '').trim();
+          } catch (e) {
+            console.warn('[repack] no se pudo leer caption del original', e);
           }
-        } catch (e) {
-          console.warn('[repack] caption rebuild', e);
         }
-      }
-      if (!caption || !String(caption).trim()) {
-        caption = typeof buildComicCaption === 'function'
-          ? buildComicCaption({ fileName: outName })
-          : ('Nombre de archivo: ' + outName);
-      } else if (typeof parseComicCaption === 'function' && typeof buildComicCaption === 'function') {
-        try {
-          const fields = parseComicCaption(caption);
-          if (!fields.fileName) {
+        if (caption && typeof parseComicCaption === 'function' && typeof buildComicCaption === 'function') {
+          try {
+            const fields = parseComicCaption(caption);
             fields.fileName = outName;
             caption = buildComicCaption(fields);
+            if (fields.description && !/Descripción:/i.test(caption)) {
+              caption = caption + '\nDescripción: ' + fields.description;
+            }
+          } catch (e) {
+            console.warn('[repack] caption rebuild', e);
           }
-        } catch (_) {}
-      }
-      // Límite Telegram 1024: la Descripción siempre se sube; si no cabe se recorta por palabras con "..."
-      {
-        const fitted = fitTelegramCaption(caption, 1024);
-        if (fitted.length < String(caption || '').length) {
-          status(`Caption ajustado a ${fitted.length}/1024 caracteres (Descripción recortada con "...")`);
         }
-        caption = fitted;
-      }
-      status(caption ? ('Caption: ' + caption.length + ' caracteres') : 'Sin caption');
-      try {
-        await uploadCbz(ch, outName, cbz, caption, statusWithProg);
-      } catch (e) {
-        const msg = String(e?.message || e || '');
-        if (/Missing MTProto Entity/i.test(msg) || /TL definition for ID 0/i.test(msg)) {
-          console.warn('[repack] aviso GramJS tras subida (se ignora):', msg);
-          status('✓ Subido (aviso interno GramJS ignorado)');
-        } else {
-          throw e;
+        if (!caption || !String(caption).trim()) {
+          caption = typeof buildComicCaption === 'function'
+            ? buildComicCaption({ fileName: outName })
+            : ('Nombre de archivo: ' + outName);
+        } else if (typeof parseComicCaption === 'function' && typeof buildComicCaption === 'function') {
+          try {
+            const fields = parseComicCaption(caption);
+            if (!fields.fileName) {
+              fields.fileName = outName;
+              caption = buildComicCaption(fields);
+            }
+          } catch (_) {}
         }
+        {
+          const fitted = fitTelegramCaption(caption, 1024);
+          if (fitted.length < String(caption || '').length) {
+            status(`Caption ajustado a ${fitted.length}/1024 caracteres (Descripción recortada con "...")`);
+          }
+          caption = fitted;
+        }
+        status(caption ? ('Caption: ' + caption.length + ' caracteres') : 'Sin caption');
+        try {
+          await uploadCbz(ch, outName, cbz, caption, statusWithProg);
+        } catch (e) {
+          const msg = String(e?.message || e || '');
+          if (/Missing MTProto Entity/i.test(msg) || /TL definition for ID 0/i.test(msg)) {
+            console.warn('[repack] aviso GramJS tras subida (se ignora):', msg);
+            status('✓ Subido (aviso interno GramJS ignorado)');
+          } else {
+            throw e;
+          }
+        }
+        cbz = null;
+        uploaded.push(outName);
+        status('Subido a Telegram: ' + outName);
       }
-      cbz = null;
-      status('Subido a Telegram');
+
       prog(95);
       if (deleteOriginal) {
         status('Borrando original…');
@@ -907,7 +950,7 @@ export function createRepackTool(d) {
       try { await fetchFiles(ch); } catch (_) {}
       try {
         if (typeof onUploadDone === 'function') {
-          await onUploadDone(ch, { outName, outNames: [outName] });
+          await onUploadDone(ch, { outName: uploaded[0] || outName, outNames: uploaded.slice() });
         }
       } catch (e) {
         console.warn('[repack] onUploadDone', e);
@@ -920,7 +963,7 @@ export function createRepackTool(d) {
       }
       throw e;
     } finally {
-      cbz = null;
+      clearDlCache(cacheKey);
     }
   }
 
@@ -1005,7 +1048,7 @@ export function createRepackTool(d) {
   }
 
   /** Pantalla para renombrar cada archivo antes de subir */
-  function showNameReview(selected, deleteOriginal, asWebp = false, webpOpts = {}) {
+  function showNameReview(selected, deleteOriginal, asWebp = false, webpOpts = {}, webpExtras = {}) {
     document.querySelector('.info-frame.repack-names')?.remove();
     const frame = el('div', 'info-frame repack-names');
     const box = el('div', 'info-box');
@@ -1087,7 +1130,35 @@ export function createRepackTool(d) {
       const dups = findDuplicates(ready.map((x) => ({ f: x.f, outName: x.outName })));
       if (dups.length && !(await askConfirm(dupMessage(dups)))) return;
       frame.remove();
-      runQueue(ready, deleteOriginal, asWebp, webpOpts);
+      const extras = webpExtras || {};
+      const jobs = (ready || []).map((it) => {
+        const outputs = [];
+        const baseName = it.outName || toCbzName(cleanFileBase(it.f?.name || 'comic') + '.cbr');
+        outputs.push({
+          outName: baseName,
+          asWebp: !!asWebp,
+          webpOpts: asWebp ? (webpOpts || {}) : {},
+          caption: it.caption,
+        });
+        if (extras.mid) {
+          outputs.push({
+            outName: withQualityTags(sourceNameOf(it.f) || baseName, { webp: true, resize: false }),
+            asWebp: true,
+            webpOpts: { quality: extras.quality || 0.40, resize: false, maxEdge: 2400 },
+            caption: it.caption || it.f?.caption || '',
+          });
+        }
+        if (extras.low) {
+          outputs.push({
+            outName: withQualityTags(sourceNameOf(it.f) || baseName, { webp: true, resize: true }),
+            asWebp: true,
+            webpOpts: { quality: extras.quality || 0.40, resize: true, maxEdge: 2400 },
+            caption: it.caption || it.f?.caption || '',
+          });
+        }
+        return { ...it, outputs };
+      });
+      runQueue(jobs, deleteOriginal, false, {});
     };
     actions.append(cancel, goBtn);
     body.append(actions);
@@ -1120,27 +1191,36 @@ export function createRepackTool(d) {
     delLabel.append(delCb, document.createTextNode(' Borrar el original tras subir OK'));
     body.append(delLabel);
 
-    const webpLabel = el('label', 'repack-check');
-    const webpCb = el('input');
-    webpCb.type = 'checkbox';
-    webpLabel.append(webpCb, document.createTextNode(' Convertir páginas a WebP (añade [WebP] al nombre)'));
-    body.append(webpLabel);
+    const midWebpLab = el('label', 'repack-check');
+    const midWebpCb = el('input');
+    midWebpCb.type = 'checkbox';
+    midWebpLab.append(midWebpCb, document.createTextNode(
+      ' Crear copia con las páginas en formato WebP y añade [WebP] al nombre'
+    ));
+    body.append(midWebpLab);
+
+    const lowWebpLab = el('label', 'repack-check');
+    const lowWebpCb = el('input');
+    lowWebpCb.type = 'checkbox';
+    lowWebpLab.append(lowWebpCb, document.createTextNode(
+      ' Crear copia con las páginas en formato WebP y resolución máxima 2400px y añade [2400px][WebP] al nombre'
+    ));
+    body.append(lowWebpLab);
 
     const webpOptsBox = el('div', 'webp-opts');
     webpOptsBox.hidden = true;
-    const qualityLab = el('label', 'sync-label', 'Calidad');
+    const qualityLab = el('label', 'sync-label', 'Calidad WebP (0–1)');
     const qualityInp = el('input', 'edit-input');
     qualityInp.type = 'text';
     qualityInp.value = '0.40';
     qualityInp.placeholder = '0.40';
-    const resizeRow = el('label', 'repack-check');
-    const resizeCb = el('input');
-    resizeCb.type = 'checkbox';
-    resizeCb.checked = true;
-    resizeRow.append(resizeCb, document.createTextNode(' Redimensionar (lado mayor máx. 2400 px)'));
-    webpOptsBox.append(qualityLab, qualityInp, resizeRow);
+    webpOptsBox.append(qualityLab, qualityInp);
     body.append(webpOptsBox);
-    webpCb.onchange = () => { webpOptsBox.hidden = !webpCb.checked; };
+    const syncWebpOptsVis = () => {
+      webpOptsBox.hidden = !(midWebpCb.checked || lowWebpCb.checked);
+    };
+    midWebpCb.onchange = syncWebpOptsVis;
+    lowWebpCb.onchange = syncWebpOptsVis;
 
     // Filtros editorial / canal
     const edSel = el('select', 'edit-input upload-select');
@@ -1326,13 +1406,15 @@ export function createRepackTool(d) {
         return;
       }
       if (selected.length > 1 && !confirm(`Vas a procesar ${selected.length} archivos. ¿Seguro? Mejor de uno en uno en móvil.`)) return;
-      const webpOpts = {
-        quality: parseFloat(String(qualityInp.value).replace(',', '.')) || 0.40,
-        resize: !!resizeCb.checked,
-        maxEdge: 2400,
+      let quality = parseFloat(String(qualityInp.value).replace(',', '.'));
+      if (!(quality > 0 && quality <= 1)) quality = 0.40;
+      const webpExtras = {
+        mid: !!midWebpCb.checked,
+        low: !!lowWebpCb.checked,
+        quality,
       };
       frame.remove();
-      showNameReview(selected, delCb.checked, !!webpCb.checked, webpOpts);
+      showNameReview(selected, delCb.checked, false, {}, webpExtras);
     };
     collectCandidates().then((list) => {
       allCandidates = list;
@@ -1411,7 +1493,7 @@ export function createRepackTool(d) {
     const body = el('div', 'info-body');
 
     body.append(el('p', 'cover-pick-hint',
-      'Se descargará el archivo, se convertirán las páginas a WebP y se subirá una copia al mismo canal. Se conserva la ficha Telegram del original.'
+      'Se descargará el archivo una sola vez y se subirán las copias elegidas al mismo canal. Se conserva la ficha Telegram del original. Si marcas Media y Baja, se generan las dos sin volver a descargar.'
     ));
     const srcRow = el('div', 'info-row');
     srcRow.append(el('span', 'info-label', 'Original'), el('span', 'info-value', f.name || ''));
@@ -1420,98 +1502,64 @@ export function createRepackTool(d) {
     chRow.append(el('span', 'info-label', 'Canal'), el('span', 'info-value', ch.name || ''));
     body.append(chRow);
 
-    const webpLock = el('label', 'repack-check');
-    const webpCb = el('input');
-    webpCb.type = 'checkbox';
-    webpCb.checked = true;
-    webpCb.disabled = true;
-    webpLock.append(webpCb, document.createTextNode(' Convertir páginas a WebP (añade [WebP] al nombre)'));
-    body.append(webpLock);
+    const mkRow = (title, text, checked) => {
+      const row = el('label', 'repack-check');
+      const cb = el('input');
+      cb.type = 'checkbox';
+      cb.checked = checked;
+      row.append(cb, document.createTextNode(' '), el('b', '', title), document.createTextNode(' — ' + text));
+      body.append(row);
+      return cb;
+    };
+    const midCb = mkRow('Media', 'copia WebP (añade [WebP] al nombre)', true);
+    const lowCb = mkRow('Baja', 'copia WebP redimensionada a 2400px (añade [2400px][WebP])', false);
 
-    const qualityLab = el('label', 'sync-label', 'Calidad WebP (0–1)');
+    body.append(el('label', 'sync-label', 'Calidad WebP (0–1)'));
     const qualityInp = el('input', 'edit-input');
     qualityInp.type = 'text';
     qualityInp.value = '0.40';
     qualityInp.placeholder = '0.40';
-    body.append(qualityLab, qualityInp);
-
-    const resizeRow = el('label', 'repack-check');
-    const resizeCb = el('input');
-    resizeCb.type = 'checkbox';
-    resizeCb.checked = true;
-    resizeRow.append(resizeCb, document.createTextNode(' Redimensionar (lado mayor máx. 2400 px)'));
-    body.append(resizeRow);
-
-    // Nombre por defecto = original + [WebP] (misma serie al agrupar)
-    const originalName = () => {
-      let n = String(sourceNameOf(f) || 'comic.cbz')
-        .replace(/_/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .replace(/\.cb[zr]$/i, '.cbz');
-      if (!/\.cbz$/i.test(n)) n += '.cbz';
-      return withQualityTags(n, { webp: true, resize: !!resizeCb.checked });
-    };
-
-    const includeChChk = el('input');
-    includeChChk.type = 'checkbox';
-    includeChChk.checked = false; // por defecto NO reescribir con "Canal - …"
-    const includeChRow = el('label', 'repack-check');
-    includeChRow.append(includeChChk, document.createTextNode(' Reconstruir nombre (serie #n) desde datos del cómic'));
-    body.append(includeChRow);
-
-    body.append(el('label', 'sync-label', 'Nombre al subir'));
-    const nameInp = el('input', 'edit-input');
-    nameInp.type = 'text';
-    nameInp.autocomplete = 'off';
-    nameInp.value = originalName();
-    body.append(nameInp);
-    // Marcar/desmarcar "Redimensionar" actualiza [2400px] en la propuesta (respeta lo que hayas editado)
-    resizeCb.onchange = () => {
-      nameInp.value = withQualityTags(nameInp.value || originalName(), { webp: true, resize: !!resizeCb.checked });
-    };
-
-    includeChChk.onchange = () => {
-      if (includeChChk.checked) {
-        let n = suggestUploadName(ch, f, false); // sin forzar "Canal -"
-        if (!/\.cbz$/i.test(n)) n = n.replace(/\.cb[zr]$/i, '') + '.cbz';
-        nameInp.value = withQualityTags(n, { webp: true, resize: !!resizeCb.checked });
-      } else {
-        nameInp.value = originalName();
-      }
-    };
-
-    const delRow = el('label', 'repack-check');
-    const delCb = el('input');
-    delCb.type = 'checkbox';
-    delCb.checked = false;
-    delRow.append(delCb, document.createTextNode(' Borrar el original tras subir OK'));
-    body.append(delRow);
+    body.append(qualityInp);
 
     const actions = el('div', 'edit-actions');
     const cancel = el('button', 'btn', 'Cancelar');
     cancel.onclick = () => frame.remove();
-    const goBtn = el('button', 'btn edit-save', 'Subir versión WebP');
+    const goBtn = el('button', 'btn edit-save', 'Subir versiones WebP');
     goBtn.onclick = async () => {
-      let name = String(nameInp.value || '').trim().replace(/_/g, ' ').replace(/\s+/g, ' ');
-      if (!name) name = originalName();
-      if (!/\.cbz$/i.test(name)) name = name.replace(/\.cb[zr]$/i, '') + '.cbz';
-      if (!/\.cbz$/i.test(name)) name += '.cbz';
-      name = withQualityTags(name, { webp: true, resize: !!resizeCb.checked });
-      const dups = findDuplicates([{ f, outName: name }]);
-      if (dups.length && !(await askConfirm(dupMessage(dups)))) return;
-      const webpOpts = {
-        quality: parseFloat(String(qualityInp.value).replace(',', '.')) || 0.40,
-        resize: !!resizeCb.checked,
-        maxEdge: 2400,
-      };
+      const targets = [];
+      if (midCb.checked) targets.push({ key: 'mid', resize: false, label: 'Media' });
+      if (lowCb.checked) targets.push({ key: 'low', resize: true, label: 'Baja' });
+      if (!targets.length) { await askAlert('Selecciona al menos una calidad (Media o Baja).'); return; }
+      let quality = parseFloat(String(qualityInp.value).replace(',', '.'));
+      if (!(quality > 0 && quality <= 1)) quality = 0.40;
+
+      const outputs = [];
+      const skipped = [];
+      let filesList = [];
+      try { filesList = (await kv.get('f:' + ch.id)) || []; } catch (_) {}
+      const flat = flattenVersions(filesList.length ? filesList : [f]);
+      for (const t of targets) {
+        const outName = withQualityTags(sourceNameOf(f), { webp: true, resize: t.resize });
+        if (existingCopy(flat, outName)) {
+          skipped.push('· ' + outName + '  (' + t.label + ')');
+          continue;
+        }
+        outputs.push({
+          outName,
+          asWebp: true,
+          webpOpts: { quality, resize: t.resize, maxEdge: 2400 },
+          caption: f.caption || '',
+        });
+      }
       frame.remove();
-      runQueue(
-        [{ ch, f, outName: name, asWebp: true, webpOpts, caption: f.caption || '' }],
-        !!delCb.checked,
-        true,
-        webpOpts
-      );
+      if (skipped.length) {
+        await askAlert(
+          'Ya existen estas versiones y no se van a hacer:\n\n' + skipped.join('\n')
+          + (outputs.length ? '\n\nSe crearán las ' + outputs.length + ' restantes.' : '\n\nNo queda nada por crear.')
+        );
+      }
+      if (!outputs.length) return;
+      await runQueue([{ ch, f, outputs, caption: f.caption || '' }], false, true, {});
     };
     actions.append(cancel, goBtn);
     body.append(actions);
@@ -1520,10 +1568,6 @@ export function createRepackTool(d) {
     document.body.append(frame);
   }
 
-  /**
-   * Añadir versión WebP a TODA una serie: Media ([WebP]) y/o Baja ([2400px][WebP]).
-   * Una tarea por cómic y calidad en la Cola de tareas; las versiones que ya existen se omiten con aviso.
-   */
   function offerWebpVersionSeries(ch, seriesLabel, files) {
     const list = (files || []).filter(Boolean);
     if (!ch || !list.length) return;
@@ -1597,11 +1641,21 @@ export function createRepackTool(d) {
           + (todo ? `\n\nSe crearán las ${todo} restantes.` : '\n\nNo queda nada por crear.')
         );
       }
+      const byFile = new Map();
       for (const t of targets) {
-        const items = plans[t.key];
-        if (!items.length) continue;
-        await runQueue(items, false, true, items[0].webpOpts);
+        for (const it of (plans[t.key] || [])) {
+          const k = String(it.ch.id) + ':' + String(it.f.id);
+          if (!byFile.has(k)) byFile.set(k, { ch: it.ch, f: it.f, caption: it.caption || '', outputs: [] });
+          byFile.get(k).outputs.push({
+            outName: it.outName,
+            asWebp: true,
+            webpOpts: it.webpOpts,
+            caption: it.caption || '',
+          });
+        }
       }
+      const jobs = [...byFile.values()];
+      if (jobs.length) await runQueue(jobs, false, true, {});
     };
     actions.append(cancel, goBtn);
     body.append(actions);
@@ -1694,11 +1748,21 @@ export function createRepackTool(d) {
           + (todo ? `\n\nSe crearán las ${todo} restantes.` : '\n\nNo queda nada por crear.')
         );
       }
+      const byFile = new Map();
       for (const t of targets) {
-        const items = plans[t.key];
-        if (!items.length) continue;
-        await runQueue(items, false, true, items[0].webpOpts);
+        for (const it of (plans[t.key] || [])) {
+          const k = String(it.ch.id) + ':' + String(it.f.id);
+          if (!byFile.has(k)) byFile.set(k, { ch: it.ch, f: it.f, caption: it.caption || '', outputs: [] });
+          byFile.get(k).outputs.push({
+            outName: it.outName,
+            asWebp: true,
+            webpOpts: it.webpOpts,
+            caption: it.caption || '',
+          });
+        }
       }
+      const jobs = [...byFile.values()];
+      if (jobs.length) await runQueue(jobs, false, true, {});
     };
     actions.append(cancel, goBtn);
     body.append(actions);
@@ -1718,4 +1782,3 @@ export function createRepackTool(d) {
     suggestUploadName,
   };
 }
-
