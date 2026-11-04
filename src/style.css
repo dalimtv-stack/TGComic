@@ -1303,6 +1303,16 @@ html:has(.sf-root){
   box-shadow:inset 0 0 0 1px #ffffff14;
 }
 
+
+.sf-filters-collapsed{
+  display:block;width:calc(100% - .9rem);margin:.15rem .45rem .35rem;
+  padding:.55rem .75rem;border:none;border-radius:12px;
+  background:var(--card);color:var(--muted,#9aa3b2);
+  font:inherit;font-size:.92rem;font-weight:650;text-align:left;
+  cursor:pointer;-webkit-tap-highlight-color:transparent;
+}
+.sf-filters-collapsed:active{opacity:.85}
+.sf-summary-count{user-select:none}
 .sf-summary{
   flex:none;padding:.4rem .75rem .55rem;
   display:flex;flex-direction:column;gap:.4rem;
