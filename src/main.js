@@ -2398,6 +2398,7 @@ const proTools = createProTools({
   openPages,
   invalidateComicLocal,
   restoreCustomCovers: (...a) => infoApi?.restoreCustomCovers?.(...a),
+  reloadStructureCovers: (...a) => infoApi?.reloadStructureCovers?.(...a),
 });
 
 // ---------- Inicio ----------
