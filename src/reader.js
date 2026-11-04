@@ -1,4 +1,5 @@
 import { aiLabel, sourceNameOf } from './quality.js';
+import { detectPanelsFumiko, detectPanelsKumikoGrok } from './panelDetectKumiko.js';
 /**
  * Lector de cómics: modo página / vertical / horizontal, mosaico, gestos.
  * @param {object} state - referencias mutables del main (cleanup, reading, pump, stack, …)
@@ -121,6 +122,8 @@ export function createReader(state, d) {
     { id: '1990-2000', label: '1990-2000' },
     { id: '2000-', label: '2000-' },
     { id: 'Grok', label: 'Grok' },
+    { id: 'Fumiko', label: 'Fumiko' },
+    { id: 'Kumiko-Grok', label: 'Kumiko-Grok' },
   ];
   const PANEL_ERA_DEFAULTS = {
     '1900-1950': {
@@ -159,6 +162,20 @@ export function createReader(state, d) {
       panelGutterRow: 18, panelGutterCol: 22, panelBandMin: 4, panelMinArea: 4,
       panelDetectW: 360, panelMerge: 0, panelMax: 0,
       panelPaperLum: 175, panelPaperFrac: 40, panelBorderLum: 80,
+    },
+    // Fumiko: pipeline estilo Kumiko (contornos / CC sobre gradiente)
+    'Fumiko': {
+      panelShadow: 55, panelMargin: 8, panelCrop: 4,
+      panelGutterRow: 15, panelGutterCol: 15, panelBandMin: 4, panelMinArea: 3,
+      panelDetectW: 640, panelMerge: 0, panelMax: 0,
+      panelPaperLum: 175, panelPaperFrac: 40, panelBorderLum: 100,
+    },
+    // Kumiko-Grok: Kumiko + flood de papel (híbrido)
+    'Kumiko-Grok': {
+      panelShadow: 55, panelMargin: 8, panelCrop: 4,
+      panelGutterRow: 15, panelGutterCol: 15, panelBandMin: 4, panelMinArea: 3,
+      panelDetectW: 560, panelMerge: 0, panelMax: 0,
+      panelPaperLum: 170, panelPaperFrac: 38, panelBorderLum: 90,
     },
   };
   const PANEL_CFG_KEYS = [
@@ -235,6 +252,28 @@ export function createReader(state, d) {
         if (!Number.isFinite(n)) n = def;
         return Math.max(min, Math.min(max, n));
       };
+
+      // Motores estilo Kumiko (módulo aparte)
+      const eraNow = String(pref('panelEra', '1980-1990') || '1980-1990');
+      if (eraNow === 'Fumiko' || eraNow === 'Kumiko-Grok') {
+        const opts = {
+          detectW: numP('panelDetectW', eraNow === 'Fumiko' ? 640 : 560, 160, 960),
+          edgeThresh: numP('panelBorderLum', eraNow === 'Fumiko' ? 100 : 90, 20, 200),
+          minAreaPct: numP('panelMinArea', 3, 1, 30),
+          bandMinPct: numP('panelBandMin', 4, 1, 20),
+          maxPanels: numP('panelMax', 0, 0, 60),
+          paperLum: numP('panelPaperLum', 175, 120, 250),
+          paperFrac: numP('panelPaperFrac', 40, 10, 80),
+        };
+        try {
+          const panels = eraNow === 'Fumiko'
+            ? detectPanelsFumiko(im, opts)
+            : detectPanelsKumikoGrok(im, opts);
+          return Array.isArray(panels) ? panels : [];
+        } catch (e) {
+          console.warn('[panel] Fumiko/Kumiko-Grok falló, legacy:', e);
+        }
+      }
 
       const maxW = numP('panelDetectW', 480, 160, 960);
       const borderLum = numP('panelBorderLum', 80, 20, 140);
