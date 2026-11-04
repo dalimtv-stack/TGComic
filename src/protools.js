@@ -26,6 +26,7 @@ export function createProTools(d) {
     setPagesTotal,
     getMsg,
     openPages,
+    reloadStructureCovers,
   } = d;
 
   // Preferencias solo locales (mismo prefijo que main)
@@ -327,6 +328,23 @@ export function createProTools(d) {
     seriesSel.onchange = () => { updateCount(); };
     refreshChannels();
 
+    const structLab = el('label', 'cfg-auto');
+    structLab.style.display = 'flex';
+    structLab.style.alignItems = 'flex-start';
+    structLab.style.gap = '0.45rem';
+    structLab.style.margin = '0.75rem 0 0.5rem';
+    const structChk = el('input');
+    structChk.type = 'checkbox';
+    structChk.checked = false;
+    structLab.append(
+      structChk,
+      document.createTextNode('Recargar portadas de Canales, Series y Editoriales')
+    );
+    body.append(structLab);
+    body.append(el('p', 'cfg-hint',
+      'Si está marcado, tras los cómics se regeneran también portadas de canal, serie y editorial del alcance. Las personalizadas se vuelven a aplicar; la resolución sigue los checks de «Generar portadas con esta resolución» (Cómics no aplica aquí: Series / Canales; editoriales usan la de Canales).'
+    ));
+
     const actions = el('div', 'edit-actions');
     const cancel = el('button', 'btn', 'Cancelar');
     cancel.onclick = () => frame.remove();
@@ -396,10 +414,30 @@ export function createProTools(d) {
         return;
       }
 
+      let structMsg = '';
+      if (structChk.checked && typeof reloadStructureCovers === 'function') {
+        try {
+          const titleEl = prog.frame.querySelector('.info-head span');
+          if (titleEl) titleEl.textContent = 'Canales / Series / Editoriales';
+          prog.setStatus('Regenerando portadas de estructura…');
+          prog.setProgress(0, 1);
+          const st = await reloadStructureCovers(filters, (done, total, label) => {
+            prog.setProgress(done, total);
+            prog.setStatus(label ? String(label).slice(0, 60) : `Estructura… ${done}/${total}`);
+          });
+          structMsg = `\nCanales/Series/Editoriales: ${st?.ok || 0} ok`
+            + (st?.fail ? `, ${st.fail} fallos` : '');
+        } catch (e) {
+          structMsg = '\nEstructura: error ' + (e?.message || e);
+        }
+      }
+
       prog.close();
       try { onCoversChanged?.(); } catch (_) {}
       await appAlert(
-        `Listo.\nBorradas: ${deleted}\nRegeneradas: ${regenerated}` + (targets.keep?.length ? `\nPersonalizadas mantenidas: ${targets.keep.length}` : ''),
+        `Listo.\nBorradas: ${deleted}\nRegeneradas: ${regenerated}`
+          + (targets.keep?.length ? `\nPersonalizadas mantenidas: ${targets.keep.length}` : '')
+          + structMsg,
         'Portadas'
       );
     };
@@ -608,14 +646,33 @@ export function createProTools(d) {
 
   async function loadMissingCovers() {
     try { closeAppMenu?.(); } catch (_) {}
-    const all = await collectAllComics();
+    // Feedback inmediato: el escaneo de IndexedDB puede tardar y parecía que no hacía nada
+    const scanProg = showProgressFrame('Cargar portadas faltantes');
+    scanProg.setStatus('Escaneando cómics en caché…');
+    scanProg.setProgress(0, 1);
+    let all = [];
+    try {
+      all = await collectAllComics();
+    } catch (e) {
+      try { scanProg.close(); } catch (_) {}
+      await appAlert('Error al listar cómics: ' + (e?.message || e));
+      return;
+    }
     const missing = [];
-    for (const it of all) {
+    const nAll = all.length || 1;
+    for (let i = 0; i < all.length; i++) {
+      const it = all[i];
       const key = `c:${it.ch.id}:${it.f.id}`;
       let b = null;
       try { b = await kv.get(key); } catch (_) {}
       if (!b || b === 'none') missing.push(it);
+      if (i % 25 === 0 || i === all.length - 1) {
+        scanProg.setStatus(`Escaneando… ${i + 1}/${all.length}`);
+        scanProg.setProgress(i + 1, nAll);
+        await new Promise((r) => setTimeout(r, 0));
+      }
     }
+    try { scanProg.close(); } catch (_) {}
     const ok = await appConfirm(
       (missing.length
         ? `Hay ${missing.length} cómic(s) sin portada en caché.`
