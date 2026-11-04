@@ -609,7 +609,7 @@ const coverApi = createCovers(
     getCoverFit,
   }
 );
-const { getCover, saveCoverBlob, optimizeImageBlob, coverGenMaxEdge, comicCover, pump, io } = coverApi;
+const { getCover, generateCover, saveCoverBlob, optimizeImageBlob, coverGenMaxEdge, comicCover, pump, io } = coverApi;
 
 // ---------- Navegación y vistas ----------
 const app = $('#app'), titleEl = $('#title'), backBtn = $('#back'), actions = $('#actions');
@@ -980,6 +980,8 @@ function showViewerConfig() {
     { id: '1990-2000', label: '1990-2000' },
     { id: '2000-', label: '2000-' },
     { id: 'Grok', label: 'Grok' },
+    { id: 'Fumiko', label: 'Fumiko' },
+    { id: 'Kumiko-Grok', label: 'Kumiko-Grok' },
   ];
   // Presets orientados a cómic occidental (marcos + medianiles).
   // Globals de framing: shadow 55, margin 8, crop 4, merge siempre 0.
@@ -1026,6 +1028,20 @@ function showViewerConfig() {
       panelGutterRow: 18, panelGutterCol: 22, panelBandMin: 4, panelMinArea: 4,
       panelDetectW: 360, panelMerge: 0, panelMax: 0,
       panelPaperLum: 175, panelPaperFrac: 40, panelBorderLum: 80,
+    },
+    // Fumiko: pipeline estilo Kumiko (contornos / CC sobre gradiente)
+    'Fumiko': {
+      panelShadow: 55, panelMargin: 8, panelCrop: 4,
+      panelGutterRow: 15, panelGutterCol: 15, panelBandMin: 4, panelMinArea: 3,
+      panelDetectW: 640, panelMerge: 0, panelMax: 0,
+      panelPaperLum: 175, panelPaperFrac: 40, panelBorderLum: 100,
+    },
+    // Kumiko-Grok: Kumiko + flood de papel (híbrido)
+    'Kumiko-Grok': {
+      panelShadow: 55, panelMargin: 8, panelCrop: 4,
+      panelGutterRow: 15, panelGutterCol: 15, panelBandMin: 4, panelMinArea: 3,
+      panelDetectW: 560, panelMerge: 0, panelMax: 0,
+      panelPaperLum: 170, panelPaperFrac: 38, panelBorderLum: 90,
     },
   };
   const PANEL_CFG_KEYS = [
@@ -2386,6 +2402,8 @@ try {
 
 
 const proTools = createProTools({
+  generateCover,
+  pump,
   el,
   kv,
   pref,
