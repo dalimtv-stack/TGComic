@@ -89,6 +89,7 @@ export function createSearchFilters(d) {
 
   function fileFormat(f) {
     const n = String(sourceNameOf?.(f) || f?.name || '').toLowerCase();
+    if (/\.pdf$/i.test(n)) return 'pdf';
     if (/\.cbz$/i.test(n) || /\.zip$/i.test(n)) return 'cbz';
     if (/\.cbr$/i.test(n) || /\.rar$/i.test(n)) return 'cbr';
     if (/\.7z$/i.test(n) || /\.cb7$/i.test(n)) return '7z';
@@ -96,12 +97,11 @@ export function createSearchFilters(d) {
   }
   function fileFormatLabel(f) {
     const k = fileFormat(f);
+    if (k === 'pdf') return 'PDF';
     if (k === 'cbz') return 'CBZ';
     if (k === 'cbr') return 'CBR';
     if (k === '7z') return '7Z';
-    const n = String(sourceNameOf?.(f) || f?.name || '');
-    const m = n.match(/\.([a-z0-9]+)$/i);
-    return m ? m[1].toUpperCase() : '';
+    return '';
   }
 
   function readStatus(ch, f) {
@@ -962,7 +962,7 @@ export function createSearchFilters(d) {
         ['', 'Cualquiera'], ['unread', 'No leídos'], ['progress', 'En curso'], ['read', 'Leídos'],
       ], (v) => { filterState.read = v; paint(); }));
       grid.append(mkFilterRow('Formato', filterState.format, [
-        ['', 'Cualquiera'], ['cbz', 'CBZ / ZIP'], ['cbr', 'CBR / RAR'], ['7z', '7Z'],
+        ['', 'Cualquiera'], ['cbz', 'CBZ / ZIP'], ['cbr', 'CBR / RAR'], ['pdf', 'PDF'], ['7z', '7Z'],
       ], (v) => { filterState.format = v; paint(); }));
       grid.append(mkFilterRow('Fichas', filterState.ficha, [
         ['', 'Cualquiera'], ['complete', 'Completa'], ['incomplete', 'Incompleta'],
