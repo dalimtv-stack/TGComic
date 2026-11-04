@@ -790,7 +790,6 @@ export function createSearchFilters(d) {
       const fill = () => {
         if (body.dataset.filled) return;
         body.dataset.filled = '1';
-        const nat = natural || ((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }));
         const seriesList = sortGroupList(
           [...seriesMap.entries()].map(([label, its]) => ({
             seriesLabel: label,
