@@ -1143,6 +1143,20 @@ textarea.meta-desc-lg.edit-input{
 /* Con zoom no centrar verticalmente el contenido fuera de vista */
 #rd.page.fit-width.zoom .page-host{align-items:flex-start!important}
 
+/* Zoom: el scroll y el anclaje van en .page-host; no centrar (corta el borde superior) */
+#rd.page.zoom .page-host{
+  align-items:flex-start!important;
+  justify-content:flex-start!important;
+  display:flex;
+  flex-direction:column;
+}
+#rd.page.zoom img{
+  margin:0!important;
+  object-position:left top!important;
+  align-self:flex-start;
+}
+
+
 /* ---- Menú principal ☰: por encima de la cola de tareas (panel z 80, chip z 81) ---- */
 .app-menu{z-index:95!important}
 
@@ -1441,8 +1455,9 @@ html:has(.sf-root){
 
 /* Hueco bajo Autores en home: el summary no queda cortado al final del scroll */
 .home-bottom-spacer{
-  height:calc(1.5rem + env(safe-area-inset-bottom, 0px));
-  min-height:28px;
+  /* Hueco bajo Autores (colapsado) para poder hacer scroll y ver el summary en móvil */
+  height:calc(42vh + env(safe-area-inset-bottom, 0px));
+  min-height:140px;
   flex:none;
   pointer-events:none;
   visibility:hidden;
