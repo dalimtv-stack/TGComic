@@ -48,11 +48,12 @@ export function createCovers(state, d) {
     cq.push(() => fn().then(res, () => res(null)));
     pump();
   });
-  function pump() {
-    if (state.reading) return;
+  /** @param {{ force?: boolean }} [opts] force=true: procesa aunque state.reading (batch de portadas) */
+  function pump(opts) {
+    if (state.reading && !opts?.force) return;
     while (crun < 2 && cq.length) {
       crun++;
-      cq.shift()().finally(() => { crun--; pump(); });
+      cq.shift()().finally(() => { crun--; pump(opts); });
     }
   }
 
@@ -403,6 +404,20 @@ export function createCovers(state, d) {
     }
   }
 
+  /**
+   * Genera portada sin la cola de UI (para «Cargar portadas faltantes»).
+   * Evita quedarse bloqueado detrás de IntersectionObserver / state.reading.
+   */
+  async function generateCover(ch, f) {
+    const key = `c:${ch.id}:${f.id}`;
+    try {
+      const b = await makeCover(ch, f, key);
+      return b && b !== 'none' ? b : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   const io = new IntersectionObserver((es) => es.forEach((x) => {
     if (x.isIntersecting) { io.unobserve(x.target); x.target._load?.(); }
   }), { rootMargin: '400px' });
@@ -468,6 +483,7 @@ export function createCovers(state, d) {
 
   return {
     getCover,
+    generateCover,
     saveCoverBlob,
     isCustomCover,
     markCustomCover,
