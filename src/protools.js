@@ -213,6 +213,8 @@ export function createProTools(d) {
         paintTitleBg();
       },
       close() {
+        state.closed = true;
+        try { topEl?.removeEventListener('click', onTopClick, true); } catch (_) {}
         try { frame.remove(); } catch (_) {}
         if (state.background) {
           try {
@@ -231,14 +233,41 @@ export function createProTools(d) {
       },
     };
 
+    const topEl = document.querySelector('#top');
+    /** Clic en la barra superior (no en botones) → volver a primer plano */
+    const onTopClick = (ev) => {
+      if (!state.background || state.cancelled || state.closed) return;
+      if (ev.target.closest('button, a, input, select, textarea, .btn, .app-menu-item, .menu-btn, .search-filters-btn')) return;
+      state.background = false;
+      try {
+        if (!frame.isConnected) document.body.append(frame);
+        frame.style.display = '';
+      } catch (_) {}
+      // Título de la app otra vez normal; el detalle sigue en el frame
+      try {
+        const te = appTitleEl();
+        if (te && state.prevTitle) te.textContent = state.prevTitle;
+      } catch (_) {}
+      try { ev.preventDefault(); ev.stopPropagation(); } catch (_) {}
+    };
+    try { topEl?.addEventListener('click', onTopClick, true); } catch (_) {}
+
     btnCancel.onclick = () => {
       state.cancelled = true;
       try { status.textContent = 'Cancelando…'; } catch (_) {}
       try { btnCancel.disabled = true; btnBg.disabled = true; } catch (_) {}
+      // Si estaba en segundo plano, mostrar de nuevo el frame un momento con "Cancelando…"
+      if (state.background) {
+        state.background = false;
+        try {
+          if (!frame.isConnected) document.body.append(frame);
+        } catch (_) {}
+      }
     };
     btnBg.onclick = () => {
       state.background = true;
-      try { frame.style.display = 'none'; } catch (_) {}
+      // Quitar del DOM: body:has(.info-frame) bloquea clics en #app
+      try { frame.remove(); } catch (_) {}
       paintTitleBg();
     };
 
