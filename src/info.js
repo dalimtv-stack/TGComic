@@ -275,120 +275,7 @@ export function createInfoEdit(d) {
   }
   /** Tras borrar la caché: vuelve a descargar todas las portadas personalizadas de canales y series. */
   
-  /**
-   * Regenera portadas de canales, series y/o editoriales del alcance dado.
-   * Respeta orígenes personalizados (coverSrc) y la resolución coverGenAtRes* vía set*CoverBlob.
-   */
-  async function reloadStructureCovers(filters = {}, onProgress) {
-    const editorial = filters.editorial || '';
-    const channelId = filters.channelId || '';
-    const seriesLabel = filters.seriesLabel || '';
-    const lib = getLIB();
-    let channels = lib.slice();
-    if (editorial) channels = channels.filter((c) => String(c.group || '') === editorial);
-    if (channelId) channels = channels.filter((c) => String(c.id) === String(channelId));
-
-    const tasks = [];
-    // Canales
-    for (const ch of channels) tasks.push({ kind: 'channel', ch });
-    // Series (si hay filtro de serie, solo esa; si no, todas las del alcance)
-    for (const ch of channels) {
-      let files = [];
-      try { files = (await kv.get('f:' + ch.id)) || []; } catch (_) { files = []; }
-      if (!Array.isArray(files) || !files.length) continue;
-      let groups = [];
-      try { groups = groupSeries(files, ch.name, seriesOverrideFor?.(ch)) || []; } catch (_) { groups = []; }
-      for (const g of groups) {
-        if (seriesLabel && String(g.label) !== seriesLabel) continue;
-        tasks.push({ kind: 'series', ch, label: g.label, files: g.files || files });
-      }
-    }
-    // Editoriales: si el alcance no está limitado a un solo canal/serie, o si hay editorial
-    if (!seriesLabel) {
-      const names = new Set();
-      if (editorial) names.add(editorial);
-      else {
-        for (const ch of channels) {
-          if (ch?.group) names.add(ch.group);
-        }
-      }
-      // Si filtramos un canal concreto, también su editorial
-      if (channelId) {
-        for (const ch of channels) if (ch?.group) names.add(ch.group);
-      }
-      for (const name of names) {
-        if (name) tasks.push({ kind: 'group', name });
-      }
-    }
-
-    const total = Math.max(1, tasks.length);
-    let done = 0, ok = 0, fail = 0;
-
-    for (const t of tasks) {
-      try {
-        if (t.kind === 'channel') {
-          const ch = t.ch;
-          const key = channelCoverKey(ch);
-          onProgress?.(done, total, channelDisplayName(ch) || ch.name || key);
-          try { await kv.del(key); } catch (_) {}
-          try { localStorage.removeItem(coverAppliedLs(key)); } catch (_) {}
-          let files = [];
-          try { files = (await kv.get('f:' + ch.id)) || []; } catch (_) {}
-          const b = await getChannelCoverBlob(ch, files);
-          if (b) ok++; else fail++;
-        } else if (t.kind === 'series') {
-          const { ch, label, files } = t;
-          const key = seriesCoverKey(ch, label);
-          onProgress?.(done, total, (seriesDisplayName(ch, label) || label || key));
-          try { await kv.del(key); } catch (_) {}
-          try { localStorage.removeItem(coverAppliedLs(key)); } catch (_) {}
-          const b = await getSeriesCoverBlob(ch, label, files);
-          if (b) ok++; else fail++;
-        } else if (t.kind === 'group') {
-          const name = t.name;
-          const key = groupCoverKey(name);
-          onProgress?.(done, total, (typeof groupDisplayName === 'function' ? groupDisplayName(name) : name) || name);
-          let prev = null;
-          try { prev = await kv.get(key); } catch (_) {}
-          if (!(prev instanceof Blob && prev.size)) {
-            try { prev = await restoreCoverFromSync(key); } catch (_) {}
-          }
-          try { await kv.del(key); } catch (_) {}
-          if (prev instanceof Blob && prev.size) {
-            // Personalizada: re-encode con resolución actual (check Canales / default)
-            await setGroupCoverBlob(name, prev);
-            ok++;
-          } else {
-            // Por defecto: arte GitHub de editorial
-            let artBlob = null;
-            try {
-              if (typeof getGithubGroupArtBlob === 'function') {
-                artBlob = await getGithubGroupArtBlob(name);
-              } else if (typeof d.getGithubGroupArtBlob === 'function') {
-                artBlob = await d.getGithubGroupArtBlob(name);
-              }
-            } catch (_) {}
-            if (artBlob instanceof Blob && artBlob.size) {
-              await setGroupCoverBlob(name, artBlob);
-              ok++;
-            } else {
-              // Sin blob cacheable: se cargará al vuelo en groupCoverNode
-              ok++;
-            }
-          }
-        }
-      } catch (e) {
-        fail++;
-        console.warn('[reloadStructureCovers]', t, e);
-      }
-      done++;
-      onProgress?.(done, total, '');
-      if (done % 3 === 0) await new Promise((r) => setTimeout(r, 0));
-    }
-    return { ok, fail, total: tasks.length };
-  }
-
-async function restoreCustomCovers(onStep) {
+  async function restoreCustomCovers(onStep) {
     const keys = [];
     try {
       for (let i = 0; i < localStorage.length; i++) {
@@ -3693,6 +3580,120 @@ function showSeriesBulkCaptionEditor(ch, seriesLabel, files, onBack) {
   frame.append(box);
   document.body.append(frame);
 }
+
+
+  /**
+   * Regenera portadas de canales, series y/o editoriales del alcance dado.
+   * Respeta orígenes personalizados (coverSrc) y la resolución coverGenAtRes* vía set*CoverBlob.
+   */
+  async function reloadStructureCovers(filters = {}, onProgress) {
+    const editorial = filters.editorial || '';
+    const channelId = filters.channelId || '';
+    const seriesLabel = filters.seriesLabel || '';
+    const lib = getLIB();
+    let channels = lib.slice();
+    if (editorial) channels = channels.filter((c) => String(c.group || '') === editorial);
+    if (channelId) channels = channels.filter((c) => String(c.id) === String(channelId));
+
+    const tasks = [];
+    // Canales
+    for (const ch of channels) tasks.push({ kind: 'channel', ch });
+    // Series (si hay filtro de serie, solo esa; si no, todas las del alcance)
+    for (const ch of channels) {
+      let files = [];
+      try { files = (await kv.get('f:' + ch.id)) || []; } catch (_) { files = []; }
+      if (!Array.isArray(files) || !files.length) continue;
+      let groups = [];
+      try { groups = groupSeries(files, ch.name, seriesOverrideFor?.(ch)) || []; } catch (_) { groups = []; }
+      for (const g of groups) {
+        if (seriesLabel && String(g.label) !== seriesLabel) continue;
+        tasks.push({ kind: 'series', ch, label: g.label, files: g.files || files });
+      }
+    }
+    // Editoriales: si el alcance no está limitado a un solo canal/serie, o si hay editorial
+    if (!seriesLabel) {
+      const names = new Set();
+      if (editorial) names.add(editorial);
+      else {
+        for (const ch of channels) {
+          if (ch?.group) names.add(ch.group);
+        }
+      }
+      // Si filtramos un canal concreto, también su editorial
+      if (channelId) {
+        for (const ch of channels) if (ch?.group) names.add(ch.group);
+      }
+      for (const name of names) {
+        if (name) tasks.push({ kind: 'group', name });
+      }
+    }
+
+    const total = Math.max(1, tasks.length);
+    let done = 0, ok = 0, fail = 0;
+
+    for (const t of tasks) {
+      try {
+        if (t.kind === 'channel') {
+          const ch = t.ch;
+          const key = channelCoverKey(ch);
+          onProgress?.(done, total, channelDisplayName(ch) || ch.name || key);
+          try { await kv.del(key); } catch (_) {}
+          try { localStorage.removeItem(coverAppliedLs(key)); } catch (_) {}
+          let files = [];
+          try { files = (await kv.get('f:' + ch.id)) || []; } catch (_) {}
+          const b = await getChannelCoverBlob(ch, files);
+          if (b) ok++; else fail++;
+        } else if (t.kind === 'series') {
+          const { ch, label, files } = t;
+          const key = seriesCoverKey(ch, label);
+          onProgress?.(done, total, (seriesDisplayName(ch, label) || label || key));
+          try { await kv.del(key); } catch (_) {}
+          try { localStorage.removeItem(coverAppliedLs(key)); } catch (_) {}
+          const b = await getSeriesCoverBlob(ch, label, files);
+          if (b) ok++; else fail++;
+        } else if (t.kind === 'group') {
+          const name = t.name;
+          const key = groupCoverKey(name);
+          onProgress?.(done, total, (typeof groupDisplayName === 'function' ? groupDisplayName(name) : name) || name);
+          let prev = null;
+          try { prev = await kv.get(key); } catch (_) {}
+          if (!(prev instanceof Blob && prev.size)) {
+            try { prev = await restoreCoverFromSync(key); } catch (_) {}
+          }
+          try { await kv.del(key); } catch (_) {}
+          if (prev instanceof Blob && prev.size) {
+            // Personalizada: re-encode con resolución actual (check Canales / default)
+            await setGroupCoverBlob(name, prev);
+            ok++;
+          } else {
+            // Por defecto: arte GitHub de editorial
+            let artBlob = null;
+            try {
+              if (typeof getGithubGroupArtBlob === 'function') {
+                artBlob = await getGithubGroupArtBlob(name);
+              } else if (typeof d.getGithubGroupArtBlob === 'function') {
+                artBlob = await d.getGithubGroupArtBlob(name);
+              }
+            } catch (_) {}
+            if (artBlob instanceof Blob && artBlob.size) {
+              await setGroupCoverBlob(name, artBlob);
+              ok++;
+            } else {
+              // Sin blob cacheable: se cargará al vuelo en groupCoverNode
+              ok++;
+            }
+          }
+        }
+      } catch (e) {
+        fail++;
+        console.warn('[reloadStructureCovers]', t, e);
+      }
+      done++;
+      onProgress?.(done, total, '');
+      if (done % 3 === 0) await new Promise((r) => setTimeout(r, 0));
+    }
+    return { ok, fail, total: tasks.length };
+  }
 
   return {
     showComicInfo,
