@@ -386,7 +386,7 @@ async function fetchFiles(ch) {
   const out = [];
   for await (const m of client.iterMessages(peerOf(ch), { filter: new Api.InputMessagesFilterDocument(), limit: 100000 })) {
     const name = m.document?.attributes?.find((a) => a.className === 'DocumentAttributeFilename')?.fileName;
-    if (!name || !/\.cb[zr]$/i.test(name)) continue;
+    if (!name || !/\.(cb[zr]|pdf)$/i.test(name)) continue;
     const caption = String(m.message || '').trim();
     out.push({
       id: m.id,
