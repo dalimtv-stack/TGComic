@@ -47,6 +47,7 @@ import * as locks from './lock.js';
 import { initBalance } from './balance.js';
 import { collapseVersions, flattenVersions, splitStats, QUALITIES, QUALITY_LABEL, parseQuality, sourceNameOf, aiLabel } from './quality.js';
 import { createSearchFilters } from './search_filters.js';
+import { openPdfFromBytes, isPdfMagic } from './pdfPages.js';
 
 const apiId = Number(import.meta.env.VITE_API_ID);
 const apiHash = import.meta.env.VITE_API_HASH;
@@ -488,8 +489,21 @@ class TgReader extends zip.Reader {
 }
 
 // ---------- Archivos: ZIP (acceso aleatorio) o RAR (descarga completa) ----------
-const pageBlob = async (p) => p.blob || (await p.getData(new zip.BlobWriter(zip.getMimeType(p.filename))));
-const sniff = async (r) => { const h = await r.readUint8Array(0, 4); return h[0] === 0x52 && h[1] === 0x61 && h[2] === 0x72 ? 'rar' : 'zip'; }; // "Rar!"
+const pageBlob = async (p) => {
+  if (!p) return null;
+  if (p.blob) return p.blob;
+  if (typeof p.getBlob === 'function') return p.getBlob();
+  if (typeof p.getData === 'function') {
+    return await p.getData(new zip.BlobWriter(zip.getMimeType(p.filename || 'page.jpg')));
+  }
+  return null;
+};
+const sniff = async (r) => {
+  const h = await r.readUint8Array(0, 4);
+  if (isPdfMagic(h)) return 'pdf';
+  if (h[0] === 0x52 && h[1] === 0x61 && h[2] === 0x72) return 'rar'; // "Rar!"
+  return 'zip';
+};
 const cancelled = (ac) => !!(ac && ac.cancelled);
 const abortErr = () => Object.assign(new Error('cancelled'), { cancelled: true });
 
@@ -532,9 +546,16 @@ async function downloadRarBytes(m, size, status, ac) {
 
 async function openPages(m, size, status, ac) {
   const r = new TgReader(m, size);
-  if ((await sniff(r)) === 'zip') { // incluye .cbr que en realidad son ZIP
+  const kind = await sniff(r);
+  if (kind === 'zip') { // incluye .cbr que en realidad son ZIP
     const zr = new zip.ZipReader(r);
     return { pages: pagesOf(await zr.getEntries()), close: () => zr.close() };
+  }
+  if (kind === 'pdf') {
+    const st = (t) => status(String(t || '').replace(/^Descargando CBR/, 'Descargando PDF'));
+    const data = await downloadRarBytes(m, size, st, ac);
+    if (cancelled(ac)) throw abortErr();
+    return openPdfFromBytes(data, { status, ac, size });
   }
   const data = await downloadRarBytes(m, size, status, ac);
   if (cancelled(ac)) throw abortErr();
@@ -583,7 +604,7 @@ const coverApi = createCovers(
   },
   {
     el, kv, zip,
-    TgReader, getMsg, pageBlob, sniff, pagesOf,
+    TgReader, getMsg, pageBlob, sniff, pagesOf, openPages,
     readProgress, isComicRead, stripExt,
     getCoverFit,
   }
