@@ -30,6 +30,25 @@ export function createInfoEdit(d) {
     go, show, stack, natural,
   } = d;
 
+  /** Resuelve lado mayor para portadas serie/canal si el check de resolución está activo. */
+  const coverEdge = (kind, fallback) => {
+    try {
+      if (typeof d.coverGenMaxEdge === 'function') return d.coverGenMaxEdge(kind, fallback);
+    } catch (_) {}
+    try {
+      const flag = kind === 'series' ? 'coverGenAtResSeries'
+        : kind === 'channel' ? 'coverGenAtResChannel'
+        : 'coverGenAtResComic';
+      if (localStorage.getItem('device:' + flag) !== '1') return fallback;
+      const hKey = kind === 'series' ? 'coverHSeries'
+        : kind === 'channel' ? 'coverHChannel'
+        : 'coverHComic';
+      return Math.max(100, Math.min(400, Number(localStorage.getItem('device:' + hKey) || 225) || 225));
+    } catch (_) {
+      return fallback;
+    }
+  };
+
   /** Bloque WebP: desglose Media / Baja si existen ambas. */
   const addWebpInfo = (body, row, st) => {
     if (!st?.webp?.n) return;
@@ -1865,7 +1884,7 @@ async function setSeriesCoverBlob(ch, seriesLabel, blob) {
   if (!blob) return;
   const key = seriesCoverKey(ch, seriesLabel);
   try {
-    const opt = await optimizeImageBlob(blob, 320, 0.75);
+    const opt = await optimizeImageBlob(blob, coverEdge('series', 320), 0.75);
     const saved = opt || blob;
     await kv.set(key, saved);
     await persistCoverForSync(key, saved);
@@ -2161,7 +2180,7 @@ async function setChannelCoverBlob(ch, blob) {
   if (!blob) return;
   const key = channelCoverKey(ch);
   try {
-    const opt = await optimizeImageBlob(blob, 384, 0.75, { keepAlpha: true });
+    const opt = await optimizeImageBlob(blob, coverEdge('channel', 384), 0.75, { keepAlpha: true });
     const saved = opt || blob;
     await kv.set(key, saved);
     await persistCoverForSync(key, saved);
