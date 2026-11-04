@@ -14,26 +14,31 @@ export function createCovers(state, d) {
   const readProgress = readProgressDep || readProgressImport;
 
 
-  /** Primera página legible: ZIP directo o openPages (PDF / RAR). */
-  async function firstPageBlobFromMsg(ch, f, msg, size) {
+  /** Primera página legible: ZIP (trozos) o openPages (PDF / RAR completo). */
+  async function firstPageBlobFromMsg(ch, f, msg, size, status) {
+    const st = typeof status === 'function' ? status : () => {};
     const r = new TgReader(msg, size);
     const kind = await sniff(r);
     if (kind === 'zip') {
+      st('Leyendo CBZ…');
       const zr = new zip.ZipReader(r);
       try {
         const first = pagesOf(await zr.getEntries())[0];
         if (!first) return null;
+        st('Miniatura…');
         return await pageBlob(first);
       } finally {
         try { await zr.close(); } catch (_) {}
       }
     }
     if (typeof openPages === 'function') {
+      // CBR/PDF: openPages descarga el archivo entero (inevitable con RAR)
       const ac = { cancelled: false };
-      const arc = await openPages(msg, size, () => {}, ac);
+      const arc = await openPages(msg, size, st, ac);
       try {
         const pages = arc?.pages || [];
         if (!pages.length) return null;
+        st('Miniatura…');
         return await pageBlob(pages[0]);
       } finally {
         try { arc?.close?.(); } catch (_) {}
@@ -369,30 +374,39 @@ export function createCovers(state, d) {
     } catch (e) { console.warn('portada', e); }
   }
 
-  async function makeCover(ch, f, key) {
-    // Siempre mensaje fresco: si se resubió el archivo en Telegram, el media cambia
-    const msg = await getMsg(ch, f, { force: true });
+  /**
+   * Genera portada por defecto (1ª página).
+   * opts.forceMsg = true → re-fetch mensaje Telegram (solo reintento corruptos).
+   * opts.status(text) → progreso (CBR descarga completa).
+   */
+  async function makeCover(ch, f, key, opts = {}) {
+    const st = typeof opts.status === 'function' ? opts.status : () => {};
+    // Por defecto NO forzar getMsg: la caché de mensajes evita latencia enorme en lote
+    st('Mensaje…');
+    const msg = await getMsg(ch, f, opts.forceMsg ? { force: true } : {});
     let size = Number(f?.size) || 0;
     try {
       if (msg?.document?.size != null) size = Number(msg.document.size.toString()) || size;
     } catch (_) {}
     if (!size) return null;
     try {
-      const src = await firstPageBlobFromMsg(ch, f, msg, size);
+      const src = await firstPageBlobFromMsg(ch, f, msg, size, st);
       if (!src) return null;
+      st('Comprimiendo…');
       const out = await thumbFromBlob(src);
       if (out) await kv.set(key, out);
       return out;
     } catch (e) {
       const em = String(e?.message || e || '');
-      if (/central directory|end of central|invalid zip|corrupt/i.test(em)) {
+      if (/central directory|end of central|invalid zip|corrupt/i.test(em) && !opts._retried) {
         try {
+          st('Reintento…');
           const msg2 = await getMsg(ch, f, { force: true });
           let size2 = size;
           try {
             if (msg2?.document?.size != null) size2 = Number(msg2.document.size.toString()) || size2;
           } catch (_) {}
-          const src2 = await firstPageBlobFromMsg(ch, f, msg2, size2);
+          const src2 = await firstPageBlobFromMsg(ch, f, msg2, size2, st);
           if (!src2) return null;
           const out2 = await thumbFromBlob(src2);
           if (out2) await kv.set(key, out2);
@@ -407,11 +421,17 @@ export function createCovers(state, d) {
   /**
    * Genera portada sin la cola de UI (para «Cargar portadas faltantes»).
    * Evita quedarse bloqueado detrás de IntersectionObserver / state.reading.
+   * opts.status(text) para mostrar progreso de descarga CBR.
    */
-  async function generateCover(ch, f) {
+  async function generateCover(ch, f, opts = {}) {
     const key = `c:${ch.id}:${f.id}`;
     try {
-      const b = await makeCover(ch, f, key);
+      // No pisar portada personalizada
+      if (await isCustomCover(ch, f)) {
+        const existing = await kv.get(key);
+        if (existing && existing !== 'none') return existing;
+      }
+      const b = await makeCover(ch, f, key, { status: opts.status });
       return b && b !== 'none' ? b : null;
     } catch (_) {
       return null;

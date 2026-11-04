@@ -686,7 +686,9 @@ export function createProTools(d) {
     const prog = showProgressFrame('Cargar portadas faltantes');
     let done = 0, okN = 0, fail = 0, skip = 0;
     prog.setProgress(0, missing.length || 1);
-    const COVER_MS = 90000;
+    // CBZ (ZIP por trozos) suele ser rápido; CBR descarga el archivo entero → más margen
+    const isCbr = (f) => /\.cbr$/i.test(String(f?.name || ''));
+    const timeoutFor = (f) => (isCbr(f) || /\.pdf$/i.test(String(f?.name || ''))) ? 75000 : 35000;
     const withTimeout = (p, ms) => {
       let t;
       const timeout = new Promise((_, rej) => {
@@ -694,30 +696,50 @@ export function createProTools(d) {
       });
       return Promise.race([p, timeout]).finally(() => { try { clearTimeout(t); } catch (_) {} });
     };
-    const gen = typeof generateCover === 'function' ? generateCover : getCover;
-    for (const { ch, f } of missing) {
-      const label = String(f.name || f.id || '').slice(0, 50);
-      prog.setStatus(`(${done + 1}/${missing.length}) ${label}`);
-      try { coverPump?.({ force: true }); } catch (_) {}
-      try {
-        const b = await withTimeout(gen(ch, f), COVER_MS);
-        if (b) okN++;
-        else fail++;
-      } catch (e) {
-        if (e?.timeout) {
-          skip++;
-          // Marcar ausencia temporal para no reintentar eterno en el mismo batch
-          try { await kv.set(`c:${ch.id}:${f.id}`, 'none'); } catch (_) {}
-          prog.setStatus(`Omitido (timeout 90s): ${label}`);
-          await new Promise((r) => setTimeout(r, 400));
-        } else {
-          fail++;
+    const gen = typeof generateCover === 'function' ? generateCover : null;
+    // Concurrencia baja: Telegram tolera 2–3 descargas; CBZ solo pide cabecera/1ª página
+    const CONCURRENCY = 3;
+    let next = 0;
+    const total = missing.length;
+    const worker = async () => {
+      while (true) {
+        const i = next++;
+        if (i >= total) return;
+        const { ch, f } = missing[i];
+        const label = String(f.name || f.id || '').slice(0, 48);
+        const tick = (extra) => {
+          try {
+            prog.setStatus(`(${done + 1}/${total}) ${label}` + (extra ? ' · ' + extra : ''));
+          } catch (_) {}
+        };
+        tick(isCbr(f) ? 'CBR (descarga completa)…' : '');
+        try {
+          let b = null;
+          if (gen) {
+            b = await withTimeout(
+              gen(ch, f, { status: (t) => tick(String(t || '').slice(0, 40)) }),
+              timeoutFor(f)
+            );
+          } else if (typeof getCover === 'function') {
+            // Fallback: sin force (no re-descargar mensaje ni invalidar custom)
+            b = await withTimeout(getCover(ch, f), timeoutFor(f));
+          }
+          if (b) okN++;
+          else fail++;
+        } catch (e) {
+          if (e?.timeout) {
+            skip++;
+            tick('omitido (timeout)');
+          } else {
+            fail++;
+          }
         }
+        done++;
+        prog.setProgress(done, total);
+        await new Promise((r) => setTimeout(r, 0));
       }
-      done++;
-      prog.setProgress(done, missing.length);
-      await new Promise((r) => setTimeout(r, 0));
-    }
+    };
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, total) }, () => worker()));
     let custom = { ok: 0, fail: 0, total: 0 };
     if (typeof d.restoreCustomCovers === 'function') {
       prog.setStatus('Portadas personalizadas de canales y series…');
