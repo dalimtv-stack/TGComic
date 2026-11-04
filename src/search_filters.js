@@ -53,12 +53,13 @@ export function createSearchFilters(d) {
         q: o.q || '',
         groupMode: o.groupMode || 'series',
         sort: o.sort || 'name-asc',
+        filtersCollapsed: !!o.filtersCollapsed,
       };
     } catch {
       return {
         editorial: '', channel: '', series: '', quality: '', ai: '', read: '',
         format: '', ficha: '', fichaField: '', q: '', groupMode: 'series',
-        sort: 'name-asc',
+        sort: 'name-asc', filtersCollapsed: false,
       };
     }
   }
@@ -503,6 +504,7 @@ export function createSearchFilters(d) {
 
     let keywordOpen = !!filterState.q;
     let unmountHead = null;
+    let filtersCollapsed = !!filterState.filtersCollapsed;
 
     const openComicMenu = (it, fileOverride) => {
       const f = fileOverride || it.f;
@@ -789,13 +791,14 @@ export function createSearchFilters(d) {
         if (body.dataset.filled) return;
         body.dataset.filled = '1';
         const nat = natural || ((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }));
-        const seriesList = [...seriesMap.entries()]
-          .map(([label, its]) => ({
+        const seriesList = sortGroupList(
+          [...seriesMap.entries()].map(([label, its]) => ({
             seriesLabel: label,
             seriesName: its[0]?.seriesName || label,
             items: its,
-          }))
-          .sort((a, b) => nat(a.seriesName, b.seriesName));
+          })),
+          'seriesName'
+        );
         for (const g of seriesList) {
           paintSeriesBlock(body, ch, g.seriesLabel, g.seriesName, g.items);
         }
@@ -826,6 +829,20 @@ export function createSearchFilters(d) {
       host.append(block);
     };
 
+
+    const sortGroupList = (groups, nameKey) => {
+      const nat = natural || ((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' }));
+      const mode = filterState.sort || 'name-asc';
+      const sizeOf = (g) => originalsBytes(g.items || []);
+      const nameOf = (g) => String(g[nameKey] || '');
+      return groups.sort((a, b) => {
+        if (mode === 'size-desc') return sizeOf(b) - sizeOf(a) || nat(nameOf(a), nameOf(b));
+        if (mode === 'size-asc') return sizeOf(a) - sizeOf(b) || nat(nameOf(a), nameOf(b));
+        if (mode === 'name-desc') return nat(nameOf(b), nameOf(a));
+        return nat(nameOf(a), nameOf(b));
+      });
+    };
+
     const paintGroupedSeries = (host, list) => {
       const map = new Map();
       for (const it of list) {
@@ -844,8 +861,7 @@ export function createSearchFilters(d) {
         }
         map.get(key).items.push(it);
       }
-      const nat = natural || ((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }));
-      const groups = [...map.values()].sort((a, b) => nat(a.seriesName, b.seriesName));
+      const groups = sortGroupList([...map.values()], 'seriesName');
       for (const g of groups) paintSeriesBlock(host, g.ch, g.seriesLabel, g.seriesName, g.items);
       // Cómics sin serie al final
       const solos = list.filter((it) => !it.seriesLabel);
@@ -868,8 +884,7 @@ export function createSearchFilters(d) {
         }
         map.get(it.channelId).items.push(it);
       }
-      const nat = natural || ((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }));
-      const groups = [...map.values()].sort((a, b) => nat(a.channelName, b.channelName));
+      const groups = sortGroupList([...map.values()], 'channelName');
       for (const g of groups) paintChannelBlock(host, g.ch, g.channelName, g.items);
     };
 
@@ -981,7 +996,21 @@ export function createSearchFilters(d) {
       };
       qRow.append(qInp);
       panel.append(qRow);
-      root.append(panel);
+
+      if (filtersCollapsed) {
+        const collapsed = el('button', 'sf-filters-collapsed', 'Filtros de búsqueda');
+        collapsed.type = 'button';
+        collapsed.title = 'Mostrar filtros';
+        collapsed.onclick = () => {
+          filtersCollapsed = false;
+          filterState.filtersCollapsed = false;
+          try { saveState(); } catch (_) {}
+          paint();
+        };
+        root.append(collapsed);
+      } else {
+        root.append(panel);
+      }
 
       try { unmountHead?.(); } catch (_) {}
       unmountHead = mountHeaderActions(
@@ -1024,6 +1053,18 @@ export function createSearchFilters(d) {
         tabs.append(b);
       }
       summary.append(tabs);
+      // Click en el contador (no en las pestañas) minimiza/expande los filtros
+      summary.style.cursor = 'pointer';
+      summary.title = filtersCollapsed ? 'Mostrar filtros' : 'Ocultar filtros';
+      summary.addEventListener('click', (ev) => {
+        try {
+          if (ev.target.closest('.sf-tabs')) return;
+        } catch (_) {}
+        filtersCollapsed = !filtersCollapsed;
+        filterState.filtersCollapsed = filtersCollapsed;
+        try { saveState(); } catch (_) {}
+        paint();
+      });
       root.append(summary);
 
       const results = el('div', 'sf-results');
