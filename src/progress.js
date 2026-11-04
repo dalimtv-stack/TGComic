@@ -137,7 +137,9 @@ export function setPageFormat(chId, msgId, fmt) {
 
 export function detectPageFormats(pages) {
   const set = new Set();
+  let fromPdf = false;
   for (const p of pages || []) {
+    if (p?.pdf) fromPdf = true;
     const n = String(p.filename || p.name || '').toLowerCase();
     if (/\.jpe?g$/.test(n)) set.add('JPEG');
     else if (/\.png$/.test(n)) set.add('PNG');
@@ -151,6 +153,10 @@ export function detectPageFormats(pages) {
       else if (tp.includes('webp')) set.add('WebP');
       else if (tp.includes('gif')) set.add('GIF');
     }
+  }
+  if (fromPdf || (pages && pages.isPdf)) {
+    if (!set.size) set.add('WebP');
+    return 'PDF → ' + [...set].join(' / ');
   }
   return [...set].join(' / ');
 }
