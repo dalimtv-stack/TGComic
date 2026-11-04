@@ -432,7 +432,12 @@ function showComicInfo(ch, f, displayTitle) {
       title = String(displayTitle).trim();
     }
     const fname = f?.name || '';
-    const fmt = /\.cbz$/i.test(fname) ? 'CBZ (ZIP)' : /\.cbr$/i.test(fname) ? 'CBR (RAR)' : '—';
+    const fmt = /\.pdf$/i.test(fname) ? 'PDF'
+      : /\.cbz$/i.test(fname) ? 'CBZ (ZIP)'
+      : /\.cbr$/i.test(fname) ? 'CBR (RAR)'
+      : /\.zip$/i.test(fname) ? 'ZIP'
+      : /\.rar$/i.test(fname) ? 'RAR'
+      : '—';
     const pages = (ch && f) ? getPagesTotal(ch.id, f.id) : 0;
     const pagesLabel = pages > 0 ? String(pages) : '— (se conoce al abrir)';
     let pageFmt = '— (se detecta al abrir)';
