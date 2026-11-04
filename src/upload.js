@@ -879,23 +879,31 @@ export function createUploadTool(d) {
       const includeChRow = el('label', 'repack-check');
       includeChRow.append(includeChChk, document.createTextNode(' Incluir nombre del canal en el archivo'));
 
-      const asWebpChk = el('input');
-      asWebpChk.type = 'checkbox';
-      const webpRow = el('label', 'repack-check');
-      webpRow.append(asWebpChk, document.createTextNode(' Convertir páginas a WebP (añade [WebP] al nombre)'));
+      const midWebpCb = el('input');
+      midWebpCb.type = 'checkbox';
+      const midWebpRow = el('label', 'repack-check');
+      midWebpRow.append(midWebpCb, document.createTextNode(
+        ' Crear copia con las páginas en formato WebP y añade [WebP] al nombre'
+      ));
+      const lowWebpCb = el('input');
+      lowWebpCb.type = 'checkbox';
+      const lowWebpRow = el('label', 'repack-check');
+      lowWebpRow.append(lowWebpCb, document.createTextNode(
+        ' Crear copia con las páginas en formato WebP y resolución máxima 2400px y añade [2400px][WebP] al nombre'
+      ));
       const webpOptsBox = el('div', 'webp-opts');
       webpOptsBox.hidden = true;
-      const qualityLab = el('label', 'sync-label', 'Calidad');
+      const qualityLab = el('label', 'sync-label', 'Calidad WebP (0–1)');
       const qualityInp = el('input', 'edit-input');
       qualityInp.type = 'text';
       qualityInp.value = '0.40';
-      const resizeRow = el('label', 'repack-check');
-      const resizeCb = el('input');
-      resizeCb.type = 'checkbox';
-      resizeCb.checked = true;
-      resizeRow.append(resizeCb, document.createTextNode(' Redimensionar (lado mayor máx. 2400 px)'));
-      webpOptsBox.append(qualityLab, qualityInp, resizeRow);
-      asWebpChk.onchange = () => { webpOptsBox.hidden = !asWebpChk.checked; };
+      qualityInp.placeholder = '0.40';
+      webpOptsBox.append(qualityLab, qualityInp);
+      const syncWebpOptsVis = () => {
+        webpOptsBox.hidden = !(midWebpCb.checked || lowWebpCb.checked);
+      };
+      midWebpCb.onchange = syncWebpOptsVis;
+      lowWebpCb.onchange = syncWebpOptsVis;
 
       const filesSec = el('div', 'info-sec', 'Cómics a subir');
       const filesHint = el('p', 'cover-pick-hint', 'Por cada archivo: número, info y ficha de caption (opcional). La serie de arriba es común.');
@@ -985,8 +993,8 @@ export function createUploadTool(d) {
           series: seriesInp.value,
           number: row.numberInp.value,
           info: row.infoInp.value,
-          asWebp: !!asWebpChk.checked,
-          resize: !!resizeCb.checked,
+          asWebp: false,
+          resize: false,
         });
       };
 
@@ -1249,11 +1257,8 @@ export function createUploadTool(d) {
       channelInp.oninput = () => updateAllPreviews();
       seriesInp.oninput = () => updateAllPreviews();
       includeChChk.onchange = () => updateAllPreviews();
-      asWebpChk.onchange = () => {
-        webpOptsBox.hidden = !asWebpChk.checked;
-        updateAllPreviews();
-      };
-      resizeCb.onchange = () => updateAllPreviews(); // [2400px] visible en la propuesta si está marcado
+      midWebpCb.onchange = () => { syncWebpOptsVis(); updateAllPreviews(); };
+      lowWebpCb.onchange = () => { syncWebpOptsVis(); updateAllPreviews(); };
 
       const status = el('p', 'sync-status', '');
       const actions = el('div', 'edit-actions');
@@ -1275,12 +1280,10 @@ export function createUploadTool(d) {
         if (!ed) { await uiAlert('Indica la editorial'); return; }
         if (!chName) { await uiAlert('Indica el canal'); return; }
 
-        const wantWebp = !!asWebpChk.checked;
-        const webpOpts = {
-          quality: parseFloat(String(qualityInp.value).replace(',', '.')) || 0.40,
-          resize: !!resizeCb.checked,
-          maxEdge: 2400,
-        };
+        let quality = parseFloat(String(qualityInp.value).replace(',', '.'));
+        if (!(quality > 0 && quality <= 1)) quality = 0.40;
+        const wantMid = !!midWebpCb.checked;
+        const wantLow = !!lowWebpCb.checked;
 
         const jobs = rows.map((row) => {
           let outName = String(row.nameInp.value || '').trim();
@@ -1290,14 +1293,12 @@ export function createUploadTool(d) {
               series: seriesInp.value,
               number: row.numberInp.value,
               info: row.infoInp.value,
-              asWebp: wantWebp,
-              resize: !!webpOpts.resize,
+              asWebp: false,
+              resize: false,
             });
           } else {
-            outName = ensureCbzName(outName, wantWebp, !!webpOpts.resize);
+            outName = ensureCbzName(outName, false, false);
           }
-          // Etiquetas de calidad: [2400px] (si se redimensiona) y después [WebP]
-          if (wantWebp) outName = withQualityTags(outName, { webp: true, resize: !!webpOpts.resize });
           // Siempre: "Nombre de archivo"; ficha completa si el check del archivo está activo
           let caption = row.fichaChk?.checked
             ? buildComicCaption({
@@ -1392,20 +1393,46 @@ export function createUploadTool(d) {
               if (ctx.isAborted?.()) throw Object.assign(new Error('cancelado'), { cancelled: true });
               ch = await ensureChannel(chName, ed, st);
               ctx.setProgress(20);
-              st('[' + outName + '] ' + (wantWebp ? 'Convirtiendo a CBZ WebP…' : 'Convirtiendo a CBZ si hace falta…'));
-              await yieldTick();
-              let blob = await localFileToCbzBlob(fileRef, st, { asWebp: wantWebp, webpOpts });
-              ctx.setProgress(55);
-              st('[' + outName + '] Preparando subida… (' + (formatBytes?.(blob.size) || blob.size) + ')');
-              await yieldTick();
-              await ctx.waitWhilePaused?.();
-              if (ctx.isAborted?.()) throw Object.assign(new Error('cancelado'), { cancelled: true });
-              st('[' + outName + '] Subiendo…');
-              ctx.setProgress(70);
-              // uploadCbz(ch, fileName, blob, caption, status)
-              await uploadCbz(ch, outName, blob, captionText, st);
+              const variants = [{ outName, asWebp: false, webpOpts: {} }];
+              if (wantMid) {
+                variants.push({
+                  outName: withQualityTags(outName, { webp: true, resize: false }),
+                  asWebp: true,
+                  webpOpts: { quality, resize: false, maxEdge: 2400 },
+                });
+              }
+              if (wantLow) {
+                variants.push({
+                  outName: withQualityTags(outName, { webp: true, resize: true }),
+                  asWebp: true,
+                  webpOpts: { quality, resize: true, maxEdge: 2400 },
+                });
+              }
+              const nVar = variants.length;
+              for (let vi = 0; vi < nVar; vi++) {
+                const v = variants[vi];
+                const tag = nVar > 1 ? `(${vi + 1}/${nVar}) ` : '';
+                st('[' + v.outName + '] ' + tag + (v.asWebp ? 'Convirtiendo a CBZ WebP…' : 'Convirtiendo a CBZ si hace falta…'));
+                await yieldTick();
+                let blob = await localFileToCbzBlob(fileRef, st, { asWebp: v.asWebp, webpOpts: v.webpOpts });
+                ctx.setProgress(20 + Math.round(((vi + 0.5) / nVar) * 70));
+                st('[' + v.outName + '] Preparando subida… (' + (formatBytes?.(blob.size) || blob.size) + ')');
+                await yieldTick();
+                await ctx.waitWhilePaused?.();
+                if (ctx.isAborted?.()) throw Object.assign(new Error('cancelado'), { cancelled: true });
+                let cap = captionText;
+                try {
+                  if (typeof parseComicCaption === 'function' && typeof buildComicCaption === 'function' && cap) {
+                    const fields = parseComicCaption(cap);
+                    fields.fileName = v.outName;
+                    cap = buildComicCaption(fields);
+                  }
+                } catch (_) {}
+                st('[' + v.outName + '] Subiendo…');
+                await uploadCbz(ch, v.outName, blob, cap, st);
+                st('[' + v.outName + '] Listo');
+              }
               ctx.setProgress(100);
-              st('[' + outName + '] Listo');
               // Actualizar caché del canal y refrescar la vista actual si es ese canal/serie
               try {
                 await fetchFiles(ch);
@@ -1466,7 +1493,7 @@ export function createUploadTool(d) {
       body.append(seriesLab, seriesHint, seriesInp);
       body.append(includeChRow);
       body.append(filesSec, filesHint, filesList);
-      body.append(webpRow, webpOptsBox);
+      body.append(midWebpRow, lowWebpRow, webpOptsBox);
       body.append(status);
       actions.append(cancel, goBtn);
       body.append(actions);
