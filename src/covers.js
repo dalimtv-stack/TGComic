@@ -49,14 +49,16 @@ export function createCovers(state, d) {
 
   const cq = [];
   let crun = 0;
+  // 4 en paralelo: CBZ solo pide trozos; evita que 1 CBR lento bloquee toda la rejilla tanto tiempo
+  const QUEUE_N = 4;
   const enqueue = (fn) => new Promise((res) => {
-    cq.push(() => fn().then(res, () => res(null)));
+    cq.push(() => fn().then(res, (e) => { console.warn('[cover]', e); res(null); }));
     pump();
   });
   /** @param {{ force?: boolean }} [opts] force=true: procesa aunque state.reading (batch de portadas) */
   function pump(opts) {
     if (state.reading && !opts?.force) return;
-    while (crun < 2 && cq.length) {
+    while (crun < QUEUE_N && cq.length) {
       crun++;
       cq.shift()().finally(() => { crun--; pump(opts); });
     }
@@ -376,17 +378,24 @@ export function createCovers(state, d) {
 
   /**
    * Genera portada por defecto (1ª página).
-   * opts.forceMsg = true → re-fetch mensaje Telegram (solo reintento corruptos).
+   * opts.forceMsg = true → re-fetch mensaje Telegram.
    * opts.status(text) → progreso (CBR descarga completa).
    */
   async function makeCover(ch, f, key, opts = {}) {
     const st = typeof opts.status === 'function' ? opts.status : () => {};
-    // Por defecto NO forzar getMsg: la caché de mensajes evita latencia enorme en lote
     st('Mensaje…');
-    const msg = await getMsg(ch, f, opts.forceMsg ? { force: true } : {});
+    let msg = await getMsg(ch, f, opts.forceMsg ? { force: true } : {});
+    // Cómic recién subido: a veces el 1er getMessages llega sin document → un force arregla
+    if (!msg?.document) {
+      try { msg = await getMsg(ch, f, { force: true }); } catch (_) {}
+    }
+    if (!msg?.document) {
+      console.warn('portada: sin document', ch?.id, f?.id);
+      return null;
+    }
     let size = Number(f?.size) || 0;
     try {
-      if (msg?.document?.size != null) size = Number(msg.document.size.toString()) || size;
+      if (msg.document.size != null) size = Number(msg.document.size.toString()) || size;
     } catch (_) {}
     if (!size) return null;
     try {
@@ -398,20 +407,24 @@ export function createCovers(state, d) {
       return out;
     } catch (e) {
       const em = String(e?.message || e || '');
-      if (/central directory|end of central|invalid zip|corrupt/i.test(em) && !opts._retried) {
+      if (!opts._retried) {
         try {
           st('Reintento…');
           const msg2 = await getMsg(ch, f, { force: true });
+          if (!msg2?.document) return null;
           let size2 = size;
           try {
-            if (msg2?.document?.size != null) size2 = Number(msg2.document.size.toString()) || size2;
+            if (msg2.document.size != null) size2 = Number(msg2.document.size.toString()) || size2;
           } catch (_) {}
           const src2 = await firstPageBlobFromMsg(ch, f, msg2, size2, st);
           if (!src2) return null;
           const out2 = await thumbFromBlob(src2);
           if (out2) await kv.set(key, out2);
           return out2;
-        } catch (_) { return null; }
+        } catch (e2) {
+          console.warn('portada auto retry', e2);
+          return null;
+        }
       }
       console.warn('portada auto', e);
       return null;
@@ -465,16 +478,15 @@ export function createCovers(state, d) {
       d.append(bar);
       d.append(el('span', 'prog-badge', '✓'));
     }
-    d._load = async () => {
-      const b = await getCover(ch, f);
-      if (!b) return;
+    const paintBlob = (b) => {
+      if (!b || !d.isConnected) return false;
       const img = new Image();
-      // Revocar solo al sustituir (no MutationObserver: en iPhone provocaba parpadeo y retrasos)
       if (d._objUrl) { try { URL.revokeObjectURL(d._objUrl); } catch (_) {} }
       let url;
-      try { url = URL.createObjectURL(b); } catch (_) { return; }
+      try { url = URL.createObjectURL(b); } catch (_) { return false; }
       d._objUrl = url;
       img.onload = () => {
+        if (!d.isConnected) return;
         try { ltr.remove(); } catch (_) {}
         if (d.querySelector('img')) d.querySelector('img').remove();
         try {
@@ -496,6 +508,25 @@ export function createCovers(state, d) {
         if (d._objUrl === url) d._objUrl = null;
       };
       img.src = url;
+      return true;
+    };
+    d._load = async () => {
+      try {
+        let b = await getCover(ch, f);
+        if (paintBlob(b)) return;
+        // 1 reintento: cómic nuevo a veces falla el 1er getMessages / trozo ZIP
+        await new Promise((r) => setTimeout(r, 600));
+        if (!d.isConnected) return;
+        b = await getCover(ch, f, { force: false });
+        // Si sigue vacío, forzar regeneración (borra caché 'none' y reintenta red)
+        if (!b) {
+          try { await kv.del(`c:${ch.id}:${f.id}`); } catch (_) {}
+          b = await enqueue(() => makeCover(ch, f, `c:${ch.id}:${f.id}`, { forceMsg: true }));
+        }
+        paintBlob(b);
+      } catch (e) {
+        console.warn('cover load', e);
+      }
     };
     io.observe(d);
     return d;
