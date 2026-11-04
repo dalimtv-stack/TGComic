@@ -1441,7 +1441,7 @@ export function createReader(state, d) {
         overlay.append(box);
         overlay.addEventListener('click', (e) => { if (e.target === overlay) ok.click(); });
         rd.append(overlay);
-        try { inp.focus(); inp.select(); } catch (_) {}
+        // No enfocar la caja de velocidad: en móvil abre el teclado y estorba
       };
       const infoBtn = el('button', 'btn rd-info-btn');
       infoBtn.type = 'button';
@@ -2214,10 +2214,18 @@ export function createReader(state, d) {
           const im = rd.querySelector('img');
           if (im) {
             im.style.removeProperty('width');
+            im.style.removeProperty('height');
             im.style.removeProperty('max-width');
             im.style.removeProperty('max-height');
+            im.style.removeProperty('margin');
+            im.style.removeProperty('object-fit');
+            im.style.removeProperty('object-position');
+            im.style.removeProperty('align-self');
           }
-          try { rd.scrollTo(0, 0); } catch (_) {}
+          const scroller = rd.querySelector('.page-host') || rd;
+          try { scroller.scrollTo(0, 0); } catch (_) {
+            try { scroller.scrollTop = 0; scroller.scrollLeft = 0; } catch (_) {}
+          }
         };
 
         /**
@@ -2233,34 +2241,45 @@ export function createReader(state, d) {
             return;
           }
 
-          const rdRect = rd.getBoundingClientRect();
+          // El scroll real en modo página está en .page-host, no en #rd
+          const scroller = rd.querySelector('.page-host') || rd;
+          const scRect = scroller.getBoundingClientRect();
           const oldW = Math.max(1, im.offsetWidth || im.getBoundingClientRect().width);
           const oldH = Math.max(1, im.offsetHeight || im.getBoundingClientRect().height);
 
-          let focusX = rd.clientWidth / 2;
-          let focusY = rd.clientHeight / 2;
+          let focusX = scroller.clientWidth / 2;
+          let focusY = scroller.clientHeight / 2;
           if (clientX != null && clientY != null) {
-            focusX = clientX - rdRect.left;
-            focusY = clientY - rdRect.top;
+            focusX = clientX - scRect.left;
+            focusY = clientY - scRect.top;
           }
 
-          // Punto del contenido bajo el foco (coords de scroll actuales)
-          const contentX = rd.scrollLeft + focusX;
-          const contentY = rd.scrollTop + focusY;
+          const contentX = scroller.scrollLeft + focusX;
+          const contentY = scroller.scrollTop + focusY;
           const ratioX = contentX / oldW;
           const ratioY = contentY / oldH;
 
           zoomLevel = level;
           rd.classList.add('zoom');
+          // Evitar centrado flex que “corta” la parte superior al hacer zoom
           im.style.width = (zoomLevel * 100) + '%';
+          im.style.height = 'auto';
           im.style.maxWidth = 'none';
           im.style.maxHeight = 'none';
+          im.style.margin = '0';
+          im.style.objectFit = 'contain';
+          im.style.objectPosition = 'left top';
+          im.style.alignSelf = 'flex-start';
 
-          // Layout síncrono → mismo ratio de contenido bajo el dedo
-          const newW = Math.max(1, im.offsetWidth);
-          const newH = Math.max(1, im.offsetHeight);
-          rd.scrollLeft = Math.max(0, ratioX * newW - focusX);
-          rd.scrollTop = Math.max(0, ratioY * newH - focusY);
+          const applyScroll = () => {
+            const newW = Math.max(1, im.offsetWidth);
+            const newH = Math.max(1, im.offsetHeight);
+            scroller.scrollLeft = Math.max(0, ratioX * newW - focusX);
+            scroller.scrollTop = Math.max(0, ratioY * newH - focusY);
+          };
+          applyScroll();
+          // Segundo layout (iOS / flex) para no dejar la página cortada arriba
+          requestAnimationFrame(() => requestAnimationFrame(applyScroll));
         };
 
         const applyZoomAt = (clientX, clientY) => {
