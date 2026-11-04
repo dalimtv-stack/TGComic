@@ -1577,12 +1577,12 @@ function groupsView() {
   paintHome();
 }
 function channelsView(g) {
-  const LIB = libNow();
-
   if (!locks.guardRestricted('group', g, groupDisplayName(g))) return;
 
   go(groupDisplayName(g), async (e) => {
     e._uploadCtx = { editorial: g };
+    // LIB actual en cada repintado (canal recién creado tras subida)
+    const LIB = libNow();
     const chs = LIB.filter((c) => c.group === g);
     let searchIndex = null;
 
@@ -1945,8 +1945,10 @@ function filesView(ch) {
     const cached = await kv.get('f:' + ch.id);
     if (cached) draw(cached); else msg('Cargando…');
     try {
+      const force = !!e._forceFiles;
+      e._forceFiles = false;
       const fresh = await fetchFiles(ch);
-      if (JSON.stringify(fresh) !== JSON.stringify(cached)) draw(fresh);
+      if (force || JSON.stringify(fresh) !== JSON.stringify(cached)) draw(fresh);
     } catch (err) { if (!cached) msg('Error: ' + err.message); }
   });
 }
@@ -1969,9 +1971,15 @@ function seriesView(ch, s0, files) {
     e._chId = ch.id;
     e._seriesKey = s;
 
-    const loadSeriesFiles = async () => {
+    const loadSeriesFiles = async (opts = {}) => {
       let all = [];
-      try { all = (await kv.get('f:' + ch.id)) || []; } catch (_) {}
+      // Tras subida, refreshView marca e._forceFiles → consultar Telegram
+      if (opts.force) {
+        try { all = await fetchFiles(ch); } catch (_) {}
+      }
+      if (!all.length) {
+        try { all = (await kv.get('f:' + ch.id)) || []; } catch (_) {}
+      }
       if (!all.length) {
         try { all = await fetchFiles(ch); } catch (_) {}
       }
@@ -2004,7 +2012,9 @@ function seriesView(ch, s0, files) {
 
     const redraw = async () => {
       if (!alive(e)) return;
-      const fs = await loadSeriesFiles();
+      const force = !!e._forceFiles;
+      e._forceFiles = false;
+      const fs = await loadSeriesFiles({ force });
       if (!alive(e)) return;
       try {
         const t = seriesDisplayName(ch, s);

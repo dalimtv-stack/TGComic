@@ -340,7 +340,7 @@ export function createUploadTool(d) {
     return { series: base || chName || '', number: '', info: tags };
   }
 
-  const isGramNoise = (e) => /Missing MTProto Entity|TL definition for ID 0/i.test(String(e?.message || e || ''));
+  const isGramNoise = (e) => /Missing MTProto Entity|TL definition for ID 0|ENTITY_MEMBER_INVALID|constructor id/i.test(String(e?.message || e || ''));
   /** GramJS a veces lanza un error de parseo DESPUÉS de enviar: el mensaje ya está en Telegram, no reintentar (duplicaría la subida). */
   async function sendFileSafe(client, peer, opts) {
     try {
@@ -619,6 +619,11 @@ export function createUploadTool(d) {
       return;
     } catch (e) {
       if (e?.cancelled || abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
+      // GramJS a veces lanza ruido de parseo tras subir bien el archivo
+      if (isGramNoise(e)) {
+        console.warn('[upload] aviso GramJS tras uploadFile (se asume enviado):', e?.message || e);
+        return;
+      }
       console.warn('[upload] uploadFile(File) falló', e);
       // Si el fallo fue solo caption y ya se agotaron reintentos, no confundir con CustomFile
       if (isCaptionTooLongError(e)) {
