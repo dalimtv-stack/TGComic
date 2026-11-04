@@ -588,7 +588,7 @@ const coverApi = createCovers(
     getCoverFit,
   }
 );
-const { getCover, saveCoverBlob, optimizeImageBlob, comicCover, pump, io } = coverApi;
+const { getCover, saveCoverBlob, optimizeImageBlob, coverGenMaxEdge, comicCover, pump, io } = coverApi;
 
 // ---------- Navegación y vistas ----------
 const app = $('#app'), titleEl = $('#title'), backBtn = $('#back'), actions = $('#actions');
@@ -1992,7 +1992,7 @@ infoApi = createInfoEdit({
   groupDisplayName, setGroupDisplayName,
   getComicSeriesOverride, setComicSeries, ungroupMap, setUngroupMode,
   getPageIndex, getPagesTotal, getPageFormat, formatBytes, sizeLabel,
-  getCover, saveCoverBlob, optimizeImageBlob, comicCover, io,
+  getCover, saveCoverBlob, optimizeImageBlob, coverGenMaxEdge, comicCover, io,
   art, ART, artNorm, artLoose, listGithubArtVariants, probeGithubArtVariants,
   fetchOptimizeArtBlob,
   setBlobImg,
