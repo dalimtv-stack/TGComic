@@ -1041,7 +1041,9 @@ export function createReader(state, d) {
       urls.clear();
     };
     const preloadAround = async (center, token, mine) => {
-      const r = networkPreloadRadius();
+      // PDF: precarga ~4–5 páginas vecinas (más costoso rasterizar bajo demanda)
+      const baseR = networkPreloadRadius();
+      const r = (pages && (pages.isPdf || pages[0]?.pdf)) ? Math.max(baseR, 3) : baseR;
       const order = [];
       for (let d = 1; d <= r; d++) {
         order.push(center + d, center - d);
