@@ -2,6 +2,7 @@
  * Portadas de cómics: generación, optimización y nodos de UI.
  */
 import { isComicRead as isComicReadImport, readProgress as readProgressImport } from './progress.js';
+import { parseQuality, sourceNameOf, stripQualityTags, flattenVersions } from './quality.js';
 
 export function createCovers(state, d) {
   const {
@@ -381,6 +382,28 @@ export function createCovers(state, d) {
    * opts.forceMsg = true → re-fetch mensaje Telegram.
    * opts.status(text) → progreso (CBR descarga completa).
    */
+
+  /** No cachear portadas de WebP/2400/IA si existe la versión original (alta). */
+  async function shouldSkipCoverCache(ch, f) {
+    try {
+      const pq = parseQuality(sourceNameOf(f) || f?.name || '');
+      if (!pq.ai && pq.q === 'high') return false;
+      let all = [];
+      try { all = (await kv.get('f:' + ch.id)) || []; } catch (_) { return true; }
+      const base = stripQualityTags(sourceNameOf(f) || f?.name || '').toLowerCase().replace(/\s+/g, ' ').trim();
+      if (!base) return true;
+      for (const x of flattenVersions(all)) {
+        if (String(x.id) === String(f.id)) continue;
+        const pq2 = parseQuality(sourceNameOf(x) || x?.name || '');
+        const b2 = stripQualityTags(sourceNameOf(x) || x?.name || '').toLowerCase().replace(/\s+/g, ' ').trim();
+        if (b2 === base && !pq2.ai && pq2.q === 'high') return true;
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   async function makeCover(ch, f, key, opts = {}) {
     const st = typeof opts.status === 'function' ? opts.status : () => {};
     st('Mensaje…');
@@ -403,7 +426,7 @@ export function createCovers(state, d) {
       if (!src) return null;
       st('Comprimiendo…');
       const out = await thumbFromBlob(src);
-      if (out) await kv.set(key, out);
+      if (out && !(await shouldSkipCoverCache(ch, f))) await kv.set(key, out);
       return out;
     } catch (e) {
       const em = String(e?.message || e || '');
@@ -419,7 +442,7 @@ export function createCovers(state, d) {
           const src2 = await firstPageBlobFromMsg(ch, f, msg2, size2, st);
           if (!src2) return null;
           const out2 = await thumbFromBlob(src2);
-          if (out2) await kv.set(key, out2);
+          if (out2 && !(await shouldSkipCoverCache(ch, f))) await kv.set(key, out2);
           return out2;
         } catch (e2) {
           console.warn('portada auto retry', e2);
