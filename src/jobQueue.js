@@ -308,6 +308,12 @@ export function createJobQueue({ el, pref }) {
         next.progress = 100;
         next.finishedAt = Date.now();
         if (next.startedAt) recordDuration(next.finishedAt - next.startedAt);
+        // Liberar runner y datos de reanudación (archivo local); se ve como completado en la UI
+        try { next._run = null; } catch (_) {}
+        try { next.persist = null; } catch (_) {}
+        try {
+          if (Array.isArray(next.log) && next.log.length > 30) next.log = next.log.slice(-30);
+        } catch (_) {}
       }
     } catch (e) {
       if (e?.cancelled || e?.name === 'AbortError' || abortedIds.has(next.id)) {
