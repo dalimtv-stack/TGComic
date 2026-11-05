@@ -580,10 +580,26 @@ async function comicNeighbors(ch, f) {
     const nav = globalThis.__tgComicNav;
     const items = Array.isArray(nav?.items) ? nav.items : null;
     if (items && items.length) {
-      const i = items.findIndex((x) =>
-        String(x?.ch?.id ?? x?.chId) === String(ch.id)
-        && String(x?.f?.id ?? x?.id) === String(f.id)
-      );
+      const fid = String(f.id);
+      const i = items.findIndex((x) => {
+        if (String(x?.ch?.id ?? x?.chId) !== String(ch.id)) return false;
+        const xf = x?.f || x;
+        if (String(xf?.id ?? x?.id) === fid) return true;
+        // Variantes embebidas en el holder de la lista
+        try {
+          if (xf?.variants) {
+            for (const v of Object.values(xf.variants)) {
+              if (v && String(v.id) === fid) return true;
+            }
+          }
+          if (Array.isArray(xf?.ai)) {
+            for (const v of xf.ai) {
+              if (v && String(v.id) === fid) return true;
+            }
+          }
+        } catch (_) {}
+        return false;
+      });
       if (i >= 0) {
         const at = (idx) => {
           if (idx < 0 || idx >= items.length) return null;
