@@ -1493,7 +1493,7 @@ export function createReader(state, d) {
         try { ev.stopPropagation(); } catch (_) {}
         try {
           if (typeof showComicInfo === 'function') {
-            showComicInfo(ctx.ch, f);
+            showComicInfo(ctx.ch, f, '', { noNeighbors: true });
             requestAnimationFrame(() => {
               document.querySelectorAll('.info-frame, .edit-frame').forEach((node) => {
                 try { node.style.zIndex = '200'; node.style.position = 'fixed'; } catch (_) {}
