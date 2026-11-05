@@ -37,6 +37,10 @@ export function createViews(d) {
     buildSearchIndex, filterSearchIndex,
   } = d;
   const openComic = (...a) => d.openComic(...a);
+  const getClient = () => d.client;
+  const getReady = () => d.ready;
+  const peerOf = (...a) => d.peerOf(...a);
+  const Api = d.Api;
 
   // ---- Ordenación de listados (editorial / canal / serie) ----
   const sortKey = (scope, id) => 'sort:' + scope + ':' + String(id || '');
@@ -660,6 +664,69 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
             if (typeof showPickCoverFromComic === 'function') {
               showPickCoverFromComic(ch, f, () => { try { redraw?.(); } catch (_) {} openEditMenu(); });
             } else appAlert('Elegir portada no disponible');
+          }]);
+          editOpts.push(['Eliminar', async () => {
+            try {
+              if (!locks.isSessionUnlocked()) {
+                const pw = await appPrompt('Contraseña de sincronización', 'Eliminar cómic', '', 'password');
+                if (pw == null) return;
+                if (!(await locks.unlockSession(pw))) {
+                  return appAlert('Contraseña incorrecta', 'Eliminar');
+                }
+              }
+              const name = label || f?.name || 'este cómic';
+              const ok = await appConfirm(
+                '¿Eliminar permanentemente «' + name + '» de Telegram?\n\nEsta acción no se puede deshacer.',
+                'Eliminar cómic'
+              );
+              if (!ok) return;
+              if (getReady) await getReady();
+              const client = getClient?.();
+              if (!client || !peerOf || !Api) {
+                return appAlert('Cliente Telegram no disponible');
+              }
+              const peer = peerOf(ch);
+              const ids = [];
+              const pushId = (x) => { if (x?.id != null) ids.push(Number(x.id)); };
+              pushId(f);
+              if (f?.variants && typeof f.variants === 'object') {
+                for (const v of Object.values(f.variants)) pushId(v);
+              }
+              if (Array.isArray(f?.ai)) for (const v of f.ai) pushId(v);
+              // También hermanas por nombre en el canal
+              try {
+                let all = (await kv.get('f:' + ch.id)) || [];
+                const { stripQualityTags, sourceNameOf, flattenVersions } = await import('./quality.js');
+                const base = stripQualityTags(sourceNameOf(f) || f.name || '').toLowerCase().replace(/\s+/g, ' ').trim();
+                for (const x of flattenVersions(all)) {
+                  const b = stripQualityTags(sourceNameOf(x) || x.name || '').toLowerCase().replace(/\s+/g, ' ').trim();
+                  if (b && b === base) pushId(x);
+                }
+              } catch (_) {}
+              const uniq = [...new Set(ids.filter((n) => Number.isFinite(n)))];
+              if (!uniq.length) return appAlert('No hay mensaje que eliminar');
+              await client.deleteMessages(peer, uniq, { revoke: true });
+              try {
+                let all = (await kv.get('f:' + ch.id)) || [];
+                const drop = new Set(uniq.map(String));
+                all = all.filter((x) => !drop.has(String(x.id)));
+                // limpiar variants anidadas
+                all = all.map((x) => {
+                  if (!x?.variants) return x;
+                  const nv = { ...x.variants };
+                  for (const k of Object.keys(nv)) {
+                    if (drop.has(String(nv[k]?.id))) delete nv[k];
+                  }
+                  return { ...x, variants: nv };
+                });
+                await kv.set('f:' + ch.id, all);
+              } catch (_) {}
+              try { window.dispatchEvent(new CustomEvent('tgcomic:changed', { detail: { chId: ch.id, kind: 'delete' } })); } catch (_) {}
+              try { redraw?.(); } catch (_) {}
+              await appAlert('Eliminado.', 'Eliminar');
+            } catch (e) {
+              await appAlert('No se pudo eliminar: ' + (e?.message || e), 'Eliminar');
+            }
           }]);
           sheet('Editar', editOpts, { cancelLabel: 'Volver', onCancel: () => sheet(label, comicSheetOpts(ch, f, label, redraw, ctx).concat(lockToggleOpts('comic', { ch, f }, label, redraw))) });
         };
@@ -1940,6 +2007,17 @@ function filesView(ch) {
         (it) => it._sortDate ?? null
       );
       channelQueue = sorted.filter((it) => it._f).map((it) => it._f);
+      try {
+        for (const it of sorted) {
+          if (it && it._f) { it._chId = ch.id; it._ch = ch; }
+        }
+        globalThis.__tgComicNav = {
+          chId: String(ch.id),
+          ids: channelQueue.map((x) => String(x.id)),
+          files: channelQueue.slice(),
+          filtered: false,
+        };
+      } catch (_) {}
       grid(sorted, true, 'Buscar en este canal…', 'mixed');
     };
     const cached = await kv.get('f:' + ch.id);
@@ -2073,6 +2151,17 @@ function seriesView(ch, s0, files) {
         (it) => it._sortDate ?? null
       );
       seriesQueue = sorted.map((it) => it._f).filter(Boolean);
+      try {
+        for (const it of sorted) {
+          if (it && it._f) { it._chId = ch.id; it._ch = ch; }
+        }
+        globalThis.__tgComicNav = {
+          chId: String(ch.id),
+          ids: seriesQueue.map((x) => String(x.id)),
+          files: seriesQueue.slice(),
+          filtered: false,
+        };
+      } catch (_) {}
       grid(sorted, true, 'Buscar en esta serie…', 'comics');
     };
     redraw();
