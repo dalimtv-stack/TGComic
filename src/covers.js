@@ -66,6 +66,29 @@ export function createCovers(state, d) {
   }
 
   async function getCover(ch, f, opts = {}) {
+    // WebP / 2400 / IA: si hay original, usar la portada del original (no generar ni cachear otra)
+    if (!opts.force && !opts._noRedirect) {
+      try {
+        const pq = parseQuality(sourceNameOf(f) || f?.name || '');
+        if (pq.ai || pq.q === 'mid' || pq.q === 'low') {
+          let all = [];
+          try { all = (await kv.get('f:' + ch.id)) || []; } catch (_) {}
+          const base = stripQualityTags(sourceNameOf(f) || f?.name || '').toLowerCase().replace(/\s+/g, ' ').trim();
+          let high = null;
+          for (const x of flattenVersions(all)) {
+            if (String(x.id) === String(f.id)) continue;
+            const pq2 = parseQuality(sourceNameOf(x) || x?.name || '');
+            const b2 = stripQualityTags(sourceNameOf(x) || x?.name || '').toLowerCase().replace(/\s+/g, ' ').trim();
+            if (b2 === base && !pq2.ai && pq2.q === 'high') { high = x; break; }
+          }
+          // variants embebidas
+          if (!high && f?.variants?.high) high = f.variants.high;
+          if (high && String(high.id) !== String(f.id)) {
+            return getCover(ch, high, { ...opts, _noRedirect: true });
+          }
+        }
+      } catch (_) {}
+    }
     const key = `c:${ch.id}:${f.id}`;
     if (opts.force) {
       try { await kv.del(key); } catch (_) {}
