@@ -33,7 +33,6 @@ export function createViews(d) {
     pref, setPref,
     appAlert, appConfirm, appPrompt,
     parseComicName, issueDisplay,
-    seriesBase,
     parseComicCaption,
     buildSearchIndex, filterSearchIndex,
   } = d;
