@@ -388,7 +388,7 @@ export function createInfoEdit(d) {
     return Array.isArray(L) ? L : [];
   };
 
-function showComicInfo(ch, f, displayTitle) {
+function showComicInfo(ch, f, displayTitle, opts = {}) {
   try {
     document.querySelector('.info-frame.comic-info')?.remove();
     const cap = parseComicCaption(f?.caption || '');
@@ -543,21 +543,27 @@ function showComicInfo(ch, f, displayTitle) {
       mid.append(fillBtn);
     }
     if (ch && f) {
-      navRow.append(prevBtn, mid, nextBtn);
-      body.append(navRow);
-      comicNeighbors(ch, f).then(({ prev, next }) => {
-        const wire = (btn, target) => {
-          if (!target) return;
-          const tCh = target.ch || ch;
-          const tF = target.f || target;
-          if (!tF) return;
-          btn.disabled = false;
-          btn.onclick = () => showComicInfo(tCh, tF, '');
-        };
-        wire(prevBtn, prev);
-        wire(nextBtn, next);
-        if (!prev && !next) { prevBtn.hidden = true; nextBtn.hidden = true; }
-      }).catch(() => { prevBtn.hidden = true; nextBtn.hidden = true; });
+      const hideNav = !!(opts && (opts.noNeighbors || opts.hideNeighbors));
+      if (hideNav) {
+        // Solo acciones centrales (Ficha Telegram, etc.), sin anterior/siguiente
+        if (mid.childNodes.length) body.append(mid);
+      } else {
+        navRow.append(prevBtn, mid, nextBtn);
+        body.append(navRow);
+        comicNeighbors(ch, f).then(({ prev, next }) => {
+          const wire = (btn, target) => {
+            if (!target) return;
+            const tCh = target.ch || ch;
+            const tF = target.f || target;
+            if (!tF) return;
+            btn.disabled = false;
+            btn.onclick = () => showComicInfo(tCh, tF, '', opts);
+          };
+          wire(prevBtn, prev);
+          wire(nextBtn, next);
+          if (!prev && !next) { prevBtn.hidden = true; nextBtn.hidden = true; }
+        }).catch(() => { prevBtn.hidden = true; nextBtn.hidden = true; });
+      }
     } else if (mid.childNodes.length) {
       body.append(mid);
     }
