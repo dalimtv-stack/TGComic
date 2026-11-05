@@ -222,11 +222,8 @@ export function createJobQueue({ el, pref }) {
     }
     // Subida local u otro: hace falta el File del dispositivo
     alert(
-      'Este trabajo necesita el archivo del dispositivo y no se puede reanudar solo.
-
-'
-      + 'Vuelve a Subir / Recargar el archivo.
-'
+      'Este trabajo necesita el archivo del dispositivo y no se puede reanudar solo.\n\n'
+      + 'Vuelve a Subir / Recargar el archivo.\n'
       + '(Las recargas CBR desde Telegram sí se pueden reanudar si se encolaron con datos persistidos.)'
     );
   }
