@@ -1,6 +1,6 @@
 import { isComicRead, getPageIndex, getPagesTotal, readProgress } from './progress.js';
 import * as sync from './sync.js';
-import { splitStats } from './quality.js';
+import { splitStats, flattenVersions, sourceNameOf, stripQualityTags } from './quality.js';
 
 /**
  * Información y edición: cómic, serie, canal, editorial; selectores de portada.
@@ -619,6 +619,84 @@ async function updateTelegramCaption(ch, f, caption) {
   f.caption = String(caption || '');
 }
 
+/** Base de calidad (sin [WebP]/[2400px]/…]) para agrupar versiones del mismo cómic. */
+function qualityBaseKey(f) {
+  try {
+    return stripQualityTags(sourceNameOf(f) || f?.name || '')
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .trim();
+  } catch (_) {
+    return String(f?.name || '').toLowerCase();
+  }
+}
+
+/** Todas las versiones del mismo cómic en el canal (alta/media/baja / IA). */
+function versionSiblings(allFiles, f) {
+  const base = qualityBaseKey(f);
+  if (!base) return flattenVersions([f]).filter(Boolean);
+  const flat = flattenVersions(allFiles || []);
+  const sibs = flat.filter((x) => qualityBaseKey(x) === base);
+  // Asegurar que el actual está incluido
+  if (!sibs.some((x) => String(x.id) === String(f?.id))) sibs.unshift(f);
+  return sibs.length ? sibs : [f];
+}
+
+function notifyLibraryChanged(detail = {}) {
+  try {
+    window.dispatchEvent(new CustomEvent('tgcomic:changed', { detail }));
+  } catch (_) {}
+}
+
+/**
+ * Aplica la ficha a todas las versiones del cómic.
+ * Cada versión conserva su propio «Nombre de archivo»; el resto de campos se igualan.
+ */
+async function updateCaptionOnAllVersions(ch, primary, fields, onStatus) {
+  if (!ch || !primary) return;
+  let files = [];
+  try { files = (await kv.get('f:' + ch.id)) || []; } catch (_) { files = []; }
+  const sibs = versionSiblings(files, primary);
+  const primaryId = String(primary.id);
+  for (let i = 0; i < sibs.length; i++) {
+    const sib = sibs[i];
+    if (!sib?.id) continue;
+    const prev = parseComicCaption(sib.caption || '');
+    let fileName;
+    if (String(sib.id) === primaryId) {
+      fileName = (fields.fileName != null && String(fields.fileName).trim())
+        ? String(fields.fileName).trim()
+        : (prev.fileName || sourceNameOf(sib) || sib.name || '');
+    } else {
+      // Otras versiones: no tocar Nombre de archivo
+      fileName = prev.fileName || sourceNameOf(sib) || sib.name || '';
+    }
+    const caption = buildComicCaption({
+      fileName,
+      titleEs: fields.titleEs ?? '',
+      originalTitle: fields.originalTitle ?? '',
+      series: fields.series ?? '',
+      writer: fields.writer ?? '',
+      artist: fields.artist ?? '',
+      publisher: fields.publisher ?? '',
+      date: fields.date ?? '',
+      description: fields.description ?? '',
+    });
+    try {
+      onStatus?.('Actualizando versión ' + (i + 1) + '/' + sibs.length + '…');
+    } catch (_) {}
+    await editCaptionWithFloodWait(ch, sib, caption, onStatus);
+    try { sib.caption = caption; } catch (_) {}
+    if (String(sib.id) === primaryId) {
+      try { primary.caption = caption; } catch (_) {}
+    }
+    if (i < sibs.length - 1) {
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  }
+}
+
+
 
 /** Formulario completo de ficha Telegram + Identificar (Comic Vine) */
 function showCaptionEditor(ch, f, after, opts = {}) {
@@ -799,7 +877,7 @@ function showCaptionEditor(ch, f, after, opts = {}) {
   const save = el('button', 'btn edit-save', 'Guardar en Telegram');
   save.onclick = async () => {
     // Guardar lo que hay en los inputs (según checks ya aplicados)
-    const caption = buildComicCaption({
+    const fields = {
       fileName: fileNameCtrl.inp.value,
       titleEs: titleEsCtrl.inp.value,
       originalTitle: origCtrl.inp.value,
@@ -809,32 +887,32 @@ function showCaptionEditor(ch, f, after, opts = {}) {
       publisher: pubCtrl.inp.value,
       date: dateCtrl.inp.value,
       description: descCtrl.inp.value,
-    });
+    };
+    const caption = buildComicCaption(fields);
     if (caption.length > 1024) {
       appAlert('El caption tiene ' + caption.length + ' caracteres (máx. 1024). Acorta la descripción.');
       return;
     }
     try {
       save.disabled = true;
-      await updateTelegramCaption(ch, f, caption);
-      // Tras guardar no cerrar: el usuario puede seguir editando o ir al siguiente
-      try {
-        // Actualizar f local por si se reabre Identificar
-        f.caption = caption;
-      } catch (_) {}
+      const h = head.querySelector('span');
+      const prevTitle = h ? h.textContent : '';
+      const statusFn = (msg) => {
+        try { if (h) h.textContent = String(msg || 'Guardando…'); } catch (_) {}
+      };
+      // Propaga ficha a todas las versiones (WebP / 2400px…); cada una conserva su Nombre de archivo
+      await updateCaptionOnAllVersions(ch, f, fields, statusFn);
+      try { f.caption = caption; } catch (_) {}
       try {
         const top = stack[stack.length - 1];
-        if (top && !top._isComic && !document.getElementById('rd')) {
-          top.scrollY = window.scrollY || document.documentElement.scrollTop || 0;
-          // no show() completo: evita cerrar el editor
-        }
+        if (top) top.scrollY = window.scrollY || document.documentElement.scrollTop || 0;
       } catch (_) {}
+      // Repintar listado (título bajo portada, etc.) sin cerrar el editor
+      notifyLibraryChanged({ chId: ch?.id, kind: 'caption', fileId: f?.id });
       try {
-        const h = head.querySelector('span');
         if (h) {
-          const prev = h.textContent;
           h.textContent = 'Guardado ✓';
-          setTimeout(() => { try { h.textContent = prev; } catch (_) {} }, 1400);
+          setTimeout(() => { try { h.textContent = prevTitle || 'Ficha Telegram'; } catch (_) {} }, 1400);
         }
       } catch (_) {}
     } catch (e) {
@@ -1287,6 +1365,8 @@ function showEditComicTitle(ch, f, currentLabel, after) {
         // No cerrar: permitir seguir editando / navegar entre cómics
         cancel.textContent = 'Salir';
         try { after?.(); } catch (_) {}
+        // Asegura repintado de la rejilla actual (canal/serie) sin salir
+        notifyLibraryChanged({ chId: ch?.id, kind: 'title', fileId: f?.id });
       });
     });
   };
