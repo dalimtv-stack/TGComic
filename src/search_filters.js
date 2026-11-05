@@ -285,6 +285,22 @@ export function createSearchFilters(d) {
     });
   }
 
+
+  function publishComicNav(list) {
+    try {
+      const items = (list || [])
+        .filter((it) => it && it.ch && it.f)
+        .map((it) => ({ ch: it.ch, f: it.f, chId: it.ch.id, id: it.f.id }));
+      globalThis.__tgComicNav = {
+        items,
+        ids: items.map((x) => String(x.id)),
+        files: items.map((x) => x.f),
+        filtered: true,
+        source: 'search_filters',
+      };
+    } catch (_) {}
+  }
+
   function sortResults(items, mode = filterState.sort) {
     const nat = natural || ((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' }));
     const list = (items || []).slice();
@@ -890,6 +906,7 @@ export function createSearchFilters(d) {
     const paintResultsOnly = () => {
       saveState();
       const filtered = sortResults(applyFilters(corpus, filterState), filterState.sort);
+      publishComicNav(filtered);
       const summary = root.querySelector('.sf-summary');
       const results = root.querySelector('.sf-results');
       if (!summary || !results) {
@@ -919,6 +936,7 @@ export function createSearchFilters(d) {
     const paint = (opts = {}) => {
       saveState();
       const filtered = sortResults(applyFilters(corpus, filterState), filterState.sort);
+      publishComicNav(filtered);
       const optsSel = buildFilterOptions(corpus);
       root.replaceChildren();
       root.className = 'sf-root';
