@@ -33,6 +33,7 @@ export function createViews(d) {
     pref, setPref,
     appAlert, appConfirm, appPrompt,
     parseComicName, issueDisplay,
+    seriesBase,
     parseComicCaption,
     buildSearchIndex, filterSearchIndex,
   } = d;
@@ -561,6 +562,170 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
     }
   }
 
+
+  /** Nombre de carpeta de serie para descarga en bloque (siempre, aunque haya un solo cómic). */
+  function seriesFolderForComic(ch, f) {
+    let series = '';
+    try {
+      if (typeof getComicSeriesOverride === 'function') {
+        const ov = getComicSeriesOverride(ch, f);
+        if (ov && String(ov).trim()) series = String(ov).trim();
+      }
+    } catch (_) {}
+    if (!series) {
+      try {
+        const src = typeof comicSourceName === 'function' ? comicSourceName(f) : (f?.name || '');
+        const p = typeof parseComicName === 'function' ? parseComicName(src, ch?.name) : null;
+        if (p?.series) series = String(p.series).trim();
+      } catch (_) {}
+    }
+    if (!series) {
+      try {
+        const src = typeof comicSourceName === 'function' ? comicSourceName(f) : (f?.name || '');
+        if (typeof seriesBase === 'function') series = String(seriesBase(src, ch?.name) || '').trim();
+      } catch (_) {}
+    }
+    if (!series) series = 'Sin serie';
+    try {
+      if (typeof seriesDisplayName === 'function') {
+        const shown = seriesDisplayName(ch, series);
+        if (shown && String(shown).trim()) series = String(shown).trim();
+      }
+    } catch (_) {}
+    return String(series).replace(/[\/\\?%*:|"<>]/g, '_').replace(/\s+/g, ' ').trim() || 'Sin serie';
+  }
+
+  /**
+   * Descarga en bloque.
+   * mode 'series': todos en la carpeta elegida.
+   * mode 'channel': crea subcarpeta por serie (aunque esté desagrupado o haya un solo número).
+   */
+  async function downloadComicsBulk(ch, fileList, { mode = 'series', seriesLabel = '' } = {}) {
+    const files = (fileList || []).filter(Boolean);
+    if (!ch || !files.length) {
+      await appAlert('No hay cómics para descargar.');
+      return;
+    }
+    const getMsg = d.getMsg;
+    const client = typeof d.client === 'function' ? d.client() : d.client;
+    const readyP = typeof d.ready === 'function' ? d.ready() : d.ready;
+    if (!getMsg || !client) {
+      await appAlert('Descarga no disponible en este contexto.');
+      return;
+    }
+
+    const canPickDir = typeof window.showDirectoryPicker === 'function'
+      && !(/iPhone|iPad|iPod/i.test(navigator.userAgent || ''));
+    if (!canPickDir) {
+      await appAlert(
+        'La descarga en bloque necesita el selector de carpeta del sistema (Chrome/Edge en PC o Android). '
+        + 'En iOS no está disponible: descarga los cómics uno a uno.'
+      );
+      return;
+    }
+
+    let dirHandle = null;
+    try {
+      dirHandle = await window.showDirectoryPicker({
+        mode: 'readwrite',
+        id: 'tgcomic-downloads-bulk',
+        startIn: 'downloads',
+      });
+    } catch (e) {
+      if (e?.name === 'AbortError') return;
+      await appAlert('No se pudo abrir el selector de carpeta: ' + (e?.message || e));
+      return;
+    }
+
+    const ok = await appConfirm(
+      'Se descargarán ' + files.length + ' cómic(s)'
+      + (mode === 'channel' ? ' en subcarpetas por serie' : '')
+      + '.\n¿Continuar?',
+      'Descarga en bloque'
+    );
+    if (!ok) return;
+
+    let statusFrame = null;
+    const closeStatus = () => { try { statusFrame?.remove(); } catch (_) {} statusFrame = null; };
+    const setStatus = (t) => {
+      try {
+        if (!statusFrame) {
+          statusFrame = el('div', 'info-frame');
+          const box = el('div', 'info-box');
+          const head = el('div', 'info-head');
+          head.append(el('span', '', 'Descarga en bloque'));
+          const body = el('div', 'info-body');
+          body.append(el('p', 'cover-pick-hint dl-status', t));
+          box.append(head, body);
+          statusFrame.append(box);
+          document.body.append(statusFrame);
+        } else {
+          const p = statusFrame.querySelector('.dl-status');
+          if (p) p.textContent = t;
+        }
+      } catch (_) {}
+    };
+
+    const dirCache = new Map();
+    const ensureSubdir = async (name) => {
+      const key = String(name || 'Sin serie');
+      if (dirCache.has(key)) return dirCache.get(key);
+      const h = await dirHandle.getDirectoryHandle(key, { create: true });
+      dirCache.set(key, h);
+      return h;
+    };
+
+    if (readyP && typeof readyP.then === 'function') await readyP;
+
+    let okN = 0, failN = 0;
+    const errors = [];
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      const label = comicDownloadName(f);
+      try {
+        setStatus('(' + (i + 1) + '/' + files.length + ') ' + label + '\nObteniendo…');
+        const m = await getMsg(ch, f);
+        if (!m?.media && !m?.document) throw new Error('Sin archivo');
+        const size = Number(f?.size || (m.document?.size != null ? m.document.size.toString() : 0) || 0);
+        const buf = await client.downloadMedia(m.media || m, {
+          workers: 4,
+          progressCallback: (got) => {
+            const n = Number(got?.toString?.() ?? got);
+            if (size > 0 && n >= 0) {
+              setStatus(
+                '(' + (i + 1) + '/' + files.length + ') ' + label
+                + '\nDescargando… ' + Math.min(100, Math.round((n / size) * 100)) + '%'
+              );
+            }
+          },
+        });
+        if (!buf) throw new Error('Descarga vacía');
+        const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+        const blob = new Blob([u8], { type: 'application/octet-stream' });
+        let targetDir = dirHandle;
+        if (mode === 'channel') {
+          const folder = seriesFolderForComic(ch, f);
+          targetDir = await ensureSubdir(folder);
+        }
+        setStatus('(' + (i + 1) + '/' + files.length + ') Guardando ' + label + '…');
+        const fh = await targetDir.getFileHandle(label, { create: true });
+        const w = await fh.createWritable();
+        await w.write(blob);
+        await w.close();
+        okN++;
+      } catch (e) {
+        failN++;
+        errors.push(label + ': ' + (e?.message || e));
+        console.warn('[download bulk]', e);
+      }
+    }
+    closeStatus();
+    let msg = 'Listo. OK: ' + okN + ' · Fallos: ' + failN;
+    if (errors.length) msg += '\n\n' + errors.slice(0, 8).join('\n');
+    if (errors.length > 8) msg += '\n…';
+    await appAlert(msg, 'Descarga en bloque');
+  }
+
   /** Submenú de serie: Información · Editar TODA la serie · Marcar · Desagrupar/Agrupar · Añadir versión WebP (+ Bloquear aparte) */
   function seriesSheetOpts(ch, seriesLabel, fs, redraw, { groupState = 'grouped', afterBack = null } = {}) {
     const back = afterBack || redraw;
@@ -612,6 +777,9 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
     opts.push(['Añadir versión WebP', () => {
       try { repackTool?.offerWebpVersionSeries?.(ch, seriesLabel, files); }
       catch (e) { appAlert(e?.message || e); }
+    }]);
+    opts.push(['Descargar en bloque', () => {
+      downloadComicsBulk(ch, files, { mode: 'series', seriesLabel });
     }]);
     return opts;
   }
@@ -1762,6 +1930,9 @@ function channelsView(g) {
             ['Añadir versión WebP', () => {
               try { repackTool?.offerWebpVersionChannel?.(ch, files); }
               catch (e) { appAlert(e?.message || e); }
+            }],
+            ['Descargar en bloque', () => {
+              downloadComicsBulk(ch, files, { mode: 'channel' });
             }],
             ...lockToggleOpts('channel', ch, label, () => build()),
             ];
