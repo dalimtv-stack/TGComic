@@ -15,6 +15,11 @@ export function createJobQueue({ el, pref }) {
   let abortCbs = [];
   let currentCtrl = null;
   let listeners = new Set();
+  /** Factories para reanudar trabajos tras recargar (type → async (persist) => runFn|null) */
+  const factories = new Map();
+  function registerFactory(type, fn) {
+    if (type && typeof fn === 'function') factories.set(String(type), fn);
+  }
   // Iconos Material Design Icons (mdi-pause / mdi-square / mdi-play)
   const ICON = {
     pause: 'M14,19H18V5H14M6,19H10V5H6V19Z',
@@ -31,7 +36,9 @@ export function createJobQueue({ el, pref }) {
         if (j.status === 'running' || j.status === 'paused' || j.status === 'pending') {
           j.status = 'interrupted';
           if (!j.error) {
-            j.error = 'Interrumpido al cerrar (no se puede reanudar; vuelve a encolar el archivo)';
+            j.error = j.persist?.type
+            ? 'Interrumpido al cerrar — pulsa Reanudar'
+            : 'Interrumpido al cerrar (archivo local perdido; vuelve a Subir)';
           }
         }
         return j;
@@ -119,9 +126,13 @@ export function createJobQueue({ el, pref }) {
 
   function enqueue(job) {
     const id = job.id || (`job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
+    // persist = datos serializables para reanudar tras cerrar (sin File)
+    const persist = job.persist && typeof job.persist === 'object'
+      ? { ...job.persist, type: job.persist.type || job.type || null }
+      : null;
     const row = {
       id,
-      type: job.type || 'job',
+      type: job.type || (persist && persist.type) || 'job',
       label: job.label || id,
       status: 'pending',
       attempts: 0,
@@ -132,6 +143,8 @@ export function createJobQueue({ el, pref }) {
       error: null,
       progress: 0,
       log: [],
+      persist,
+      resumable: !!persist,
       _run: job.run,
       _ephemeral: true,
     };
@@ -167,22 +180,55 @@ export function createJobQueue({ el, pref }) {
     pump();
   }
 
-  function retry(id) {
+  async function retry(id) {
     const j = jobs.find((x) => x.id === id);
     if (!j) return;
-    if (typeof j._run !== 'function') {
-      // No se puede reintentar sin el File en memoria: eliminar de la cola
-      jobs = jobs.filter((x) => x.id !== id);
+    if (typeof j._run === 'function') {
+      j.status = 'pending';
+      j.error = null;
+      j.progress = 0;
+      j.attempts = 0;
       emit();
-      alert('Ese trabajo ya no se puede reintentar (se perdió al recargar). Vuelve a Subir / Recargar el archivo.');
+      pump();
       return;
     }
-    j.status = 'pending';
-    j.error = null;
-    j.progress = 0;
-    j.attempts = 0;
-    emit();
-    pump();
+    // Reanudar desde persist + factory (p.ej. recarga CBR desde Telegram)
+    const ptype = j.persist?.type || j.type;
+    const factory = ptype ? factories.get(String(ptype)) : null;
+    if (factory && j.persist) {
+      try {
+        j.error = null;
+        j.status = 'pending';
+        j.progress = 0;
+        emit();
+        const run = await factory(j.persist, j);
+        if (typeof run !== 'function') {
+          j.status = 'interrupted';
+          j.error = 'No se pudo reconstruir el trabajo (¿canal o mensaje borrado?)';
+          emit();
+          return;
+        }
+        j._run = run;
+        j.attempts = 0;
+        emit();
+        pump();
+        return;
+      } catch (e) {
+        j.status = 'interrupted';
+        j.error = e?.message || String(e);
+        emit();
+        return;
+      }
+    }
+    // Subida local u otro: hace falta el File del dispositivo
+    alert(
+      'Este trabajo necesita el archivo del dispositivo y no se puede reanudar solo.
+
+'
+      + 'Vuelve a Subir / Recargar el archivo.
+'
+      + '(Las recargas CBR desde Telegram sí se pueden reanudar si se encolaron con datos persistidos.)'
+    );
   }
 
   function remove(id) {
@@ -618,11 +664,12 @@ export function createJobQueue({ el, pref }) {
       label.textContent = '[' + st + '] ' + job.label + (job.error ? ' — ' + job.error : '');
       row.append(label);
       if (st === 'error' || st === 'interrupted' || st === 'cancelled') {
-        // Tras recargar no hay File: Reintentar solo si el runner sigue en memoria
-        if (typeof job._run === 'function') {
-          const rt = el('button', 'btn repack-min', 'Reintentar');
+        const canResume = typeof job._run === 'function'
+          || !!(job.persist?.type && factories.has(String(job.persist.type)));
+        if (canResume) {
+          const rt = el('button', 'btn repack-min', typeof job._run === 'function' ? 'Reintentar' : 'Reanudar');
           rt.type = 'button';
-          rt.onclick = () => retry(job.id);
+          rt.onclick = () => { try { retry(job.id); } catch (_) {} };
           row.append(rt);
         }
         const rm = el('button', 'btn repack-min', 'Quitar');
@@ -662,7 +709,11 @@ export function createJobQueue({ el, pref }) {
   for (const j of jobs) {
     if (j.status === 'running' || j.status === 'paused' || j.status === 'pending') {
       j.status = 'interrupted';
-      if (!j.error) j.error = 'Interrumpido al cerrar (no se puede reanudar)';
+      if (!j.error) {
+        j.error = j.persist?.type
+          ? 'Interrumpido al cerrar — pulsa Reanudar'
+          : 'Interrumpido al cerrar (archivo local perdido)';
+      }
     }
   }
   save();
@@ -725,6 +776,7 @@ export function createJobQueue({ el, pref }) {
     clearInterrupted,
     clearInactive,
     clearSmart,
+    registerFactory,
     failedJobs,
     getState,
     onChange,

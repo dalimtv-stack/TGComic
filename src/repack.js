@@ -994,9 +994,36 @@ export function createRepackTool(d) {
     if (jobQueue && typeof jobQueue.enqueue === 'function' && selected.length) {
       try {
         for (const item of selected) {
+          // Datos serializables para reanudar tras cerrar el navegador
+          const persist = {
+            type: 'repack',
+            chId: String(item.ch?.id ?? ''),
+            fileId: item.f?.id,
+            fileName: item.f?.name || '',
+            outName: item.outName || item.f?.name || '',
+            asWebp: !!(item.asWebp) || !!asWebp,
+            webpOpts: (item.webpOpts || webpOpts) && typeof (item.webpOpts || webpOpts) === 'object'
+              ? { ...(item.webpOpts || webpOpts) }
+              : {},
+            deleteOriginal: !!deleteOriginal,
+            caption: item.caption || item.f?.caption || '',
+            outputs: Array.isArray(item.outputs)
+              ? item.outputs.map((o) => ({
+                  outName: o.outName,
+                  asWebp: !!o.asWebp,
+                  webpOpts: o.webpOpts && typeof o.webpOpts === 'object' ? { ...o.webpOpts } : {},
+                  caption: o.caption || '',
+                }))
+              : null,
+          };
+          const label = (Array.isArray(item.outputs) && item.outputs[0]?.outName)
+            || item.outName
+            || item.f?.name
+            || 'repack';
           jobQueue.enqueue({
             type: 'repack',
-            label: item.outName || item.f?.name || 'repack',
+            label,
+            persist,
             run: async (ctx) => {
               await work(item, ctx);
               try { ctx.setProgress(100); } catch (_) {}
@@ -1771,6 +1798,64 @@ export function createRepackTool(d) {
     document.body.append(frame);
   }
 
+  /** Reconstruir runner tras cerrar el navegador (archivo sigue en Telegram). */
+  async function resumeFromPersist(persist) {
+    if (!persist || String(persist.type) !== 'repack') return null;
+    const lib = Array.isArray(getLIB()) ? getLIB() : [];
+    const ch = lib.find((c) => String(c.id) === String(persist.chId));
+    if (!ch) throw new Error('Canal no encontrado en la biblioteca');
+    let files = [];
+    try { files = await fetchFiles(ch); } catch (_) {
+      try { files = (await kv.get('f:' + ch.id)) || []; } catch (_) { files = []; }
+    }
+    const fid = persist.fileId;
+    const f = (files || []).find((x) => String(x.id) === String(fid))
+      || (files || []).find((x) => String(x.name || '') === String(persist.fileName || ''));
+    if (!f) throw new Error('Mensaje/archivo no encontrado en el canal (¿ya se borró o convirtió?)');
+    const asWebp = !!persist.asWebp;
+    const webpOpts = persist.webpOpts && typeof persist.webpOpts === 'object' ? persist.webpOpts : {};
+    const deleteOriginal = !!persist.deleteOriginal;
+    const item = {
+      ch,
+      f,
+      outName: persist.outName || f.name,
+      asWebp,
+      webpOpts,
+      caption: persist.caption || f.caption || '',
+    };
+    if (Array.isArray(persist.outputs) && persist.outputs.length) {
+      item.outputs = persist.outputs.map((o) => ({
+        outName: o.outName,
+        asWebp: !!o.asWebp,
+        webpOpts: o.webpOpts || {},
+        caption: o.caption || persist.caption || f.caption || '',
+      }));
+    }
+    return async (ctx) => {
+      abort = false;
+      try { ctx.onAbort?.(() => { abort = true; }); } catch (_) {}
+      const onStatus = (m) => { try { ctx.log(m); } catch (_) {} };
+      const onProgress = (p) => { try { ctx.setProgress?.(p); } catch (_) {} };
+      await processOne(
+        { ...item, asWebp, webpOpts },
+        deleteOriginal,
+        asWebp,
+        onStatus,
+        webpOpts,
+        onProgress
+      );
+      try { ctx.setProgress(100); } catch (_) {}
+    };
+  }
+
+  try {
+    if (jobQueue && typeof jobQueue.registerFactory === 'function') {
+      jobQueue.registerFactory('repack', (persist) => resumeFromPersist(persist));
+    }
+  } catch (e) {
+    console.warn('[repack] registerFactory', e);
+  }
+
   return {
     offerWebpVersionSeries,
     offerWebpVersionChannel,
@@ -1780,5 +1865,6 @@ export function createRepackTool(d) {
     syncFloatingUi,
     offerWebpVersion,
     suggestUploadName,
+    resumeFromPersist,
   };
 }
