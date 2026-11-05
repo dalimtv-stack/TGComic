@@ -548,12 +548,14 @@ function showComicInfo(ch, f, displayTitle) {
       comicNeighbors(ch, f).then(({ prev, next }) => {
         const wire = (btn, target) => {
           if (!target) return;
+          const tCh = target.ch || ch;
+          const tF = target.f || target;
+          if (!tF) return;
           btn.disabled = false;
-          btn.onclick = () => showComicInfo(ch, target, '');
+          btn.onclick = () => showComicInfo(tCh, tF, '');
         };
         wire(prevBtn, prev);
         wire(nextBtn, next);
-        // Sin vecinos: no mostrar las flechas (deja solo los botones de acción)
         if (!prev && !next) { prevBtn.hidden = true; nextBtn.hidden = true; }
       }).catch(() => { prevBtn.hidden = true; nextBtn.hidden = true; });
     } else if (mid.childNodes.length) {
@@ -572,9 +574,30 @@ function showComicInfo(ch, f, displayTitle) {
 
 /** Cómic anterior / siguiente dentro de su serie (o del canal si no tiene serie con más números). */
 async function comicNeighbors(ch, f) {
-  // 1) Orden de la rejilla actual (incluye filtro de búsqueda)
+  // 1) Orden de la lista visible (rejilla filtrada o buscador avanzado)
+  //    Preferir siempre __tgComicNav si el cómic actual está en esa lista.
   try {
     const nav = globalThis.__tgComicNav;
+    const items = Array.isArray(nav?.items) ? nav.items : null;
+    if (items && items.length) {
+      const i = items.findIndex((x) =>
+        String(x?.ch?.id ?? x?.chId) === String(ch.id)
+        && String(x?.f?.id ?? x?.id) === String(f.id)
+      );
+      if (i >= 0) {
+        const at = (idx) => {
+          if (idx < 0 || idx >= items.length) return null;
+          const it = items[idx];
+          if (!it) return null;
+          return {
+            f: it.f || it,
+            ch: it.ch || ch,
+          };
+        };
+        return { prev: at(i - 1), next: at(i + 1) };
+      }
+    }
+    // Formato antiguo: ids del mismo canal
     if (nav && Array.isArray(nav.ids) && nav.ids.length
         && (!nav.chId || String(nav.chId) === String(ch.id))) {
       const ids = nav.ids.map(String);
@@ -587,7 +610,8 @@ async function comicNeighbors(ch, f) {
         for (const x of flattenVersions(all)) filesMap.set(String(x.id), x);
         const at = (idx) => {
           if (idx < 0 || idx >= ids.length) return null;
-          return filesMap.get(ids[idx]) || null;
+          const ff = filesMap.get(ids[idx]);
+          return ff ? { f: ff, ch } : null;
         };
         return { prev: at(i - 1), next: at(i + 1) };
       }
@@ -598,7 +622,7 @@ async function comicNeighbors(ch, f) {
   try { files = (await kv.get('f:' + ch.id)) || []; } catch (_) {}
   if (!Array.isArray(files) || !files.length) return { prev: null, next: null };
 
-  // 2) Orden de serie con preferencia del usuario
+  // 2) Orden de serie con preferencia del usuario (solo si no hay lista visible)
   let list = [];
   try {
     const groups = groupSeries(files, ch.name, seriesOverrideFor(ch));
@@ -620,7 +644,8 @@ async function comicNeighbors(ch, f) {
   }
   const i = list.findIndex((x) => String(x.id) === String(f.id));
   if (i < 0) return { prev: null, next: null };
-  return { prev: i > 0 ? list[i - 1] : null, next: i < list.length - 1 ? list[i + 1] : null };
+  const wrap = (ff) => (ff ? { f: ff, ch } : null);
+  return { prev: wrap(i > 0 ? list[i - 1] : null), next: wrap(i < list.length - 1 ? list[i + 1] : null) };
 }
 
 /** Texto «Versiones» para Información del cómic. */
@@ -1009,10 +1034,13 @@ function showCaptionEditor(ch, f, after, opts = {}) {
     comicNeighbors(ch, f).then(({ prev, next }) => {
       const openNeighbor = (target) => {
         if (!target) return;
+        const tCh = target.ch || ch;
+        const tF = target.f || target;
+        if (!tF) return;
         frame.remove();
-        showCaptionEditor(ch, target, () => showComicInfo(ch, target, ''), {
+        showCaptionEditor(tCh, tF, () => showComicInfo(tCh, tF, ''), {
           ...opts,
-          onClose: () => showComicInfo(ch, target, ''),
+          onClose: () => showComicInfo(tCh, tF, ''),
         });
       };
       if (prev) {
