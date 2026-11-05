@@ -1508,9 +1508,24 @@ export function createUploadTool(d) {
           };
 
           if (jobQueue && typeof jobQueue.enqueue === 'function') {
+            const persist = {
+              type: 'upload',
+              outName,
+              caption: captionText,
+              fileName: fileRef?.name || outName,
+              fileSize: Number(fileRef?.size) || 0,
+              lastModified: Number(fileRef?.lastModified) || 0,
+              channelName: chName,
+              editorial: ed,
+              wantMid: !!wantMid,
+              wantLow: !!wantLow,
+              quality: quality,
+            };
             jobQueue.enqueue({
               id: 'upload:' + outName + ':' + Date.now() + ':' + Math.random().toString(36).slice(2, 6),
               label: outName,
+              type: 'upload',
+              persist,
               run: runOne,
             });
           } else {
@@ -1599,6 +1614,98 @@ export function createUploadTool(d) {
       else syncFloatingUi();
     });
   } catch (_) {}
+
+
+  /** Reanudar subida local: el usuario debe volver a elegir el archivo (mismo nombre/tamaño si es posible). */
+  function pickFileForResume(persist) {
+    return new Promise((resolve) => {
+      const inp = document.createElement('input');
+      inp.type = 'file';
+      inp.accept = '.cbz,.cbr,.zip,.rar,application/zip,application/x-rar-compressed,*/*';
+      const want = String(persist?.fileName || persist?.outName || '').trim();
+      const size = Number(persist?.fileSize) || 0;
+      inp.onchange = () => {
+        const f = inp.files && inp.files[0];
+        if (!f) { resolve(null); return; }
+        resolve(f);
+      };
+      try { inp.click(); } catch (_) { resolve(null); }
+      // Si cancela, no hay evento fiable en todos los navegadores
+      setTimeout(() => {}, 0);
+    });
+  }
+
+  function registerUploadFactory() {
+    if (!jobQueue || typeof jobQueue.registerFactory !== 'function') return;
+    jobQueue.registerFactory('upload', async (persist) => {
+      if (!persist || persist.type !== 'upload') return null;
+      const file = await pickFileForResume(persist);
+      if (!file) return null;
+      const outName = persist.outName || ensureCbzName(file.name, false, false);
+      const captionText = persist.caption || buildComicCaption({ fileName: outName });
+      const chName = persist.channelName || '';
+      const ed = persist.editorial || 'Sin editorial';
+      const quality = persist.quality > 0 && persist.quality <= 1 ? persist.quality : 0.40;
+      const wantMid = !!persist.wantMid;
+      const wantLow = !!persist.wantLow;
+      const variants = [];
+      variants.push({ outName, asWebp: false });
+      if (wantMid) {
+        variants.push({
+          outName: ensureCbzName(String(outName).replace(/\.cbz$/i, ''), true, false),
+          asWebp: true,
+          webpOpts: { quality, maxEdge: 0 },
+        });
+      }
+      if (wantLow) {
+        variants.push({
+          outName: ensureCbzName(String(outName).replace(/\.cbz$/i, ''), true, true),
+          asWebp: true,
+          webpOpts: { quality, maxEdge: 2400 },
+        });
+      }
+
+      return async (ctx) => {
+        const st = (msg) => { try { ctx.log(msg); } catch (_) {} };
+        let ch = null;
+        try {
+          await getReady();
+          ch = await ensureChannel(chName, ed, st);
+          if (!ch) throw new Error('No se pudo crear/obtener el canal');
+          st('[' + outName + '] Convirtiendo a CBZ si hace falta…');
+          let baseCbz = await localFileToCbzBlob(file, st, { asWebp: false });
+          if (!baseCbz || !baseCbz.size) throw new Error('CBZ vacío');
+          const uploadedNames = [];
+          for (let vi = 0; vi < variants.length; vi++) {
+            const v = variants[vi];
+            if (ctx.isAborted?.()) throw Object.assign(new Error('cancelado'), { cancelled: true });
+            await ctx.waitWhilePaused?.();
+            let blob = baseCbz;
+            if (v.asWebp) {
+              st('[' + v.outName + '] Convirtiendo a WebP…');
+              blob = await localFileToCbzBlob(baseCbz, st, { asWebp: true, webpOpts: v.webpOpts });
+            }
+            st('[' + v.outName + '] Subiendo…');
+            await uploadCbz(ch, v.outName, blob, captionForVariant(captionText, v.outName), st);
+            uploadedNames.push(v.outName);
+            try { await fetchFiles?.(ch); } catch (_) {}
+          }
+          baseCbz = null;
+          try {
+            if (typeof onUploadDone === 'function') {
+              await onUploadDone(ch, { outName, outNames: uploadedNames.slice() });
+            }
+          } catch (_) {}
+          ctx.setProgress?.(100);
+        } catch (e) {
+          if (e?.cancelled) throw e;
+          try { if (ch) await postErrorPlaceholder(ch, outName, e?.message || e); } catch (_) {}
+          throw e;
+        }
+      };
+    });
+  }
+  try { registerUploadFactory(); } catch (e) { console.warn('[upload] factory', e); }
 
   return {
     showUploadFrame,
