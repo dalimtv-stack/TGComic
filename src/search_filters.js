@@ -691,10 +691,10 @@ export function createSearchFilters(d) {
       };
       row.oncontextmenu = (ev) => {
         try { ev.preventDefault(); ev.stopPropagation(); } catch (_) {}
-        openComicMenu(it);
+        openComicMenu(it, null, listCtx);
       };
       if (typeof bindLongPress === 'function') {
-        bindLongPress(row, () => openComicMenu(it));
+        bindLongPress(row, () => openComicMenu(it, null, listCtx));
       }
 
       block.append(row, nest);
@@ -913,6 +913,7 @@ export function createSearchFilters(d) {
     const paintResultsOnly = () => {
       saveState();
       const filtered = sortResults(applyFilters(corpus, filterState), filterState.sort);
+      try { publishComicNav(filtered); } catch (_) {}
       const summary = root.querySelector('.sf-summary');
       const results = root.querySelector('.sf-results');
       if (!summary || !results) {
@@ -942,6 +943,7 @@ export function createSearchFilters(d) {
     const paint = (opts = {}) => {
       saveState();
       const filtered = sortResults(applyFilters(corpus, filterState), filterState.sort);
+      try { publishComicNav(filtered); } catch (_) {}
       const optsSel = buildFilterOptions(corpus);
       root.replaceChildren();
       root.className = 'sf-root';
