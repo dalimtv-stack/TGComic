@@ -522,8 +522,13 @@ export function createSearchFilters(d) {
     let unmountHead = null;
     let filtersCollapsed = !!filterState.filtersCollapsed;
 
-    const openComicMenu = (it, fileOverride) => {
+    const openComicMenu = (it, fileOverride, listCtx) => {
       const f = fileOverride || it.f;
+      // Fijar navegación Info/Ficha al orden visible de ESTE bloque (serie / resultados)
+      try {
+        if (Array.isArray(listCtx) && listCtx.length) publishComicNav(listCtx);
+        else if (it?.ch && it?.f) publishComicNav([it]);
+      } catch (_) {}
       if (typeof sheet !== 'function' || typeof comicSheetOpts !== 'function') return;
       const title = itemTitle(it.ch, f);
       const opts = comicSheetOpts(it.ch, f, title, () => paintUI(entry, corpus));
@@ -549,7 +554,7 @@ export function createSearchFilters(d) {
     };
 
         /** Fila de cómic: click = desplegar versiones (Original primero). Long-press/derecho = menú. */
-    const paintComicRow = (host, it, queue) => {
+    const paintComicRow = (host, it, queue, listCtx) => {
       const block = el('div', 'sf-comic-block');
       const row = el('button', 'sf-comic-row');
       row.type = 'button';
@@ -638,10 +643,10 @@ export function createSearchFilters(d) {
         };
         vr.oncontextmenu = (ev) => {
           try { ev.preventDefault(); ev.stopPropagation(); } catch (_) {}
-          openComicMenu(it, isOriginal ? null : src);
+          openComicMenu(it, isOriginal ? null : src, listCtx);
         };
         if (typeof bindLongPress === 'function') {
-          bindLongPress(vr, () => openComicMenu(it, isOriginal ? null : src));
+          bindLongPress(vr, () => openComicMenu(it, isOriginal ? null : src, listCtx));
         }
         nest.append(vr);
       };
@@ -697,9 +702,11 @@ export function createSearchFilters(d) {
     };
 
     const paintComicsList = (host, list) => {
+      // Orden de navegación = lo que se ve en este bloque (serie / lista plana)
+      try { publishComicNav(list); } catch (_) {}
       // Cola de lectura: originales; al abrir una variante se pasa ese file concreto
       const queue = list.map((it) => it.f);
-      for (const it of list) paintComicRow(host, it, queue);
+      for (const it of list) paintComicRow(host, it, queue, list);
     };
 
     /** Cabecera de serie + tamaño solo originales. */
@@ -906,7 +913,6 @@ export function createSearchFilters(d) {
     const paintResultsOnly = () => {
       saveState();
       const filtered = sortResults(applyFilters(corpus, filterState), filterState.sort);
-      publishComicNav(filtered);
       const summary = root.querySelector('.sf-summary');
       const results = root.querySelector('.sf-results');
       if (!summary || !results) {
@@ -936,7 +942,6 @@ export function createSearchFilters(d) {
     const paint = (opts = {}) => {
       saveState();
       const filtered = sortResults(applyFilters(corpus, filterState), filterState.sort);
-      publishComicNav(filtered);
       const optsSel = buildFilterOptions(corpus);
       root.replaceChildren();
       root.className = 'sf-root';
