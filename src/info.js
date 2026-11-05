@@ -1,6 +1,6 @@
 import { isComicRead, getPageIndex, getPagesTotal, readProgress } from './progress.js';
 import * as sync from './sync.js';
-import { splitStats, flattenVersions, sourceNameOf, stripQualityTags } from './quality.js';
+import { splitStats, flattenVersions, sourceNameOf, stripQualityTags, parseQuality } from './quality.js';
 
 /**
  * Información y edición: cómic, serie, canal, editorial; selectores de portada.
@@ -479,6 +479,17 @@ function showComicInfo(ch, f, displayTitle) {
     body.append(row('Tamaño', formatBytes(f?.size)));
     body.append(row('Páginas', pagesLabel));
     body.append(row('Formato pág.', pageFmt));
+    const verRow = row('Versiones', '…');
+    body.append(verRow);
+    (async () => {
+      try {
+        let allFiles = [];
+        try { allFiles = (await kv.get('f:' + ch.id)) || []; } catch (_) {}
+        const lab = comicVersionsLabel(allFiles, f);
+        const val = verRow.querySelector('.info-value');
+        if (val) val.textContent = lab;
+      } catch (_) {}
+    })();
     // Ficha "completa" = hay algo más que solo Nombre de archivo
     const hasExtraFicha = !!(cap.titleEs || cap.originalTitle || cap.series || cap.writer || cap.artist || cap.publisher || cap.date || cap.description);
     const hasAnyFicha = !!(cap.fileName || hasExtraFicha);
@@ -561,14 +572,45 @@ function showComicInfo(ch, f, displayTitle) {
 
 /** Cómic anterior / siguiente dentro de su serie (o del canal si no tiene serie con más números). */
 async function comicNeighbors(ch, f) {
+  // 1) Orden de la rejilla actual (incluye filtro de búsqueda)
+  try {
+    const nav = globalThis.__tgComicNav;
+    if (nav && Array.isArray(nav.ids) && nav.ids.length
+        && (!nav.chId || String(nav.chId) === String(ch.id))) {
+      const ids = nav.ids.map(String);
+      const i = ids.indexOf(String(f.id));
+      if (i >= 0) {
+        const filesMap = new Map();
+        for (const x of (nav.files || [])) filesMap.set(String(x.id), x);
+        let all = [];
+        try { all = (await kv.get('f:' + ch.id)) || []; } catch (_) {}
+        for (const x of flattenVersions(all)) filesMap.set(String(x.id), x);
+        const at = (idx) => {
+          if (idx < 0 || idx >= ids.length) return null;
+          return filesMap.get(ids[idx]) || null;
+        };
+        return { prev: at(i - 1), next: at(i + 1) };
+      }
+    }
+  } catch (_) {}
+
   let files = [];
   try { files = (await kv.get('f:' + ch.id)) || []; } catch (_) {}
   if (!Array.isArray(files) || !files.length) return { prev: null, next: null };
+
+  // 2) Orden de serie con preferencia del usuario
   let list = [];
   try {
     const groups = groupSeries(files, ch.name, seriesOverrideFor(ch));
     const g = groups.find((x) => x.files.some((y) => String(y.id) === String(f.id)));
-    if (g) list = g.files;
+    if (g) {
+      list = g.files;
+      try {
+        if (typeof globalThis.__tgSortSeriesFiles === 'function') {
+          list = globalThis.__tgSortSeriesFiles(ch, g.label, g.files) || list;
+        }
+      } catch (_) {}
+    }
   } catch (_) {}
   if (list.length < 2) {
     list = files.slice().sort((a, b) => natural(
@@ -579,6 +621,38 @@ async function comicNeighbors(ch, f) {
   const i = list.findIndex((x) => String(x.id) === String(f.id));
   if (i < 0) return { prev: null, next: null };
   return { prev: i > 0 ? list[i - 1] : null, next: i < list.length - 1 ? list[i + 1] : null };
+}
+
+/** Texto «Versiones» para Información del cómic. */
+function comicVersionsLabel(allFiles, f) {
+  try {
+    const base = stripQualityTags(sourceNameOf(f) || f?.name || '')
+      .toLowerCase().replace(/\s+/g, ' ').trim();
+    const flat = flattenVersions(allFiles || [f]);
+    const sibs = base
+      ? flat.filter((x) => stripQualityTags(sourceNameOf(x) || x?.name || '')
+          .toLowerCase().replace(/\s+/g, ' ').trim() === base)
+      : [f];
+    let has2400 = false, hasWebp = false, aiN = 0;
+    for (const s of sibs) {
+      const pq = parseQuality(sourceNameOf(s) || s?.name || '');
+      if (pq.ai) aiN += 1;
+      else if (pq.q === 'low') has2400 = true;
+      else if (pq.q === 'mid') hasWebp = true;
+    }
+    if (f?.variants) {
+      if (f.variants.low) has2400 = true;
+      if (f.variants.mid) hasWebp = true;
+    }
+    if (Array.isArray(f?.ai)) aiN = Math.max(aiN, f.ai.length);
+    const parts = [];
+    if (has2400) parts.push('2400px');
+    if (hasWebp) parts.push('Webp');
+    if (aiN > 0) parts.push(aiN === 1 ? '1 versión IA' : (aiN + ' versiones IA'));
+    return parts.length ? parts.join(', ') : 'Ninguna';
+  } catch (_) {
+    return 'Ninguna';
+  }
 }
 
 function existingSeriesLabels(ch, files) {
