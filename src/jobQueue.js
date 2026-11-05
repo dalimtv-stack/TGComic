@@ -27,9 +27,12 @@ export function createJobQueue({ el, pref }) {
     try {
       const raw = JSON.parse(localStorage.getItem(STORE) || '[]');
       jobs = Array.isArray(raw) ? raw.map((j) => {
-        // No se puede reanudar File: marcar pending/running sin runner como interrupted
-        if (j.status === 'running' || (j.status === 'pending' && !j._ephemeral)) {
-          if (j.status === 'running') j.status = 'interrupted';
+        // Tras cerrar el navegador no quedan File/_run: nada pending/running/paused es reanudable
+        if (j.status === 'running' || j.status === 'paused' || j.status === 'pending') {
+          j.status = 'interrupted';
+          if (!j.error) {
+            j.error = 'Interrumpido al cerrar (no se puede reanudar; vuelve a encolar el archivo)';
+          }
         }
         return j;
       }) : [];
@@ -561,11 +564,15 @@ export function createJobQueue({ el, pref }) {
     if (btnStopEl) btnStopEl.disabled = !jobs.some((x) => x.status === 'running');
     if (btnClear) {
       const hasDone = jobs.some((x) => x.status === 'done');
-      const hasFail = jobs.some((x) => x.status === 'error' || x.status === 'interrupted' || x.status === 'cancelled');
+      const hasIntr = jobs.some((x) => x.status === 'interrupted' || x.status === 'cancelled');
+      const hasErr = jobs.some((x) => x.status === 'error');
       if (hasDone) {
         btnClear.hidden = false;
         btnClear.textContent = 'Limpiar completados';
-      } else if (hasFail) {
+      } else if (hasIntr) {
+        btnClear.hidden = false;
+        btnClear.textContent = 'Limpiar interrumpidos';
+      } else if (hasErr) {
         btnClear.hidden = false;
         btnClear.textContent = 'Limpiar fallos';
       } else {
@@ -611,13 +618,17 @@ export function createJobQueue({ el, pref }) {
       label.textContent = '[' + st + '] ' + job.label + (job.error ? ' — ' + job.error : '');
       row.append(label);
       if (st === 'error' || st === 'interrupted' || st === 'cancelled') {
-        const rt = el('button', 'btn repack-min', 'Reintentar');
-        rt.type = 'button';
-        rt.onclick = () => retry(job.id);
+        // Tras recargar no hay File: Reintentar solo si el runner sigue en memoria
+        if (typeof job._run === 'function') {
+          const rt = el('button', 'btn repack-min', 'Reintentar');
+          rt.type = 'button';
+          rt.onclick = () => retry(job.id);
+          row.append(rt);
+        }
         const rm = el('button', 'btn repack-min', 'Quitar');
         rm.type = 'button';
         rm.onclick = () => remove(job.id);
-        row.append(rt, rm);
+        row.append(rm);
       } else if (st === 'pending') {
         const rm = el('button', 'btn repack-min', 'Quitar');
         rm.type = 'button';
@@ -643,15 +654,16 @@ export function createJobQueue({ el, pref }) {
   }
 
   load();
-  // Mark orphaned running as interrupted; quitar zombies irrecuperables
+  // Zombies residuales / código antiguo
   jobs = jobs.filter((j) => {
-    if (j.status === 'running') j.status = 'interrupted';
-    // Errores viejos de código (asWebp) o interrupted sin runner: no sirven
     if (j.status === 'error' && /asWebp/i.test(String(j.error || ''))) return false;
     return true;
   });
   for (const j of jobs) {
-    if (j.status === 'running') j.status = 'interrupted';
+    if (j.status === 'running' || j.status === 'paused' || j.status === 'pending') {
+      j.status = 'interrupted';
+      if (!j.error) j.error = 'Interrumpido al cerrar (no se puede reanudar)';
+    }
   }
   save();
 
@@ -665,11 +677,33 @@ export function createJobQueue({ el, pref }) {
     emit();
   }
 
-  /** Prioridad: limpiar completados; si no hay, limpiar fallos */
+  function clearInterrupted() {
+    jobs = jobs.filter((x) => x.status !== 'interrupted' && x.status !== 'cancelled');
+    emit();
+  }
+
+  /** Quitar historial muerto; deja solo running y pending con runner en memoria */
+  function clearInactive() {
+    jobs = jobs.filter((x) =>
+      x.status === 'running' || (x.status === 'pending' && typeof x._run === 'function')
+    );
+    emit();
+  }
+
+  /**
+   * Prioridad del botón Limpiar:
+   * 1) completados  2) interrumpidos/cancelados (tras cerrar)  3) errores
+   */
   function clearSmart() {
-    const hasDone = jobs.some((x) => x.status === 'done');
-    if (hasDone) clearDone();
-    else clearFailed();
+    if (jobs.some((x) => x.status === 'done')) { clearDone(); return; }
+    if (jobs.some((x) => x.status === 'interrupted' || x.status === 'cancelled')) {
+      clearInterrupted();
+      return;
+    }
+    if (jobs.some((x) => x.status === 'error')) { clearFailed(); return; }
+    const before = jobs.length;
+    jobs = jobs.filter((x) => !(x.status === 'pending' && typeof x._run !== 'function'));
+    if (jobs.length !== before) emit();
   }
 
   try {
@@ -688,6 +722,8 @@ export function createJobQueue({ el, pref }) {
     remove,
     clearFailed,
     clearDone,
+    clearInterrupted,
+    clearInactive,
     clearSmart,
     failedJobs,
     getState,
