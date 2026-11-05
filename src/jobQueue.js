@@ -220,12 +220,12 @@ export function createJobQueue({ el, pref }) {
         return;
       }
     }
-    // Subida local u otro: hace falta el File del dispositivo
-    alert(
-      'Este trabajo necesita el archivo del dispositivo y no se puede reanudar solo.\n\n'
-      + 'Vuelve a Subir / Recargar el archivo.\n'
-      + '(Las recargas CBR desde Telegram sí se pueden reanudar si se encolaron con datos persistidos.)'
-    );
+    // Subida local: el File del navegador no sobrevive al cierre de pestaña
+    j.status = 'interrupted';
+    j.error = 'No se puede reanudar: el navegador no guarda el archivo local. '
+      + 'Aunque siga en disco, hay que volver a elegirlo en «Subir cómic». '
+      + '(Las recargas CBR desde Telegram sí se pueden reanudar.)';
+    emit();
   }
 
   function remove(id) {
@@ -609,9 +609,18 @@ export function createJobQueue({ el, pref }) {
       const hasDone = jobs.some((x) => x.status === 'done');
       const hasIntr = jobs.some((x) => x.status === 'interrupted' || x.status === 'cancelled');
       const hasErr = jobs.some((x) => x.status === 'error');
+      const hasDead = jobs.some((x) =>
+        x.status !== 'running'
+        && typeof x._run !== 'function'
+        && (x.status === 'interrupted' || x.status === 'cancelled'
+          || x.status === 'pending' || x.status === 'error')
+      );
       if (hasDone) {
         btnClear.hidden = false;
         btnClear.textContent = 'Limpiar completados';
+      } else if (hasDead) {
+        btnClear.hidden = false;
+        btnClear.textContent = 'Limpiar cola (no reanudables)';
       } else if (hasIntr) {
         btnClear.hidden = false;
         btnClear.textContent = 'Limpiar interrumpidos';
@@ -742,16 +751,32 @@ export function createJobQueue({ el, pref }) {
    * Prioridad del botón Limpiar:
    * 1) completados  2) interrumpidos/cancelados (tras cerrar)  3) errores
    */
+  function clearDead() {
+    const before = jobs.length;
+    jobs = jobs.filter((x) => {
+      if (x.status === 'running') return true;
+      if (typeof x._run === 'function'
+          && (x.status === 'pending' || x.status === 'cancelled' || x.status === 'error')) {
+        return true;
+      }
+      return false;
+    });
+    if (jobs.length !== before) emit();
+  }
+
   function clearSmart() {
     if (jobs.some((x) => x.status === 'done')) { clearDone(); return; }
+    const hasDead = jobs.some((x) =>
+      x.status !== 'running'
+      && typeof x._run !== 'function'
+      && (x.status === 'interrupted' || x.status === 'cancelled'
+        || x.status === 'pending' || x.status === 'error')
+    );
+    if (hasDead) { clearDead(); return; }
+    if (jobs.some((x) => x.status === 'error')) { clearFailed(); return; }
     if (jobs.some((x) => x.status === 'interrupted' || x.status === 'cancelled')) {
       clearInterrupted();
-      return;
     }
-    if (jobs.some((x) => x.status === 'error')) { clearFailed(); return; }
-    const before = jobs.length;
-    jobs = jobs.filter((x) => !(x.status === 'pending' && typeof x._run !== 'function'));
-    if (jobs.length !== before) emit();
   }
 
   try {
@@ -772,6 +797,7 @@ export function createJobQueue({ el, pref }) {
     clearDone,
     clearInterrupted,
     clearInactive,
+    clearDead,
     clearSmart,
     registerFactory,
     failedJobs,
