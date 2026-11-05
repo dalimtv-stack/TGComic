@@ -827,6 +827,24 @@ export function createUploadTool(d) {
     return entry;
   }
 
+  async function postErrorPlaceholder(ch, fileName, errMsg) {
+    if (!ch) return;
+    try {
+      await getReady();
+      const client = getClient();
+      const peer = peerOf(ch);
+      const name = String(fileName || 'archivo.cbz').trim() || 'archivo.cbz';
+      const detail = String(errMsg || 'error desconocido').slice(0, 800);
+      const text =
+        '⚠️ Fallo al subir «' + name + '»\n' +
+        detail + '\n\n' +
+        'Sube el archivo manualmente en este canal para mantener el orden.';
+      await client.sendMessage(peer, { message: text });
+    } catch (e) {
+      console.warn('[upload] no se pudo dejar aviso en el canal', e);
+    }
+  }
+
   function uniqueSorted(arr) {
     return [...new Set(arr.filter(Boolean))].sort(natural || undefined);
   }
@@ -1375,24 +1393,6 @@ export function createUploadTool(d) {
         frame.remove();
         showUploadProgressPanel();
 
-        const postErrorPlaceholder = async (ch, fileName, errMsg) => {
-          if (!ch) return;
-          try {
-            await getReady();
-            const client = getClient();
-            const peer = peerOf(ch);
-            const name = String(fileName || 'archivo.cbz').trim() || 'archivo.cbz';
-            const detail = String(errMsg || 'error desconocido').slice(0, 800);
-            const text =
-              '⚠️ Fallo al subir «' + name + '»\n' +
-              detail + '\n\n' +
-              'Sube el archivo manualmente en este canal para mantener el orden.';
-            await client.sendMessage(peer, { message: text });
-          } catch (e) {
-            console.warn('[upload] no se pudo dejar aviso en el canal', e);
-          }
-        };
-
         // Encolar un trabajo por archivo (misma serie / canal)
         for (const job of jobs) {
           const fileRef = job.file;
@@ -1616,95 +1616,261 @@ export function createUploadTool(d) {
   } catch (_) {}
 
 
-  /** Reanudar subida local: el usuario debe volver a elegir el archivo (mismo nombre/tamaño si es posible). */
-  function pickFileForResume(persist) {
+  /** Caché de archivos ya emparejados al reanudar varios pendientes de una vez. */
+  const resumeFileCache = new Map();
+
+  function persistMatchKey(p) {
+    return [
+      String(p?.fileName || '').toLowerCase(),
+      String(p?.fileSize || 0),
+      String(p?.lastModified || 0),
+      String(p?.outName || '').toLowerCase(),
+    ].join('|');
+  }
+
+  function fileMatchesPersist(file, persist) {
+    if (!file || !persist) return { ok: false, reason: 'sin archivo' };
+    const wantName = String(persist.fileName || '').trim().toLowerCase();
+    const size = Number(persist.fileSize) || 0;
+    const lm = Number(persist.lastModified) || 0;
+    const fname = String(file.name || '').toLowerCase();
+    const issues = [];
+    if (wantName && fname !== wantName) {
+      // tolerar solo cambio de extensión cbz/cbr
+      const base = (s) => s.replace(/\.(cb[zr]|zip|rar)$/i, '');
+      if (base(fname) !== base(wantName)) issues.push('nombre («' + file.name + '» ≠ «' + persist.fileName + '»)');
+    }
+    if (size > 0 && Number(file.size) !== size) {
+      issues.push('tamaño (' + (Number(file.size) || 0) + ' ≠ ' + size + ')');
+    }
+    if (lm > 0 && Number(file.lastModified) && Math.abs(Number(file.lastModified) - lm) > 2000) {
+      issues.push('fecha de modificación distinta');
+    }
+    return { ok: issues.length === 0, issues };
+  }
+
+  function pickFilesFromUser(multiple) {
     return new Promise((resolve) => {
       const inp = document.createElement('input');
       inp.type = 'file';
       inp.accept = '.cbz,.cbr,.zip,.rar,application/zip,application/x-rar-compressed,*/*';
-      const want = String(persist?.fileName || persist?.outName || '').trim();
-      const size = Number(persist?.fileSize) || 0;
-      inp.onchange = () => {
-        const f = inp.files && inp.files[0];
-        if (!f) { resolve(null); return; }
-        resolve(f);
+      if (multiple) inp.multiple = true;
+      let settled = false;
+      const done = (v) => {
+        if (settled) return;
+        settled = true;
+        resolve(v);
       };
-      try { inp.click(); } catch (_) { resolve(null); }
-      // Si cancela, no hay evento fiable en todos los navegadores
-      setTimeout(() => {}, 0);
+      inp.onchange = () => {
+        const list = inp.files ? [...inp.files] : [];
+        done(list);
+      };
+      // cancelación: focus vuelve a la ventana sin change
+      const onFocus = () => {
+        setTimeout(() => {
+          if (!settled && (!inp.files || !inp.files.length)) done([]);
+        }, 500);
+      };
+      try { window.addEventListener('focus', onFocus, { once: true }); } catch (_) {}
+      try { inp.click(); } catch (_) { done([]); }
     });
+  }
+
+  /**
+   * Empareja N pendientes de subida con archivos elegidos (nombre + tamaño).
+   * Devuelve Map persistKey → File
+   */
+  async function matchFilesToPersists(persistList) {
+    const list = (persistList || []).filter(Boolean);
+    if (!list.length) return new Map();
+    const multi = list.length > 1;
+    if (multi) {
+      await uiAlert(
+        'Hay ' + list.length + ' subidas pendientes.\n'
+        + 'Selecciona los archivos originales (puedes marcar varios).\n'
+        + 'Se emparejarán por nombre y tamaño.'
+      );
+    }
+    const files = await pickFilesFromUser(multi);
+    if (!files.length) return new Map();
+
+    const used = new Set();
+    const map = new Map();
+    for (const p of list) {
+      const key = persistMatchKey(p);
+      let best = null;
+      let bestScore = -1;
+      files.forEach((f, idx) => {
+        if (used.has(idx)) return;
+        const m = fileMatchesPersist(f, p);
+        let score = 0;
+        const wantName = String(p.fileName || '').toLowerCase();
+        const fname = String(f.name || '').toLowerCase();
+        if (wantName && fname === wantName) score += 3;
+        else if (wantName && fname.replace(/\.(cb[zr]|zip|rar)$/i, '') === wantName.replace(/\.(cb[zr]|zip|rar)$/i, '')) score += 2;
+        if (Number(p.fileSize) > 0 && Number(f.size) === Number(p.fileSize)) score += 3;
+        if (score > bestScore) { bestScore = score; best = { f, idx, m }; }
+      });
+      if (best && bestScore >= 3) {
+        used.add(best.idx);
+        map.set(key, best.f);
+      } else if (best && list.length === 1) {
+        // Un solo pendiente: permitir con confirmación si no coincide del todo
+        const issues = best.m.issues || [];
+        if (issues.length) {
+          const ok = await uiConfirm(
+            'El archivo no coincide del todo:\n· ' + issues.join('\n· ')
+            + '\n\n¿Usarlo de todas formas para «' + (p.outName || p.fileName) + '»?'
+          );
+          if (!ok) continue;
+        }
+        used.add(best.idx);
+        map.set(key, best.f);
+      }
+    }
+    return map;
+  }
+
+  function buildUploadRunnerFromFile(file, persist) {
+    const outName = persist.outName || ensureCbzName(file.name, false, false);
+    const captionText = persist.caption || buildComicCaption({ fileName: outName });
+    const chName = persist.channelName || '';
+    const ed = persist.editorial || 'Sin editorial';
+    const quality = persist.quality > 0 && persist.quality <= 1 ? persist.quality : 0.40;
+    const wantMid = !!persist.wantMid;
+    const wantLow = !!persist.wantLow;
+    const variants = [];
+    variants.push({ outName, asWebp: false });
+    if (wantMid) {
+      variants.push({
+        outName: ensureCbzName(String(outName).replace(/\.cbz$/i, ''), true, false),
+        asWebp: true,
+        webpOpts: { quality, maxEdge: 0 },
+      });
+    }
+    if (wantLow) {
+      variants.push({
+        outName: ensureCbzName(String(outName).replace(/\.cbz$/i, ''), true, true),
+        asWebp: true,
+        webpOpts: { quality, maxEdge: 2400 },
+      });
+    }
+    return async (ctx) => {
+      const st = (msg) => { try { ctx.log(msg); } catch (_) {} };
+      let ch = null;
+      try {
+        await getReady();
+        ch = await ensureChannel(chName, ed, st);
+        if (!ch) throw new Error('No se pudo crear/obtener el canal');
+        st('[' + outName + '] Convirtiendo a CBZ si hace falta…');
+        let baseCbz = await localFileToCbzBlob(file, st, { asWebp: false });
+        if (!baseCbz || !baseCbz.size) throw new Error('CBZ vacío');
+        const uploadedNames = [];
+        for (let vi = 0; vi < variants.length; vi++) {
+          const v = variants[vi];
+          if (ctx.isAborted?.()) throw Object.assign(new Error('cancelado'), { cancelled: true });
+          await ctx.waitWhilePaused?.();
+          let blob = baseCbz;
+          if (v.asWebp) {
+            st('[' + v.outName + '] Convirtiendo a WebP…');
+            blob = await localFileToCbzBlob(baseCbz, st, { asWebp: true, webpOpts: v.webpOpts });
+          }
+          st('[' + v.outName + '] Subiendo…');
+          await uploadCbz(ch, v.outName, blob, captionForVariant(captionText, v.outName), st);
+          uploadedNames.push(v.outName);
+          try { await fetchFiles?.(ch); } catch (_) {}
+        }
+        baseCbz = null;
+        try {
+          if (typeof onUploadDone === 'function') {
+            await onUploadDone(ch, { outName, outNames: uploadedNames.slice() });
+          }
+        } catch (_) {}
+        ctx.setProgress?.(100);
+      } catch (e) {
+        if (e?.cancelled) throw e;
+        try { if (ch) await postErrorPlaceholder(ch, outName, e?.message || e); } catch (_) {}
+        throw e;
+      }
+    };
   }
 
   function registerUploadFactory() {
     if (!jobQueue || typeof jobQueue.registerFactory !== 'function') return;
-    jobQueue.registerFactory('upload', async (persist) => {
+    jobQueue.registerFactory('upload', async (persist, job) => {
       if (!persist || persist.type !== 'upload') return null;
-      const file = await pickFileForResume(persist);
-      if (!file) return null;
-      const outName = persist.outName || ensureCbzName(file.name, false, false);
-      const captionText = persist.caption || buildComicCaption({ fileName: outName });
-      const chName = persist.channelName || '';
-      const ed = persist.editorial || 'Sin editorial';
-      const quality = persist.quality > 0 && persist.quality <= 1 ? persist.quality : 0.40;
-      const wantMid = !!persist.wantMid;
-      const wantLow = !!persist.wantLow;
-      const variants = [];
-      variants.push({ outName, asWebp: false });
-      if (wantMid) {
-        variants.push({
-          outName: ensureCbzName(String(outName).replace(/\.cbz$/i, ''), true, false),
-          asWebp: true,
-          webpOpts: { quality, maxEdge: 0 },
-        });
-      }
-      if (wantLow) {
-        variants.push({
-          outName: ensureCbzName(String(outName).replace(/\.cbz$/i, ''), true, true),
-          asWebp: true,
-          webpOpts: { quality, maxEdge: 2400 },
-        });
+      const key = persistMatchKey(persist);
+
+      // ¿Ya emparejado en un lote anterior?
+      if (resumeFileCache.has(key)) {
+        const file = resumeFileCache.get(key);
+        resumeFileCache.delete(key);
+        return buildUploadRunnerFromFile(file, persist);
       }
 
-      return async (ctx) => {
-        const st = (msg) => { try { ctx.log(msg); } catch (_) {} };
-        let ch = null;
-        try {
-          await getReady();
-          ch = await ensureChannel(chName, ed, st);
-          if (!ch) throw new Error('No se pudo crear/obtener el canal');
-          st('[' + outName + '] Convirtiendo a CBZ si hace falta…');
-          let baseCbz = await localFileToCbzBlob(file, st, { asWebp: false });
-          if (!baseCbz || !baseCbz.size) throw new Error('CBZ vacío');
-          const uploadedNames = [];
-          for (let vi = 0; vi < variants.length; vi++) {
-            const v = variants[vi];
-            if (ctx.isAborted?.()) throw Object.assign(new Error('cancelado'), { cancelled: true });
-            await ctx.waitWhilePaused?.();
-            let blob = baseCbz;
-            if (v.asWebp) {
-              st('[' + v.outName + '] Convirtiendo a WebP…');
-              blob = await localFileToCbzBlob(baseCbz, st, { asWebp: true, webpOpts: v.webpOpts });
-            }
-            st('[' + v.outName + '] Subiendo…');
-            await uploadCbz(ch, v.outName, blob, captionForVariant(captionText, v.outName), st);
-            uploadedNames.push(v.outName);
-            try { await fetchFiles?.(ch); } catch (_) {}
+      // Otros pendientes de subida local sin runner → multi-match
+      let waiting = [];
+      try {
+        const st = jobQueue.getState?.() || {};
+        waiting = (st.jobs || []).filter((j) =>
+          j
+          && j.persist
+          && j.persist.type === 'upload'
+          && typeof j._run !== 'function'
+          && (j.status === 'interrupted' || j.status === 'pending' || j.status === 'error' || j.status === 'cancelled')
+        );
+      } catch (_) {}
+      if (!waiting.length && job) waiting = [job];
+      const persistList = waiting.map((j) => j.persist).filter(Boolean);
+      const unique = [];
+      const seen = new Set();
+      for (const p of persistList) {
+        const k = persistMatchKey(p);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        unique.push(p);
+      }
+
+      const matched = await matchFilesToPersists(unique.length ? unique : [persist]);
+      if (!matched.size) {
+        await uiAlert('No se seleccionó ningún archivo o no se pudo emparejar con las subidas pendientes.');
+        return null;
+      }
+
+      // Rellenar caché para el resto; attach runners a otros jobs si la API lo permite
+      for (const [k, f] of matched.entries()) {
+        if (k === key) continue;
+        resumeFileCache.set(k, f);
+      }
+      // Intentar enlazar runners al resto de la cola ya
+      try {
+        for (const j of waiting) {
+          if (!j || j === job) continue;
+          const k = persistMatchKey(j.persist);
+          if (!matched.has(k)) continue;
+          const run = buildUploadRunnerFromFile(matched.get(k), j.persist);
+          if (typeof jobQueue.bindRun === 'function') {
+            jobQueue.bindRun(j.id, run);
+          } else {
+            resumeFileCache.set(k, matched.get(k));
           }
-          baseCbz = null;
-          try {
-            if (typeof onUploadDone === 'function') {
-              await onUploadDone(ch, { outName, outNames: uploadedNames.slice() });
-            }
-          } catch (_) {}
-          ctx.setProgress?.(100);
-        } catch (e) {
-          if (e?.cancelled) throw e;
-          try { if (ch) await postErrorPlaceholder(ch, outName, e?.message || e); } catch (_) {}
-          throw e;
         }
-      };
+      } catch (e) {
+        console.warn('[upload] bindRun lote', e);
+      }
+
+      const file = matched.get(key);
+      if (!file) {
+        await uiAlert(
+          'No se encontró un archivo que coincida con «'
+          + (persist.fileName || persist.outName) + '».'
+        );
+        return null;
+      }
+      return buildUploadRunnerFromFile(file, persist);
     });
   }
+
   try { registerUploadFactory(); } catch (e) { console.warn('[upload] factory', e); }
 
   return {
