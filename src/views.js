@@ -624,7 +624,22 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
     const openRoot = () => sheet(label, comicSheetOpts(ch, f, label, redraw, ctx).concat(lockToggleOpts('comic', { ch, f }, label, redraw)));
 
     const opts = [
-      ['Información', () => showComicInfo(ch, f, label)],
+      ['Información', () => {
+        try {
+          const seriesFiles = ctx.seriesFiles;
+          if (Array.isArray(seriesFiles) && seriesFiles.length) {
+            globalThis.__tgComicNav = {
+              chId: String(ch.id),
+              ids: seriesFiles.map((x) => String(x.id)),
+              files: seriesFiles.slice(),
+              items: seriesFiles.map((x) => ({ ch, f: x, chId: ch.id, id: x.id })),
+              filtered: false,
+              source: 'series-info',
+            };
+          }
+        } catch (_) {}
+        showComicInfo(ch, f, label);
+      }],
       ['Editar', () => {
         const openEditMenu = () => {
           const editOpts = [
