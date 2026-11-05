@@ -334,6 +334,20 @@ function grid(items, withSearch, searchPlaceholder, gridKind) {
     if (pref('showUnreadOnly', '0') === '1') {
       list = list.filter((i) => i.isUnread !== false);
     }
+    // Orden visible (busca/filtros): navegación Info/Ficha solo entre estos
+    try {
+      const comics = list.filter((i) => i && i._f && (i.kind === 'comic' || i.kind === 'series'));
+      if (comics.length) {
+        const chId = comics.find((i) => i._chId != null)?._chId
+          ?? comics.find((i) => i._ch)?._ch?.id;
+        globalThis.__tgComicNav = {
+          chId: chId != null ? String(chId) : (globalThis.__tgComicNav?.chId || null),
+          ids: comics.map((i) => String(i._f.id)),
+          files: comics.map((i) => i._f),
+          filtered: !!q,
+        };
+      }
+    } catch (_) {}
     g.replaceChildren(...list.map((i) => {
     const c = el('div', 'card'), hit = el('button', 'hit'), name = el('div', 'name'), t = el('b', '', i.label);
     const cv = i.cover();
