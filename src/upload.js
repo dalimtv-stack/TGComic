@@ -206,7 +206,7 @@ export function createUploadTool(d) {
 
   /** Quita extensiones (.cbr/.cbz/.zip/.rar/…) y deja un solo .cbz (opcional [WebP]). */
   function ensureCbzName(name, wantWebp, resize) {
-    let s = String(name || '').replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+    let s = String(name || '').replace(/:/g, ' -').replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
     s = s.replace(/\.(cb[zr]|zip|rar|7z|tar|gz|cb7)+$/ig, '').trim();
     s = stripQualityTags(s);
     // Quitar cualquier cola de extensiones conocidas (también repetidas)
@@ -219,17 +219,26 @@ export function createUploadTool(d) {
     return s.trim() + '.cbz';
   }
 
+  /** En títulos de archivo, ":" no es usable (Windows) y confunde con "Canal:Editorial". → " -" */
+  function sanitizeUploadTitle(s) {
+    return String(s || '')
+      .replace(/:/g, ' -')
+      .replace(/\s*-\s*-\s*/g, ' - ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
   // Como antes: Serie #Número - Info
   function composeFileName({ channel, series, number, info, asWebp, resize }) {
-    const ch = String(channel || '').trim();
-    const ser = String(series || '').trim();
+    const ch = sanitizeUploadTitle(channel);
+    const ser = sanitizeUploadTitle(series);
     const num = String(number || '').trim();
     // Quitar guiones sueltos al inicio/final del info (evita "#001 - - [Traducido]")
-    const inf = String(info || '')
+    const inf = sanitizeUploadTitle(String(info || '')
       .replace(/^\s*[-–—:]+\s*/g, '')
       .replace(/\s*[-–—:]+\s*$/g, '')
       .replace(/\s+/g, ' ')
-      .trim();
+      .trim());
     let body = '';
     if (ser && num) body = `${ser} #${num}`;
     else if (ser) body = ser;
