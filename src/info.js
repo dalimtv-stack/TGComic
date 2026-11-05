@@ -622,13 +622,13 @@ async function comicNeighbors(ch, f) {
   try { files = (await kv.get('f:' + ch.id)) || []; } catch (_) {}
   if (!Array.isArray(files) || !files.length) return { prev: null, next: null };
 
-  // 2) Orden de serie con preferencia del usuario (solo si no hay lista visible)
+  // 2) Solo la serie del cómic (nunca todo el canal: evita saltar a otra serie)
   let list = [];
   try {
     const groups = groupSeries(files, ch.name, seriesOverrideFor(ch));
     const g = groups.find((x) => x.files.some((y) => String(y.id) === String(f.id)));
     if (g) {
-      list = g.files;
+      list = g.files.slice();
       try {
         if (typeof globalThis.__tgSortSeriesFiles === 'function') {
           list = globalThis.__tgSortSeriesFiles(ch, g.label, g.files) || list;
@@ -636,11 +636,10 @@ async function comicNeighbors(ch, f) {
       } catch (_) {}
     }
   } catch (_) {}
+  // Sin serie: un solo cómic (no usar todo el canal como lista de vecinos)
   if (list.length < 2) {
-    list = files.slice().sort((a, b) => natural(
-      comicDisplay(comicSourceName(a), ch.name),
-      comicDisplay(comicSourceName(b), ch.name)
-    ));
+    const wrap1 = (ff) => (ff ? { f: ff, ch } : null);
+    return { prev: null, next: null };
   }
   const i = list.findIndex((x) => String(x.id) === String(f.id));
   if (i < 0) return { prev: null, next: null };
