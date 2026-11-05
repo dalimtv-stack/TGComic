@@ -2127,6 +2127,8 @@ const viewsApi = createViews({
   getMsg,
   get client() { return client; },
   get ready() { return ready; },
+  Api,
+  peerOf,
 
   get LIB() { return LIB; },
   get synced() { return synced; },
