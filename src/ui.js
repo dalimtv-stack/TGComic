@@ -340,11 +340,19 @@ function grid(items, withSearch, searchPlaceholder, gridKind) {
       if (comics.length) {
         const chId = comics.find((i) => i._chId != null)?._chId
           ?? comics.find((i) => i._ch)?._ch?.id;
+        const items = comics.map((i) => ({
+          ch: i._ch || null,
+          f: i._f,
+          chId: i._chId != null ? i._chId : (i._ch?.id),
+          id: i._f.id,
+        }));
         globalThis.__tgComicNav = {
           chId: chId != null ? String(chId) : (globalThis.__tgComicNav?.chId || null),
           ids: comics.map((i) => String(i._f.id)),
           files: comics.map((i) => i._f),
+          items,
           filtered: !!q,
+          source: 'grid',
         };
       }
     } catch (_) {}
