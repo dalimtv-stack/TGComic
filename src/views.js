@@ -37,10 +37,13 @@ export function createViews(d) {
     buildSearchIndex, filterSearchIndex,
   } = d;
   const openComic = (...a) => d.openComic(...a);
-  const getClient = () => d.client;
-  const getReady = () => d.ready;
-  const peerOf = (...a) => d.peerOf(...a);
-  const Api = d.Api;
+  const getClient = () => (typeof d.client === 'function' ? d.client() : d.client);
+  const getReady = () => (typeof d.ready === 'function' ? d.ready() : d.ready);
+  const peerOfFn = (...a) => {
+    if (typeof d.peerOf === 'function') return d.peerOf(...a);
+    throw new Error('peerOf no disponible');
+  };
+  const ApiRef = () => d.Api;
 
   // ---- Ordenación de listados (editorial / canal / serie) ----
   const sortKey = (scope, id) => 'sort:' + scope + ':' + String(id || '');
@@ -680,12 +683,16 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
                 'Eliminar cómic'
               );
               if (!ok) return;
-              if (getReady) await getReady();
+              const readyP = getReady?.();
+              if (readyP && typeof readyP.then === 'function') await readyP;
               const client = getClient?.();
-              if (!client || !peerOf || !Api) {
-                return appAlert('Cliente Telegram no disponible');
+              if (!client) {
+                return appAlert('Cliente Telegram no disponible (sin sesión)');
               }
-              const peer = peerOf(ch);
+              if (typeof d.peerOf !== 'function') {
+                return appAlert('Cliente Telegram no disponible (peerOf)');
+              }
+              const peer = peerOfFn(ch);
               const ids = [];
               const pushId = (x) => { if (x?.id != null) ids.push(Number(x.id)); };
               pushId(f);
@@ -2015,7 +2022,9 @@ function filesView(ch) {
           chId: String(ch.id),
           ids: channelQueue.map((x) => String(x.id)),
           files: channelQueue.slice(),
+          items: channelQueue.map((x) => ({ ch, f: x, chId: ch.id, id: x.id })),
           filtered: false,
+          source: 'channel',
         };
       } catch (_) {}
       grid(sorted, true, 'Buscar en este canal…', 'mixed');
@@ -2159,7 +2168,9 @@ function seriesView(ch, s0, files) {
           chId: String(ch.id),
           ids: seriesQueue.map((x) => String(x.id)),
           files: seriesQueue.slice(),
+          items: seriesQueue.map((x) => ({ ch, f: x, chId: ch.id, id: x.id })),
           filtered: false,
+          source: 'series',
         };
       } catch (_) {}
       grid(sorted, true, 'Buscar en esta serie…', 'comics');
