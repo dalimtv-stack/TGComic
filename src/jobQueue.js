@@ -124,6 +124,22 @@ export function createJobQueue({ el, pref }) {
     return `${count} y ${fmtRemaining(ms)}`;
   }
 
+  /** Asigna un runner a un job ya en cola (p.ej. tras emparejar varios archivos al reanudar). */
+  function bindRun(id, runFn) {
+    const j = jobs.find((x) => x.id === id);
+    if (!j || typeof runFn !== 'function') return false;
+    j._run = runFn;
+    if (j.status === 'interrupted' || j.status === 'cancelled' || j.status === 'error') {
+      j.status = 'pending';
+      j.error = null;
+      j.progress = 0;
+      j.attempts = 0;
+    }
+    emit();
+    pump();
+    return true;
+  }
+
   function enqueue(job) {
     const id = job.id || (`job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
     // persist = datos serializables para reanudar tras cerrar (sin File)
@@ -757,6 +773,32 @@ export function createJobQueue({ el, pref }) {
    * Prioridad del botón Limpiar:
    * 1) completados  2) interrumpidos/cancelados (tras cerrar)  3) errores
    */
+  function showQueueToast(text) {
+    try {
+      document.querySelectorAll('.jobqueue-toast').forEach((n) => n.remove());
+      const t = el('div', 'jobqueue-toast');
+      t.textContent = String(text || '');
+      t.setAttribute('role', 'status');
+      Object.assign(t.style, {
+        position: 'fixed',
+        left: '50%',
+        bottom: 'calc(24px + env(safe-area-inset-bottom, 0px))',
+        transform: 'translateX(-50%)',
+        zIndex: '9999',
+        maxWidth: '90vw',
+        padding: '10px 16px',
+        borderRadius: '12px',
+        background: 'rgba(30,32,38,.94)',
+        color: '#eee',
+        fontSize: '14px',
+        boxShadow: '0 8px 28px rgba(0,0,0,.45)',
+        pointerEvents: 'none',
+      });
+      document.body.appendChild(t);
+      setTimeout(() => { try { t.remove(); } catch (_) {} }, 3200);
+    } catch (_) {}
+  }
+
   function clearDead() {
     const before = jobs.length;
     jobs = jobs.filter((x) => {
@@ -767,7 +809,15 @@ export function createJobQueue({ el, pref }) {
       }
       return false;
     });
-    if (jobs.length !== before) emit();
+    const removed = before - jobs.length;
+    if (removed > 0) {
+      emit();
+      showQueueToast(
+        removed === 1
+          ? 'Se quitó 1 trabajo no reanudable'
+          : ('Se quitaron ' + removed + ' trabajos no reanudables')
+      );
+    }
   }
 
   function clearSmart() {
@@ -794,6 +844,7 @@ export function createJobQueue({ el, pref }) {
 
   return {
     enqueue,
+    bindRun,
     pause,
     stop,
     resume,
