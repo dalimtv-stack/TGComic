@@ -1,4 +1,4 @@
-import { isMacroLibEntry, sectionFromCaption, displayChannelForComic, collectSectionsFromFiles } from './macro.js';
+import { isMacroLibEntry, sectionFromCaption, displayChannelForComic, collectSectionsFromFiles, countNavChannels } from './macro.js';
 import { isComicRead, getPageIndex, getPagesTotal, readProgress } from './progress.js';
 import * as sync from './sync.js';
 import { splitStats, flattenVersions, sourceNameOf, stripQualityTags, parseQuality } from './quality.js';
@@ -2730,7 +2730,18 @@ async function showGroupInfo(originalName) {
     body.append(el('div', 'info-sec', 'Editorial'));
     body.append(row('Nombre', display));
     if (display !== originalName) body.append(row('Nombre original', originalName));
-    body.append(row('Canales', String(chs.length)));
+    // Canales reales + Secciones de macros (misma lógica que la home)
+    let navChannels = chs.length;
+    try {
+      const filesBy = {};
+      for (const mac of macrosG) {
+        try { filesBy[String(mac.id)] = (await kv.get('f:' + mac.id)) || []; } catch (_) { filesBy[String(mac.id)] = []; }
+      }
+      navChannels = countNavChannels(getLIB(), originalName, filesBy);
+    } catch (_) {
+      navChannels = chs.length;
+    }
+    body.append(row('Canales', String(navChannels)));
     body.append(row('Cómics (listados)', String(comics)));
     body.append(row('Tamaño total', formatBytes(bytes)));
     addWebpInfo(body, row, st);
@@ -2999,12 +3010,10 @@ async function showChannelInfo(ch, opts = {}) {
       r.append(el('span', 'info-label', label), el('span', 'info-value', String(value ?? '—')));
       return r;
     };
-    // Sección se presenta como canal; el canal Telegram macro no se muestra como "Macro"
+    // Sección se presenta como canal (sin datos internos de Telegram)
     body.append(el('div', 'info-sec', section ? 'Sección' : 'Canal'));
     body.append(row('Nombre', display));
-    if (section && isMacro) {
-      body.append(row('Canal Telegram', String(ch.group || ch.name || '—')));
-    } else if (!section && !isMacro && display !== ch.name) {
+    if (!section && !isMacro && display !== ch.name) {
       body.append(row('Nombre original', ch.name));
     }
     body.append(row('Editorial', ch.group || '—'));
