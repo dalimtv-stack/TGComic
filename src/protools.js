@@ -69,7 +69,6 @@ export function createProTools(d) {
     } catch (_) {}
   };
 
-  const getLIB = () => (typeof d.LIB === 'function' ? d.LIB() : d.LIB) || [];
 
   function uniqueSorted(arr, cmp) {
     const seen = new Set();
@@ -968,12 +967,6 @@ export function createProTools(d) {
 
         // —— Telegram Global + Biblioteca ——
         loading.textContent = 'Consultando Telegram y biblioteca…';
-        const row = (lab, val) => {
-          const r = el('div', 'info-row');
-          r.append(el('span', 'info-label', lab), el('span', 'info-value', String(val ?? '—')));
-          return r;
-        };
-
         body.append(el('div', 'info-sec', 'Telegram Global'));
         try {
           const tg = await collectTelegramMembership();
