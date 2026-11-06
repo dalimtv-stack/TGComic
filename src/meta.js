@@ -223,6 +223,32 @@ export function setChannelDisplayName(ch, newName, after) {
   after?.();
 }
 
+/** Clave de renombre de sección (canal virtual dentro de un macro). */
+function sectionRenameKey(chId, section) {
+  return String(chId) + '::sec::' + String(section || '').trim().toLowerCase();
+}
+/** Nombre mostrado de una sección; si no hay override, el nombre original del caption. */
+export function sectionDisplayName(ch, section) {
+  const sec = String(section || '').trim();
+  if (!sec) return '—';
+  if (!ch?.id) return sec;
+  const m = channelRenameMap();
+  return m[sectionRenameKey(ch.id, sec)] || sec;
+}
+/** Override local del nombre de sección (no cambia el caption en Telegram). */
+export function setSectionDisplayName(ch, section, newName, after) {
+  if (!ch?.id) return after?.();
+  const sec = String(section || '').trim();
+  if (!sec) return after?.();
+  const m = channelRenameMap();
+  const key = sectionRenameKey(ch.id, sec);
+  const n = String(newName || '').trim();
+  if (!n || n.toLowerCase() === sec.toLowerCase()) delete m[key];
+  else m[key] = n;
+  writeMap(cnKey, m);
+  after?.();
+}
+
 export function groupRenameMap() {
   return readMap(gnKey);
 }

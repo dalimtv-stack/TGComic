@@ -18,6 +18,7 @@ export function createInfoEdit(d) {
     getMsg, openPages, pageBlob,
     seriesDisplayName, setSeriesDisplayName,
     channelDisplayName, setChannelDisplayName,
+    sectionDisplayName, setSectionDisplayName,
     groupDisplayName, setGroupDisplayName,
     getComicSeriesOverride, setComicSeries, ungroupMap, setUngroupMode,
     getPageIndex, getPagesTotal, getPageFormat, formatBytes, sizeLabel,
@@ -2432,7 +2433,9 @@ function applyCoverProgress(node, prog) {
 function channelCoverNode(ch, files, section) {
   const host = el('div', 'cover cover-channel');
   const secLabel = String(section || '').trim();
-  const letterSrc = secLabel || channelDisplayName(ch) || '?';
+  const letterSrc = (secLabel
+    ? (typeof sectionDisplayName === 'function' ? sectionDisplayName(ch, secLabel) : secLabel)
+    : channelDisplayName(ch)) || '?';
   const letter = el('span', '', letterSrc.slice(0, 1).toUpperCase());
   host.append(letter);
   const prog = channelReadProgress(ch, files);
@@ -2983,7 +2986,7 @@ async function showChannelInfo(ch, opts = {}) {
     }
     // Sección = nombre de canal virtual; macro sin sección = editorial (no la palabra "Macro")
     const display = section
-      ? section
+      ? (typeof sectionDisplayName === 'function' ? sectionDisplayName(ch, section) : section)
       : (isMacro
           ? (String(ch.group || ch.name || channelDisplayName(ch) || '').trim() || 'Editorial')
           : channelDisplayName(ch));
@@ -3013,6 +3016,9 @@ async function showChannelInfo(ch, opts = {}) {
     // Sección se presenta como canal (sin datos internos de Telegram)
     body.append(el('div', 'info-sec', section ? 'Sección' : 'Canal'));
     body.append(row('Nombre', display));
+    if (section && display !== section) {
+      body.append(row('Nombre original', section));
+    }
     if (!section && !isMacro && display !== ch.name) {
       body.append(row('Nombre original', ch.name));
     }
@@ -3037,29 +3043,87 @@ async function showChannelInfo(ch, opts = {}) {
     appAlert('No se pudo mostrar la información del canal');
   }
 }
-function showEditChannel(ch, files, after, onBack = null) {
-  sheet(channelDisplayName(ch), [
-    ['Editar nombre del canal', () => showEditChannelName(ch, after)],
-    ['Seleccionar portada del canal', () => showChannelCoverPicker(ch, files || [], after)],
+function showEditChannel(ch, files, after, onBack = null, opts = {}) {
+  const section = String(opts?.section || '').trim();
+  // Misma UX que un canal normal; la sección es transparente para el usuario.
+  const title = section
+    ? (typeof sectionDisplayName === 'function' ? sectionDisplayName(ch, section) : section)
+    : channelDisplayName(ch);
+  const items = [
+    ['Editar nombre del canal', () => showEditChannelName(ch, after, section)],
+    ['Seleccionar portada del canal', () => showChannelCoverPicker(ch, files || [], after, section)],
     ['Recargar fichas Telegram (Cómic Vine)', async () => {
       const list = Array.isArray(files) && files.length ? files : (await kv.get('f:' + ch.id)) || [];
-      const groups = groupSeries(list, ch.name, seriesOverrideFor?.(ch));
+      const scoped = section
+        ? list.filter((f) => {
+            try {
+              const s = (typeof sectionFromCaption === 'function' ? sectionFromCaption(f?.caption || '', parseComicCaption) : '') || '';
+              return s.trim().toLowerCase() === section.toLowerCase();
+            } catch (_) { return false; }
+          })
+        : list;
+      const groups = groupSeries(scoped.length ? scoped : list, ch.name, seriesOverrideFor?.(ch));
       if (!groups.length) {
         await appAlert('No hay series en este canal.');
-        showEditChannel(ch, files, after, onBack);
+        showEditChannel(ch, files, after, onBack, opts);
         return;
       }
       showSeriesCvFillForm(ch, groups.length === 1 ? groups[0].label : '', [], {
         overwrite: true,
         seriesGroups: groups,
-        onBack: () => showEditChannel(ch, files, after, onBack),
+        onBack: () => showEditChannel(ch, files, after, onBack, opts),
       });
     }],
-  ], { cancelLabel: 'Volver', onCancel: onBack || after });
+  ];
+  // Único añadido respecto a un canal normal: renombrar la sección (alias visible).
+  if (section) {
+    items.splice(1, 0, ['Editar nombre de la sección', () => showEditSectionName(ch, section, after)]);
+  }
+  sheet(title, items, { cancelLabel: 'Volver', onCancel: onBack || after });
 }
-function showEditChannelName(ch, after) {
+/** Solo secciones: alias visible (misma lógica que el nombre de canal, etiqueta distinta). */
+function showEditSectionName(ch, section, after) {
+  const sec = String(section || '').trim();
+  if (!sec) return;
   document.querySelector('.info-frame.edit-channel')?.remove();
-  const current = channelDisplayName(ch);
+  const current = typeof sectionDisplayName === 'function' ? sectionDisplayName(ch, sec) : sec;
+  const frame = el('div', 'info-frame edit-channel');
+  const box = el('div', 'info-box');
+  const head = el('div', 'info-head');
+  head.append(el('span', '', 'Editar nombre'));
+  const close = el('button', 'btn info-close', '×');
+  close.onclick = () => frame.remove();
+  head.append(close);
+  const body = el('div', 'info-body');
+  body.append(el('div', 'info-sec', 'Nombre de la sección'));
+  const input = el('input', 'edit-input');
+  input.type = 'text';
+  input.value = current;
+  input.autocomplete = 'off';
+  body.append(input);
+  const actions = el('div', 'edit-actions');
+  const cancel = el('button', 'btn', 'Cancelar');
+  cancel.onclick = () => frame.remove();
+  const save = el('button', 'btn edit-save', 'Guardar');
+  save.onclick = () => {
+    const done = () => { frame.remove(); notifyChanged(); after?.(); };
+    if (typeof setSectionDisplayName === 'function') setSectionDisplayName(ch, sec, input.value, done);
+    else done();
+  };
+  actions.append(cancel, save);
+  body.append(actions);
+  box.append(head, body);
+  frame.append(box);
+  document.body.append(frame);
+  setTimeout(() => { input.focus(); input.select(); }, 50);
+}
+function showEditChannelName(ch, after, section = '') {
+  const sec = String(section || '').trim();
+  document.querySelector('.info-frame.edit-channel')?.remove();
+  // Transparente: en sección se edita el mismo alias que el "nombre de canal" virtual
+  const current = sec
+    ? (typeof sectionDisplayName === 'function' ? sectionDisplayName(ch, sec) : sec)
+    : channelDisplayName(ch);
   const frame = el('div', 'info-frame edit-channel');
   const box = el('div', 'info-box');
   const head = el('div', 'info-head');
@@ -3079,22 +3143,26 @@ function showEditChannelName(ch, after) {
   cancel.onclick = () => frame.remove();
   const save = el('button', 'btn edit-save', 'Guardar');
   save.onclick = () => {
-    setChannelDisplayName(ch, input.value, () => {
-      frame.remove();
-      notifyChanged(); after?.();
-    });
+    const done = () => { frame.remove(); notifyChanged(); after?.(); };
+    if (sec && typeof setSectionDisplayName === 'function') {
+      setSectionDisplayName(ch, sec, input.value, done);
+    } else {
+      setChannelDisplayName(ch, input.value, done);
+    }
   };
   actions.append(cancel, save);
   body.append(actions);
   box.append(head, body);
   frame.append(box);
-  // No cerrar al pulsar fuera: solo × / Cancelar
   document.body.append(frame);
   setTimeout(() => { input.focus(); input.select(); }, 50);
 }
-function showChannelCoverPicker(ch, files, after) {
+function showChannelCoverPicker(ch, files, after, section = '') {
+  const sec = String(section || '').trim();
   document.querySelector('.info-frame.cover-pick')?.remove();
-  const title = channelDisplayName(ch);
+  const title = sec
+    ? (typeof sectionDisplayName === 'function' ? sectionDisplayName(ch, sec) : sec)
+    : channelDisplayName(ch);
   const frame = el('div', 'info-frame cover-pick');
   const box = el('div', 'info-box cover-pick-box');
   const head = el('div', 'info-head');
@@ -3106,6 +3174,8 @@ function showChannelCoverPicker(ch, files, after) {
   body.append(el('div', 'info-sec', title));
   body.append(el('p', 'cover-pick-hint', 'Elige GitHub, un cómic del canal, una URL de imagen (se sincroniza) o una imagen del dispositivo (solo en este dispositivo).'));
 
+  const coverKey = () => channelCoverKey(ch, sec || undefined);
+
   const pickFile = el('button', 'btn cover-pick-device', '📁  Desde fotos o archivos');
   const fileInput = el('input');
   fileInput.type = 'file';
@@ -3116,8 +3186,8 @@ function showChannelCoverPicker(ch, files, after) {
     const file = fileInput.files?.[0];
     if (!file) return;
     try {
-      markCoverLocalOnly(channelCoverKey(ch));
-      await setChannelCoverBlob(ch, file);
+      markCoverLocalOnly(coverKey());
+      await setChannelCoverBlob(ch, file, sec || undefined);
       frame.remove();
       notifyChanged(); after?.();
     } catch (e) {
@@ -3130,9 +3200,9 @@ function showChannelCoverPicker(ch, files, after) {
     if (!url) return;
     try {
       const b = await fetchImageUrlBlob(url);
-      await clearChannelCover(ch);
-      setCoverSrc(channelCoverKey(ch), { t: 'url', url });
-      await setChannelCoverBlob(ch, b);
+      await clearChannelCover(ch, sec || undefined);
+      setCoverSrc(coverKey(), { t: 'url', url });
+      await setChannelCoverBlob(ch, b, sec || undefined);
       frame.remove();
       notifyChanged(); after?.();
     } catch (e) {
@@ -3175,12 +3245,12 @@ function showChannelCoverPicker(ch, files, after) {
       if (v.blob) return v.blob;
       return getGithubChannelArtBlob(ch, v.url);
     }, async () => {
-      await clearChannelCover(ch);
-      setCoverSrc(channelCoverKey(ch), { t: 'gh', url: v.url, file: v.file });
+      await clearChannelCover(ch, sec || undefined);
+      setCoverSrc(channelCoverKey(ch, sec || undefined), { t: 'gh', url: v.url, file: v.file });
       try {
         let b = v.blob || null;
         if (!b) b = await getGithubChannelArtBlob(ch, v.url);
-        if (b) await setChannelCoverBlob(ch, b);
+        if (b) await setChannelCoverBlob(ch, b, sec || undefined);
         try {
           const key = `art:channels:${artNorm((ch.name || '').normalize('NFC').trim())}`;
           if (b) await kv.set(key, { blob: b, url: v.url, optimized: true });
@@ -3202,11 +3272,11 @@ function showChannelCoverPicker(ch, files, after) {
     try { ghSecHint.remove(); } catch (_) {}
     if (!ghVariants.length) {
       addCell('GitHub / predeterminada', () => getGithubChannelArtBlob(ch), async () => {
-        await clearChannelCover(ch);
-        setCoverSrc(channelCoverKey(ch), null);
+        await clearChannelCover(ch, sec || undefined);
+        setCoverSrc(channelCoverKey(ch, sec || undefined), null);
         try {
           const b = await getGithubChannelArtBlob(ch);
-          if (b) await setChannelCoverBlob(ch, b);
+          if (b) await setChannelCoverBlob(ch, b, sec || undefined);
         } catch (_) {}
         frame.remove();
         notifyChanged(); after?.();
@@ -3236,8 +3306,8 @@ function showChannelCoverPicker(ch, files, after) {
           appAlert('Este cómic aún no tiene portada en caché. Ábrelo una vez e inténtalo de nuevo.');
           return;
         }
-        setCoverSrc(channelCoverKey(ch), { t: 'comic', id: f.id });
-        await setChannelCoverBlob(ch, b);
+        setCoverSrc(channelCoverKey(ch, sec || undefined), { t: 'comic', id: f.id });
+        await setChannelCoverBlob(ch, b, sec || undefined);
         frame.remove();
         notifyChanged(); after?.();
       };

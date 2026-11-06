@@ -31,7 +31,7 @@ export function createViews(d) {
   const {
     el, app, top, h1, actions, search,
     locks, ART,
-    groupDisplayName, channelDisplayName, seriesDisplayName, comicDisplayName,
+    groupDisplayName, channelDisplayName, sectionDisplayName, seriesDisplayName, comicDisplayName,
     comicDisplay, comicSourceName, issueLabel, groupSeries, seriesOverrideFor,
     clean, stripExt, sizeLabel, formatBytes,
     art, groupCoverNode, channelCoverNode, seriesCoverNode,
@@ -2236,7 +2236,7 @@ function channelsView(g) {
         for (const sec of sections) {
           const secFiles = filesInSection(mfiles, sec, parseComicCaption, mac.id);
           const n = secFiles.length;
-          const label = sec;
+          const label = (typeof sectionDisplayName === 'function' ? sectionDisplayName(mac, sec) : sec) || sec;
           gridItems.push({
             kind: 'channel',
             _section: sec,
@@ -2259,8 +2259,10 @@ function channelsView(g) {
               filesView(mac, { section: sec });
             },
             longPress: () => {
+              const openRoot = () => sheet(label, opts);
               const opts = [
                 ['Información', () => showChannelInfo(mac, { section: sec })],
+                ['Editar', () => showEditChannel(mac, secFiles, () => build(), openRoot, { section: sec })],
                 ['Añadir versión WebP', () => {
                   try { repackTool?.offerWebpVersionChannel?.(mac, secFiles, sec); }
                   catch (e) { appAlert(e?.message || e); }
@@ -2268,7 +2270,7 @@ function channelsView(g) {
                 ['Descargar en bloque', () => downloadComicsBulk(mac, secFiles, { mode: 'channel', section: sec })],
                 ...lockToggleOpts('section', { ch: mac, section: sec }, label, () => build()),
               ];
-              sheet(label, opts);
+              openRoot();
             },
           });
         }
@@ -2420,7 +2422,9 @@ function filesView(ch, opts = {}) {
     }
   } else if (!locks.guardRestricted('channel', ch, channelDisplayName(ch))) return;
 
-  go(orphansOnly ? '(Sin sección)' : (sectionFilter || channelDisplayName(ch)), async (e) => {
+  go(orphansOnly ? '(Sin sección)' : (sectionFilter
+    ? ((typeof sectionDisplayName === 'function' ? sectionDisplayName(ch, sectionFilter) : sectionFilter) || sectionFilter)
+    : channelDisplayName(ch)), async (e) => {
     e._uploadCtx = {
       editorial: ch.group || 'Sin editorial',
       channel: isMacroLibEntry(ch) ? undefined : ch,

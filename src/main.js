@@ -26,6 +26,7 @@ import {
   getCoverFit, setCoverFit,
   getComicSeriesOverride, setComicSeries, seriesOverrideFor,
   channelDisplayName, setChannelDisplayName,
+  sectionDisplayName, setSectionDisplayName,
   groupDisplayName, setGroupDisplayName,
 } from './meta.js';
 import { createReader } from './reader.js';
@@ -2044,6 +2045,7 @@ infoApi = createInfoEdit({
   getMsg, openPages, pageBlob,
   seriesDisplayName, setSeriesDisplayName,
   channelDisplayName, setChannelDisplayName,
+  sectionDisplayName, setSectionDisplayName,
   groupDisplayName, setGroupDisplayName,
   getComicSeriesOverride, setComicSeries, ungroupMap, setUngroupMode,
   getPageIndex, getPagesTotal, getPageFormat, formatBytes, sizeLabel,
@@ -2155,7 +2157,7 @@ const viewsApi = createViews({
   listUnfinishedProgress,
   get repackTool() { return repackTool; },
   locks, ART,
-  groupDisplayName, channelDisplayName, seriesDisplayName, comicDisplayName,
+  groupDisplayName, channelDisplayName, sectionDisplayName, seriesDisplayName, comicDisplayName,
   comicDisplay, comicSourceName, issueLabel, groupSeries, seriesOverrideFor,
   clean, stripExt, sizeLabel, formatBytes,
   art, groupCoverNode, channelCoverNode, seriesCoverNode,
@@ -2192,7 +2194,7 @@ try {
     getFiles: async (ch) => (await kv.get('f:' + ch.id)) || [],
     get openComic() { return openComic; },
     sheet, bindLongPress,
-    groupDisplayName, channelDisplayName, seriesDisplayName, comicDisplayName,
+    groupDisplayName, channelDisplayName, sectionDisplayName, seriesDisplayName, comicDisplayName,
     comicDisplay, comicSourceName, groupSeries, seriesOverrideFor,
     isComicRead, readProgress, formatBytes, sizeLabel,
     parseComicCaption, parseQuality, sourceNameOf,
