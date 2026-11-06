@@ -1031,6 +1031,86 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
   }
 
 
+
+  /** Edita solo el campo Sección: del caption de este cómic (o override local si es reenvío). */
+  function showEditComicSectionName(ch, f, label, redraw, onBack) {
+    document.querySelector('.info-frame.edit-comic-section')?.remove();
+    const cur = effectiveSection(ch, f, parseComicCaption) || '';
+    const frame = el('div', 'info-frame edit-comic-section');
+    const box = el('div', 'info-box');
+    const head = el('div', 'info-head');
+    head.append(el('span', '', 'Editar nombre de la sección'));
+    const close = el('button', 'btn info-close', '×');
+    close.onclick = () => { frame.remove(); try { onBack?.(); } catch (_) {} };
+    head.append(close);
+    const body = el('div', 'info-body');
+    body.append(el('div', 'info-sec', 'Sección'));
+    const input = el('input', 'edit-input');
+    input.type = 'text';
+    input.value = cur;
+    input.autocomplete = 'off';
+    body.append(input);
+    const actions = el('div', 'edit-actions');
+    const cancel = el('button', 'btn', 'Cancelar');
+    cancel.onclick = () => { frame.remove(); try { onBack?.(); } catch (_) {} };
+    const save = el('button', 'btn edit-save', 'Guardar');
+    save.onclick = async () => {
+      const chosen = String(input.value || '').trim();
+      if (!chosen) {
+        await appAlert('Indica el nombre de la sección');
+        return;
+      }
+      save.disabled = true;
+      try {
+        // Reenvío: no se puede editar caption en Telegram
+        if (f?.forwarded) {
+          setLocalSection(ch.id, f.id, chosen);
+          frame.remove();
+          try { redraw?.(); } catch (_) {}
+          try { window.dispatchEvent(new CustomEvent('tgcomic:changed', { detail: { chId: ch.id, kind: 'section-local' } })); } catch (_) {}
+          await appAlert('Sección actualizada en este dispositivo: «' + chosen + '».', 'Sección');
+          try { onBack?.(); } catch (_) {}
+          return;
+        }
+        if (typeof updateTelegramCaption !== 'function') {
+          throw new Error('No se puede editar el caption');
+        }
+        let newCap = String(f.caption || '');
+        if (typeof parseComicCaption === 'function' && typeof buildComicCaption === 'function') {
+          try {
+            const fields = parseComicCaption(newCap) || {};
+            fields.section = chosen;
+            newCap = buildComicCaption(fields);
+          } catch (_) {
+            newCap = withSectionInCaption(newCap, chosen);
+          }
+        } else {
+          newCap = withSectionInCaption(newCap, chosen);
+        }
+        await updateTelegramCaption(ch, f, newCap);
+        try {
+          const all = (await kv.get('f:' + ch.id)) || [];
+          const next = (all || []).map((x) => String(x.id) === String(f.id) ? { ...x, caption: newCap } : x);
+          await kv.set('f:' + ch.id, next);
+        } catch (_) {}
+        frame.remove();
+        try { redraw?.(); } catch (_) {}
+        try { window.dispatchEvent(new CustomEvent('tgcomic:changed', { detail: { chId: ch.id, kind: 'section-caption' } })); } catch (_) {}
+        await appAlert('Sección del caption: «' + chosen + '».', 'Sección');
+        try { onBack?.(); } catch (_) {}
+      } catch (e) {
+        save.disabled = false;
+        await appAlert('No se pudo guardar: ' + (e?.message || e));
+      }
+    };
+    actions.append(cancel, save);
+    body.append(actions);
+    box.append(head, body);
+    frame.append(box);
+    document.body.append(frame);
+    setTimeout(() => { input.focus(); input.select(); }, 50);
+  }
+
   function comicSheetOpts(ch, f, label, redraw, ctx = {}) {
     const seriesLabel = ctx.seriesLabel || null;
     const seriesFiles = ctx.seriesFiles || null;
@@ -1103,6 +1183,10 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
               ];
               openSeriesEdit();
             }]);
+          }
+          // Único añadido respecto a un cómic sin sección: editar el campo Sección: del caption
+          if (isMacroLibEntry(ch) && effectiveSection(ch, f, parseComicCaption)) {
+            editOpts.push(['Editar nombre de la sección', () => showEditComicSectionName(ch, f, label, redraw, openEditMenu)]);
           }
           editOpts.push(['Adaptar portada', () => {
             if (typeof showCoverFitEditor === 'function') {
