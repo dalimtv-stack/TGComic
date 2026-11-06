@@ -76,10 +76,11 @@ export function sectionFromCaption(caption, parseComicCaption) {
 }
 
 /** Secciones únicas presentes en los archivos de un canal macro */
-export function collectSectionsFromFiles(files, parseComicCaption) {
+export function collectSectionsFromFiles(files, parseComicCaption, chId) {
   const map = new Map(); // key -> display name
   for (const f of files || []) {
-    const sec = sectionFromCaption(f?.caption || '', parseComicCaption);
+    let sec = sectionFromCaption(f?.caption || '', parseComicCaption);
+    if (!sec && chId != null && f?.id != null) sec = getLocalSection(chId, f.id);
     if (!sec) continue;
     const k = normalizeSectionKey(sec);
     if (!k) continue;
@@ -90,11 +91,44 @@ export function collectSectionsFromFiles(files, parseComicCaption) {
   );
 }
 
-export function filesInSection(files, sectionLabel, parseComicCaption) {
+
+/** Override local de sección (reenvíos / cuando no se puede editar caption). */
+export function localSectionKey(chId, msgId) {
+  return 'secOverride:' + String(chId) + ':' + String(msgId);
+}
+export function getLocalSection(chId, msgId) {
+  try {
+    const v = localStorage.getItem(localSectionKey(chId, msgId));
+    return v != null ? String(v).trim() : '';
+  } catch (_) { return ''; }
+}
+export function setLocalSection(chId, msgId, section) {
+  const k = localSectionKey(chId, msgId);
+  const sec = String(section || '').trim();
+  try {
+    if (!sec) localStorage.removeItem(k);
+    else localStorage.setItem(k, sec);
+  } catch (_) {}
+  try {
+    // Si sync está cargado, anotar para multi-dispositivo
+    const sync = globalThis.__tgcomicSync;
+    if (sync && typeof sync.touchKey === 'function') sync.touchKey(k);
+  } catch (_) {}
+}
+/** Sección efectiva: caption Telegram, si no override local. */
+export function effectiveSection(ch, f, parseComicCaption) {
+  const fromCap = sectionFromCaption(f?.caption || '', parseComicCaption);
+  if (fromCap) return fromCap;
+  if (ch?.id != null && f?.id != null) return getLocalSection(ch.id, f.id);
+  return '';
+}
+
+export function filesInSection(files, sectionLabel, parseComicCaption, chId) {
   const want = normalizeSectionKey(sectionLabel);
   if (!want) return [];
   return (files || []).filter((f) => {
-    const s = sectionFromCaption(f?.caption || '', parseComicCaption);
+    let s = sectionFromCaption(f?.caption || '', parseComicCaption);
+    if (!s && chId != null && f?.id != null) s = getLocalSection(chId, f.id);
     return normalizeSectionKey(s) === want;
   });
 }
