@@ -218,7 +218,21 @@ export function createRepackTool(d) {
   function suggestUploadName(ch, f, includeChannel = true, formatted = false) {
     const raw = f?.name || 'comic.cbr';
     const cleaned = cleanFileBase(raw);
-    const chName = (ch?.name || '').trim();
+    // En canal macro el "canal" visible es la Sección del caption, no el nombre Telegram
+    let chName = '';
+    try {
+      if (isMacroLibEntry(ch)) {
+        chName = sectionFromCaption(String(f?.caption || ''), parseComicCaption) || '';
+      }
+    } catch (_) {}
+    if (!chName) {
+      try {
+        if (typeof channelDisplayName === 'function' && !isMacroLibEntry(ch)) {
+          chName = String(channelDisplayName(ch) || '').trim();
+        }
+      } catch (_) {}
+    }
+    if (!chName) chName = (ch?.name || '').trim();
 
     // 0) Nombres formateados: "serie #número" (si no hay datos suficientes, se usa el nombre de siempre)
     if (formatted) {
@@ -1789,7 +1803,7 @@ export function createRepackTool(d) {
   /**
    * Añadir versión WebP a TODOS los cómics de un canal (misma UI/lógica que serie).
    */
-  function offerWebpVersionChannel(ch, files) {
+  function offerWebpVersionChannel(ch, files, sectionLabel) {
     const list = (files || []).filter(Boolean);
     if (!ch || !list.length) {
       try {
@@ -1809,9 +1823,11 @@ export function createRepackTool(d) {
     head.append(close);
     const body = el('div', 'info-body');
 
-    const label = (ch.name || 'Canal');
+    const sec = String(sectionLabel || '').trim();
+    const label = sec || (typeof channelDisplayName === 'function' ? (channelDisplayName(ch) || ch.name) : (ch.name || 'Canal'));
+    const kindLabel = sec ? 'Sección' : 'Canal';
     body.append(el('p', 'cover-pick-hint',
-      `Canal «${label}» · ${list.length} cómic(s). Se descargará cada cómic, se convertirán sus páginas a WebP y se subirá la copia al mismo canal (un trabajo por cómic en la Cola de tareas).`
+      `${kindLabel} «${label}» · ${list.length} cómic(s). Se descargará cada cómic, se convertirán sus páginas a WebP y se subirá la copia al mismo canal Telegram (un trabajo por cómic en la Cola de tareas).`
     ));
 
     const mkRow = (title, text, checked) => {
