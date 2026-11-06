@@ -939,19 +939,24 @@ export function createRepackTool(d) {
           }
           caption = fitted;
         }
-        // Macro: Sección obligatoria; conservar siempre la del mensaje original
+        // Macro: Sección obligatoria; conservar / forzar sección
         try {
-          const secKeep = sectionFromCaption(String(item.f?.caption || item.caption || caption || ''));
-          if (secKeep) caption = withSectionInCaption(caption, secKeep);
-          else if (isMacroLibEntry(ch)) {
-            const sec2 = sectionFromCaption(String(caption || ''));
-            if (sec2) caption = withSectionInCaption(caption, sec2);
+          const forced = String(item._forceSection || '').trim();
+          if (forced) caption = withSectionInCaption(caption, forced);
+          else {
+            const secKeep = sectionFromCaption(String(item.f?.caption || item.caption || caption || ''));
+            if (secKeep) caption = withSectionInCaption(caption, secKeep);
+            else if (isMacroLibEntry(ch)) {
+              const sec2 = sectionFromCaption(String(caption || ''));
+              if (sec2) caption = withSectionInCaption(caption, sec2);
+            }
           }
         } catch (_) {}
 
         status(caption ? ('Caption: ' + caption.length + ' caracteres') : 'Sin caption');
         try {
-          await uploadCbz(ch, outName, cbz, caption, statusWithProg);
+          const uploadTarget = item.uploadCh || ch;
+          await uploadCbz(uploadTarget, outName, cbz, caption, statusWithProg);
         } catch (e) {
           const msg = String(e?.message || e || '');
           if (/Missing MTProto Entity/i.test(msg) || /TL definition for ID 0/i.test(msg)) {
@@ -1291,7 +1296,55 @@ export function createRepackTool(d) {
             caption: it.caption || it.f?.caption || '',
           });
         }
-        return { ...it, outputs };
+        
+  /**
+   * Recarga un único cómic (p. ej. reenvío en macro) con sección opcional o canal destino.
+   * @param {object} ch canal actual
+   * @param {object} f archivo
+   * @param {{ section?: string, targetCh?: object, deleteOriginal?: boolean }} [opts]
+   */
+  function offerReloadExternal(ch, f, opts = {}) {
+    if (!ch || !f) return;
+    const section = String(opts.section || '').trim();
+    const targetCh = opts.targetCh || ch;
+    const deleteOriginal = opts.deleteOriginal !== false && !!opts.targetCh
+      ? true
+      : !!opts.deleteOriginal;
+    const item = {
+      ch: targetCh,
+      f: { ...f, caption: f.caption },
+      series: candidateSeries(ch, f),
+      reasons: [f.forwarded ? 'Reenviado' : null, isCbrName(f.name) ? 'CBR' : null].filter(Boolean),
+      // Si recargamos al mismo canal macro, forzar sección en caption al subir
+      _forceSection: section || undefined,
+      // Origen para borrar tras mover
+      _sourceCh: opts.targetCh ? ch : null,
+      _sourceF: opts.targetCh ? f : null,
+    };
+    // Caption con sección si aplica (antes de mostrar nombres)
+    if (section) {
+      try {
+        item.f = { ...item.f, caption: withSectionInCaption(String(f.caption || ''), section) };
+        item.caption = item.f.caption;
+      } catch (_) {}
+    }
+    // Si el destino es otro canal, el item.ch ya es targetCh; processOne sube allí
+    // showNameReview espera selected con .ch y .f del origen de descarga: la descarga
+    // debe ser del mensaje original (ch,f), la subida al targetCh.
+    const selected = [{
+      ch, // descarga desde origen
+      f,
+      series: item.series,
+      reasons: item.reasons,
+      uploadCh: targetCh,
+      caption: item.f.caption || item.caption || f.caption || '',
+      _forceSection: section || undefined,
+      deleteOriginalAfter: deleteOriginal,
+    }];
+    showNameReview(selected, !!deleteOriginal, false, {}, {});
+  }
+
+return { ...it, outputs };
       });
       runQueue(jobs, deleteOriginal, false, {});
     };
@@ -1969,6 +2022,7 @@ export function createRepackTool(d) {
   return {
     offerWebpVersionSeries,
     offerWebpVersionChannel,
+    offerReloadExternal,
     showRepackFrame,
     isRunning: () => running,
     hideFloatingUi,
