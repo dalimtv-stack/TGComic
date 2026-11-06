@@ -1984,7 +1984,7 @@ function channelsView(g) {
             _macro: mac,
             cover: () => locks.isContentRestricted('channel', mac)
               ? locks.lockedCoverNode(ART)
-              : channelCoverNode(mac, secFiles),
+              : channelCoverNode(mac, secFiles, sec),
             hiddenMeta: locks.isContentRestricted('channel', mac),
             label: locks.isContentRestricted('channel', mac) ? '' : label,
             sub: locks.isContentRestricted('channel', mac) ? '' : (n ? (n === 1 ? '1 cómic' : `${n} cómics`) : ''),
@@ -2019,7 +2019,7 @@ function channelsView(g) {
         gridItems.push({
           kind: 'channel',
           _orphan: true,
-          cover: () => channelCoverNode(mac, orphans),
+          cover: () => channelCoverNode(mac, orphans, '(Sin sección)'),
           label: '(Sin sección)',
           sub: on === 1 ? '1 cómic sin Sección' : `${on} cómics sin Sección`,
           isUnread: true,
