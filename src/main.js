@@ -2178,6 +2178,7 @@ const viewsApi = createViews({
   parseComicName, issueDisplay,
   parseComicCaption, buildComicCaption,
   getLIB: () => LIB,
+  peerOf,
   seriesBase,
   setBlobImg,
 });

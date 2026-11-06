@@ -75,10 +75,21 @@ export function createRepackTool(d) {
     ? window.appConfirm(String(m || ''))
     : Promise.resolve(confirm(String(m || ''))));
   /** Copias que ya existen con la misma calidad que el nombre de salida (avisar antes de duplicar). */
-  const findDuplicates = (entries) => {
+  const findDuplicates = async (entries) => {
     const out = [];
-    for (const { f, outName } of entries) {
-      const hit = existingCopy(flattenVersions([f]), outName);
+    for (const ent of entries) {
+      const { f, outName, ch, excludeId } = ent || {};
+      if (!outName) continue;
+      let list = [];
+      try {
+        const chId = ch?.id || f?._chId;
+        if (chId != null) list = flattenVersions((await kv.get('f:' + chId)) || []);
+      } catch (_) { list = []; }
+      // No comparar con el propio mensaje origen (reenvío / CBR que se está recargando)
+      const skipId = excludeId != null ? String(excludeId) : (f?.id != null ? String(f.id) : '');
+      if (skipId) list = (list || []).filter((x) => String(x?.id) !== skipId);
+      // Tampoco contar el propio f si venía suelto
+      const hit = existingCopy(list, outName);
       if (hit) out.push({ outName, q: parseQuality(outName).q, hit });
     }
     return out;
@@ -1116,7 +1127,7 @@ export function createRepackTool(d) {
     head.append(close);
     const body = el('div', 'info-body');
     body.append(el('p', 'cover-pick-hint',
-      'Edita el nombre final de cada archivo (.cbz). Se proponen espacios en lugar de _ cuando se puede.'
+      'Ajusta serie, número e info. El nombre final se genera solo (no es editable).'
     ));
     const rz = !!(webpOpts && webpOpts.resize !== false);
     if (asWebp) {
@@ -1159,18 +1170,40 @@ export function createRepackTool(d) {
     body.append(seriesLab, seriesInp);
 
     const inputs = [];
+    const channelLabelOf = (item) => {
+      const force = String(item?._forceSection || '').trim();
+      if (force) return force;
+      try {
+        if (isMacroLibEntry(item?.ch)) {
+          const s = sectionFromCaption(String(item?.f?.caption || item?.caption || ''), parseComicCaption);
+          if (s) return s;
+        }
+      } catch (_) {}
+      try {
+        if (typeof channelDisplayName === 'function' && item?.ch && !isMacroLibEntry(item.ch)) {
+          return String(channelDisplayName(item.ch) || '').trim();
+        }
+      } catch (_) {}
+      return String(item?.ch?.name || '').trim();
+    };
     const applyNames = () => {
       const withCh = !!includeChChk.checked;
       const fmt = !!fmtChk.checked;
       const ser = String(seriesInp.value || '').trim();
       for (const row of inputs) {
         const inp = row.nameInp;
-        if (inp._manual) continue;
-        let name = suggestUploadName(inp._item.ch, inp._item.f, withCh, fmt);
+        // Nombre final siempre regenerado (no editable a mano)
+        inp._manual = false;
+        const chLabel = channelLabelOf(inp._item);
+        let name = suggestUploadName(inp._item.ch, {
+          ...inp._item.f,
+          // caption con sección forzada para que suggest use la sección como "canal"
+          caption: withSectionInCaption(String(inp._item.f?.caption || ''), chLabel || ''),
+        }, withCh, fmt);
         // Sustituir serie detectada por la del campo común si hay valor
         if (ser && fmt) {
           try {
-            const chName = inp._item.ch?.name || '';
+            const chName = chLabel;
             const num = String(row.numberInp?.value || '').trim();
             const info = String(row.infoInp?.value || '').trim();
             let bodyName = '';
@@ -1225,17 +1258,15 @@ export function createRepackTool(d) {
       infoInp.value = detInfo;
       infoInp.oninput = () => { applyNames(); };
 
-      const nameLab = el('div', 'sync-label', 'Nombre final');
+      const nameLab = el('div', 'sync-label', 'Nombre final (automático)');
       const inp = el('input', 'edit-input repack-name-input');
       inp.type = 'text';
-      // Si viene preconfirmado (p. ej. desde Asignar sección), respetarlo
-      const pre = String(item.outName || '').trim();
-      const baseName = pre || suggested;
-      inp.value = asWebp ? withQualityTags(baseName, { webp: true, resize: rz }) : baseName;
+      inp.readOnly = true;
+      inp.title = 'Se genera a partir de serie, número, info y canal';
+      inp.value = asWebp ? withQualityTags(suggested, { webp: true, resize: rz }) : suggested;
       inp.autocomplete = 'off';
       inp._item = item;
-      inp._manual = !!pre;
-      inp.oninput = () => { inp._manual = true; };
+      inp._manual = false;
 
       row.append(nLab, numberInp, iLab, infoInp, nameLab, inp);
       row.append(el('small', '', item.ch.name || ''));
@@ -1253,12 +1284,21 @@ export function createRepackTool(d) {
     // Primera pasada con serie común
     applyNames();
 
+    const delLabel = el('label', 'repack-check');
+    const delChk = el('input');
+    delChk.type = 'checkbox';
+    delChk.checked = !!deleteOriginal;
+    delLabel.append(delChk, document.createTextNode(' Borrar el archivo previo tras subir OK'));
+    body.append(delLabel);
+
     const actions = el('div', 'edit-actions');
     const cancel = el('button', 'btn', 'Cancelar');
     cancel.onclick = () => frame.remove();
     const goBtn = el('button', 'btn edit-save', 'Subir');
     goBtn.onclick = async () => {
       const withCh = !!includeChChk.checked;
+      // Regenerar nombres antes de subir
+      try { applyNames(); } catch (_) {}
       const ready = inputs.map((row) => {
         const inp = row.nameInp || row;
         const item = inp._item || row._item;
@@ -1270,7 +1310,12 @@ export function createRepackTool(d) {
         if (asWebp) name = withQualityTags(name, { webp: true, resize: rz });
         return { ...item, outName: name, asWebp, webpOpts };
       });
-      const dups = findDuplicates(ready.map((x) => ({ f: x.f, outName: x.outName })));
+      const dups = await findDuplicates(ready.map((x) => ({
+        f: x.f,
+        outName: x.outName,
+        ch: x.uploadCh || x.ch,
+        excludeId: x.f?.id,
+      })));
       if (dups.length && !(await askConfirm(dupMessage(dups)))) return;
       frame.remove();
       const extras = webpExtras || {};
@@ -1302,7 +1347,7 @@ export function createRepackTool(d) {
         
         return { ...it, outputs };
       });
-      runQueue(jobs, deleteOriginal, false, {});
+      runQueue(jobs, !!delChk.checked, false, {});
     };
     actions.append(cancel, goBtn);
     body.append(actions);
@@ -1323,7 +1368,8 @@ export function createRepackTool(d) {
     const section = String(opts.section || '').trim();
     const preferredName = String(opts.outName || opts.fileName || '').trim();
     const targetCh = opts.targetCh || ch;
-    const deleteOriginal = opts.deleteOriginal !== false && !!opts.targetCh
+    // Por defecto borrar el previo (reenvío / CBR); el usuario puede desmarcar en el menú de nombres
+    const deleteOriginal = (opts.deleteOriginal === undefined || opts.deleteOriginal === null)
       ? true
       : !!opts.deleteOriginal;
     const item = {
@@ -1352,10 +1398,6 @@ export function createRepackTool(d) {
     // Si el destino es otro canal, el item.ch ya es targetCh; processOne sube allí
     // showNameReview espera selected con .ch y .f del origen de descarga: la descarga
     // debe ser del mensaje original (ch,f), la subida al targetCh.
-    let outName = preferredName;
-    if (outName && !/\.cb[zr]$/i.test(outName)) {
-      outName = outName.replace(/\.cb[zr]$/i, '') + '.cbz';
-    }
     const selected = [{
       ch, // descarga desde origen
       f,
@@ -1365,7 +1407,7 @@ export function createRepackTool(d) {
       caption: item.f.caption || item.caption || f.caption || '',
       _forceSection: section || undefined,
       deleteOriginalAfter: deleteOriginal,
-      outName: outName || undefined,
+      // sin outName fijo: el menú genera el nombre a partir de serie/número/sección
     }];
     showNameReview(selected, !!deleteOriginal, false, {}, {});
   }

@@ -823,7 +823,7 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
       mode === 'local'
         ? 'Confirma sección y nombre de archivo. La sección se guardará solo en este dispositivo (reenvío: no se puede editar el caption de Telegram).'
         : mode === 'reload'
-          ? 'Confirma sección y nombre de archivo. Al continuar se abrirá la recarga externa con esos datos.'
+          ? 'Elige la sección de destino. Al continuar se abrirá la recarga externa (el nombre de archivo se genera en el siguiente paso).'
           : 'Confirma sección y nombre de archivo. Se actualizará el caption en Telegram.'
     ));
 
@@ -840,15 +840,12 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
     secInp.autocomplete = 'off';
     secInp.hidden = true;
 
-    // --- Nombre de archivo (obligatorio confirmar) ---
+    // --- Nombre de archivo (solo caption/local; en recarga se genera en el menú siguiente) ---
     const fnLab = el('div', 'sync-label', 'Nombre de archivo');
     const fnInp = el('input', 'edit-input');
     fnInp.type = 'text';
     fnInp.placeholder = 'Ej: Serie #01 - Título.cbz';
     fnInp.autocomplete = 'off';
-    // Pre-relleno: nombre REAL del documento en Telegram.
-    // Si el caption trae "Nombre de archivo" y es más completo (Telegram a veces recorta), usarlo.
-    // Nunca inventar prefijos de editorial/canal (p. ej. "DC - …").
     let suggestedFn = String(f?.name || '').trim();
     try {
       const fromCap = typeof parseComicCaption === 'function'
@@ -856,7 +853,6 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
         : '';
       if (fromCap) {
         const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
-        // Preferir caption si es más largo o coincide sin espacios raros (versión "limpia")
         if (!suggestedFn || fromCap.length >= suggestedFn.length || norm(fromCap) === norm(suggestedFn)) {
           suggestedFn = fromCap;
         }
@@ -864,6 +860,10 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
     } catch (_) {}
     if (!suggestedFn) suggestedFn = 'comic.cbz';
     fnInp.value = suggestedFn;
+    if (mode === 'reload') {
+      fnLab.hidden = true;
+      fnInp.hidden = true;
+    }
 
     (async () => {
       let files = [];
@@ -914,15 +914,17 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
         await appAlert('Indica el nombre de la sección');
         return;
       }
-      let fileName = String(fnInp.value || '').trim();
-      if (!fileName) {
-        await appAlert('Indica el nombre de archivo');
-        return;
-      }
-      // Normalizar extensión visible
-      if (!/\.cb[zr]$/i.test(fileName) && !/\.pdf$/i.test(fileName)) {
-        const ext = /\.cbr$/i.test(f?.name || '') ? '.cbr' : /\.pdf$/i.test(f?.name || '') ? '.pdf' : '.cbz';
-        fileName = fileName.replace(/\.(cb[zr]|pdf)$/i, '') + ext;
+      let fileName = '';
+      if (mode !== 'reload') {
+        fileName = String(fnInp.value || '').trim();
+        if (!fileName) {
+          await appAlert('Indica el nombre de archivo');
+          return;
+        }
+        if (!/\.cb[zr]$/i.test(fileName) && !/\.pdf$/i.test(fileName)) {
+          const ext = /\.cbr$/i.test(f?.name || '') ? '.cbr' : /\.pdf$/i.test(f?.name || '') ? '.pdf' : '.cbz';
+          fileName = fileName.replace(/\.(cb[zr]|pdf)$/i, '') + ext;
+        }
       }
 
       // ¿Coincide con un canal real (no macro) de la misma editorial?
@@ -943,7 +945,7 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
           frame.remove();
           try {
             if (typeof repackTool?.offerReloadExternal === 'function') {
-              repackTool.offerReloadExternal(ch, f, { targetCh: matchCh, deleteOriginal: true, outName: fileName });
+              repackTool.offerReloadExternal(ch, f, { targetCh: matchCh, deleteOriginal: true });
             } else {
               await appAlert('Recarga no disponible. Usa «Recargar CBR / externos».');
             }
@@ -957,7 +959,7 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
       if (mode === 'reload') {
         frame.remove();
         try {
-          repackTool?.offerReloadExternal?.(ch, f, { section: chosen, deleteOriginal: false, outName: fileName });
+          repackTool?.offerReloadExternal?.(ch, f, { section: chosen, deleteOriginal: true });
         } catch (e) {
           await appAlert(e?.message || e);
         }
@@ -1133,10 +1135,15 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
               if (!client) {
                 return appAlert('Cliente Telegram no disponible (sin sesión)');
               }
-              if (typeof d.peerOf !== 'function') {
+              let peer;
+              try {
+                peer = peerOfFn(ch);
+              } catch (e) {
                 return appAlert('Cliente Telegram no disponible (peerOf)');
               }
-              const peer = peerOfFn(ch);
+              if (!peer) {
+                return appAlert('Cliente Telegram no disponible (peerOf)');
+              }
               const ids = [];
               const pushId = (x) => { if (x?.id != null) ids.push(Number(x.id)); };
               pushId(f);
