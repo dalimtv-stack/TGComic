@@ -111,3 +111,55 @@ export function withSectionInCaption(caption, section) {
   }
   return line + '\n' + text;
 }
+
+
+/** Etiqueta de "canal" para UI: sección si el contenedor es macro */
+export function displayChannelForComic(ch, f, channelDisplayNameFn) {
+  if (isMacroLibEntry(ch)) {
+    const sec = sectionFromCaption(f?.caption || '');
+    return sec || '(Sin sección)';
+  }
+  if (typeof channelDisplayNameFn === 'function') {
+    try { return channelDisplayNameFn(ch) || ch?.name || ''; } catch (_) {}
+  }
+  return ch?.name || '';
+}
+
+/** Nombre a usar en el archivo al "incluir canal": sección o nombre real */
+export function channelNameForFile(ch, sectionLabel, channelDisplayNameFn) {
+  const sec = String(sectionLabel || '').trim();
+  if (sec) return sec;
+  if (isMacroLibEntry(ch)) return '';
+  if (typeof channelDisplayNameFn === 'function') {
+    try { return channelDisplayNameFn(ch) || ch?.name || ''; } catch (_) {}
+  }
+  return ch?.name || '';
+}
+
+/**
+ * Cuenta ítems de primer nivel bajo una editorial: canales reales + secciones de macros.
+ * @param {Array} lib
+ * @param {string} groupName
+ * @param {(ch)=>any[]} getFilesSync  // sync reader (kv already loaded) optional
+ */
+export function countNavChannels(lib, groupName, filesByChId = {}) {
+  const g = String(groupName || '');
+  let n = 0;
+  for (const ch of lib || []) {
+    if (String(ch.group || '') !== g) continue;
+    if (isMacroLibEntry(ch)) {
+      const files = filesByChId[String(ch.id)] || [];
+      const secs = collectSectionsFromFiles(files, (cap) => {
+        const s = sectionFromCaption(cap);
+        return s ? { section: s } : {};
+      });
+      n += secs.length;
+      // huérfanos sin sección: cuentan como 1 tarjeta especial
+      const orphan = (files || []).some((f) => !sectionFromCaption(f?.caption || ''));
+      if (orphan) n += 1;
+    } else {
+      n += 1;
+    }
+  }
+  return n;
+}
