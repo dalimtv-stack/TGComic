@@ -377,7 +377,11 @@ export function createInfoEdit(d) {
     } catch (e) { console.warn('[cover src]', e); }
   }
 
-  const channelCoverKey = (ch) => `cc:${ch.id}`;
+  const channelCoverKey = (ch, section) => {
+    const sec = String(section || '').trim();
+    if (sec) return `cc:${ch.id}:sec:${sec.toLowerCase()}`;
+    return `cc:${ch.id}`;
+  };
   const seriesCoverKey = (ch, label) => `sc:${ch.id}:${String(label || '').toLowerCase()}`;
   const groupCoverKey = (name) => `gc:${artNorm(String(name || ''))}`;
 
@@ -2425,9 +2429,11 @@ function applyCoverProgress(node, prog) {
   node.append(el('span', 'prog-badge', prog.pct >= 95 ? '✓' : prog.pct + '%'));
 }
 
-function channelCoverNode(ch, files) {
+function channelCoverNode(ch, files, section) {
   const host = el('div', 'cover cover-channel');
-  const letter = el('span', '', (channelDisplayName(ch) || '?').slice(0, 1).toUpperCase());
+  const secLabel = String(section || '').trim();
+  const letterSrc = secLabel || channelDisplayName(ch) || '?';
+  const letter = el('span', '', letterSrc.slice(0, 1).toUpperCase());
   host.append(letter);
   const prog = channelReadProgress(ch, files);
   if (prog) applyCoverProgress(host, prog);
@@ -2448,7 +2454,7 @@ function channelCoverNode(ch, files) {
   };
 
   host._load = async () => {
-    const key = channelCoverKey(ch);
+    const key = channelCoverKey(ch, secLabel);
     // 1) Reaplicar origen sincronizado (GitHub alt / cómic / URL) desde otro dispositivo
     try { await applyCoverSource(key, ch, files, 'channel'); } catch (_) {}
     // Si aún no hay listado, cargar f: y reintentar (portada desde cómic necesita los archivos)
@@ -2485,7 +2491,7 @@ function channelCoverNode(ch, files) {
           const m = await kv.get('art:channels:' + artNorm((ch?.name || '').normalize('NFC').trim()));
           const u = m?.url || '';
           let file = u; try { file = decodeURIComponent(u.split('/').pop().split('?')[0]); } catch (_) {}
-          recordCoverOrigin(channelCoverKey(ch), { t: 'gh', url: u, file });
+          recordCoverOrigin(channelCoverKey(ch, secLabel), { t: 'gh', url: u, file });
         } catch (_) {}
         showOnHost(gh);
         return;
@@ -2497,7 +2503,7 @@ function channelCoverNode(ch, files) {
       const comic = await firstAvailableCover(ch, files);
       if (comic) {
         showOnHost(comic);
-        recordCoverOrigin(channelCoverKey(ch), firstAvailableCover.last);
+        recordCoverOrigin(channelCoverKey(ch, secLabel), firstAvailableCover.last);
         try { await setChannelCoverBlob(ch, comic); } catch (_) {}
         return;
       }
@@ -2507,7 +2513,7 @@ function channelCoverNode(ch, files) {
   return host;
 }
 async function clearChannelCover(ch) {
-  try { await kv.del(channelCoverKey(ch)); } catch (_) {}
+  try { await kv.del(channelCoverKey(ch, secLabel)); } catch (_) {}
 }
 async function getGithubChannelArtBlob(ch, preferredUrl) {
   const nfc = (ch?.name || '').normalize('NFC').trim();
@@ -2685,7 +2691,7 @@ async function showGroupInfo(originalName) {
       ai: { n: 0, bytes: 0 },
       total: { n: 0, bytes: 0 },
     };
-    for (const ch of chs) {
+    for (const ch of [...chs, ...(typeof macrosG !== 'undefined' ? macrosG : [])]) {
       const files = (await kv.get('f:' + ch.id)) || [];
       const st = splitStats(files);
       comics += st.main.n;
@@ -3809,8 +3815,27 @@ function showSeriesBulkCaptionEditor(ch, seriesLabel, files, onBack) {
     if (channelId) channels = channels.filter((c) => String(c.id) === String(channelId));
 
     const tasks = [];
-    // Canales
-    for (const ch of channels) tasks.push({ kind: 'channel', ch });
+    // Canales reales; macros → una tarea de portada por Sección
+    for (const ch of channels) {
+      if (isMacroLibEntry(ch)) {
+        let files = [];
+        try { files = (await kv.get('f:' + ch.id)) || []; } catch (_) { files = []; }
+        const secs = collectSectionsFromFiles(files || [], (cap) => {
+          const s = sectionFromCaption(cap);
+          return s ? { section: s } : {};
+        });
+        for (const sec of secs) {
+          const secFiles = (files || []).filter((f) => {
+            const s = sectionFromCaption(f?.caption || '');
+            return s.trim().toLowerCase() === String(sec).trim().toLowerCase();
+          });
+          tasks.push({ kind: 'channel', ch, section: sec, files: secFiles });
+        }
+        if (!secs.length) tasks.push({ kind: 'channel', ch, files: files || [] });
+      } else {
+        tasks.push({ kind: 'channel', ch });
+      }
+    }
     // Series (si hay filtro de serie, solo esa; si no, todas las del alcance)
     for (const ch of channels) {
       let files = [];
@@ -3848,7 +3873,8 @@ function showSeriesBulkCaptionEditor(ch, seriesLabel, files, onBack) {
       try {
         if (t.kind === 'channel') {
           const ch = t.ch;
-          const key = channelCoverKey(ch);
+          const key = channelCoverKey(ch, t.section);
+
           onProgress?.(done, total, channelDisplayName(ch) || ch.name || key);
           try { await kv.del(key); } catch (_) {}
           try { localStorage.removeItem(coverAppliedLs(key)); } catch (_) {}
