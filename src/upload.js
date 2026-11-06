@@ -849,15 +849,85 @@ export function createUploadTool(d) {
     await getReady();
     const client = getClient();
     const group = String(editorial || '').trim() || 'Sin editorial';
+    const title = macroChannelTitle(group);
     const lib = Array.isArray(getLIB()) ? getLIB() : [];
-    const found = lib.find(
+
+    const toEntry = (chEntity, fromLib) => ({
+      id: String(chEntity.id ?? fromLib?.id),
+      hash: String(chEntity.accessHash ?? fromLib?.hash ?? ''),
+      name: group,
+      group,
+      macro: true,
+    });
+
+    // 1) Ya en LIB como macro de esta editorial
+    let found = lib.find(
       (c) => isMacroLibEntry(c) && (c.group || '').toLowerCase() === group.toLowerCase()
     );
-    if (found) return found;
+    if (found) return { ...found, macro: true, name: found.name || group, group };
 
-    const title = macroChannelTitle(group);
+    // 2) En LIB mal clasificado (parseFolder antiguo → group Sin editorial, name = editorial)
+    found = lib.find((c) => {
+      const n = String(c.name || '').toLowerCase();
+      const g = String(c.group || '').toLowerCase();
+      return n === group.toLowerCase()
+        && (g === group.toLowerCase() || g === 'sin editorial' || !g);
+    });
+    if (found) {
+      const fixed = { ...found, name: group, group, macro: true };
+      const next = lib.map((c) => String(c.id) === String(fixed.id) ? fixed : c);
+      setLIB(next);
+      try { await kv.set('lib', next); } catch (_) {}
+      return fixed;
+    }
+
+    // 3) Buscar en Telegram por título exacto (no crear duplicado)
+    status?.(`Buscando canal «${title}»…`);
+    try {
+      for await (const d of client.iterDialogs({})) {
+        const ent = d.entity;
+        if (ent?.className !== 'Channel') continue;
+        if (String(ent.title || '').trim() !== title) continue;
+        const entry = {
+          id: String(ent.id),
+          hash: String(ent.accessHash),
+          name: group,
+          group,
+          macro: true,
+        };
+        const next = [...lib.filter((c) => String(c.id) !== entry.id), entry];
+        setLIB(next);
+        try { await kv.set('lib', next); } catch (_) {}
+        status?.('Canal macro existente reutilizado');
+        return entry;
+      }
+    } catch (e) {
+      console.warn('[upload] búsqueda macro por título', e);
+    }
+    try {
+      const res = await client.invoke(new Api.contacts.Search({ q: title, limit: 20 }));
+      for (const ch of res.chats || []) {
+        if (ch?.className !== 'Channel') continue;
+        if (String(ch.title || '').trim() !== title) continue;
+        const entry = {
+          id: String(ch.id),
+          hash: String(ch.accessHash),
+          name: group,
+          group,
+          macro: true,
+        };
+        const next = [...lib.filter((c) => String(c.id) !== entry.id), entry];
+        setLIB(next);
+        try { await kv.set('lib', next); } catch (_) {}
+        status?.('Canal macro existente reutilizado');
+        return entry;
+      }
+    } catch (e) {
+      console.warn('[upload] search macro', e);
+    }
+
+    // 4) Crear solo si no existe
     status?.(`Creando canal macro «${title}»…`);
-
     let created;
     try {
       created = await client.invoke(new Api.channels.CreateChannel({
@@ -906,32 +976,6 @@ export function createUploadTool(d) {
       console.warn('[upload] no se pudo archivar el macro', e);
     }
 
-    try {
-      if (typeof refreshLibrary === 'function') {
-        const fresh = await refreshLibrary();
-        if (Array.isArray(fresh) && fresh.length) {
-          // Preservar flag macro si refresh no lo trae
-          const mapped = fresh.map((c) => {
-            if (String(c.id) === entry.id) return { ...c, macro: true, name: c.name || group, group: c.group || group };
-            return c;
-          });
-          const again = mapped.find((c) => String(c.id) === entry.id);
-          if (again) {
-            setLIB(mapped);
-            try { await kv.set('lib', mapped); } catch (_) {}
-            try {
-              status?.('Mensaje inicial en el macro…');
-              await client.sendMessage(peerOf(again), { message: group });
-            } catch (_) {}
-            status?.('Canal macro listo');
-            return { ...again, macro: true };
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('[upload] refreshLibrary tras macro', e);
-    }
-
     const next = [...lib.filter((c) => String(c.id) !== entry.id), entry];
     setLIB(next);
     try { await kv.set('lib', next); } catch (_) {}
@@ -942,7 +986,7 @@ export function createUploadTool(d) {
     return entry;
   }
 
-  async function postErrorPlaceholder(ch, fileName, errMsg) {
+async function postErrorPlaceholder(ch, fileName, errMsg) {
     if (!ch) return;
     try {
       await getReady();
