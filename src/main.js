@@ -395,17 +395,65 @@ async function invalidateComicLocal(ch, f) {
   try { await pageCache?.clearComic?.(ch.id, f.id); } catch (_) {}
 }
 
-async function fetchFiles(ch) {
+/** Meta de listado por canal: evita re-escaneo completo si no hay documentos nuevos. */
+const filesMetaKey = (chId) => 'fmeta:' + String(chId);
+async function getFilesMeta(chId) {
+  try { return (await kv.get(filesMetaKey(chId))) || null; } catch { return null; }
+}
+async function setFilesMeta(chId, meta) {
+  try { await kv.set(filesMetaKey(chId), meta); } catch (_) {}
+}
+
+/** Id del documento más reciente del canal (1 mensaje). null si vacío o error. */
+async function peekTopDocumentId(ch) {
   await ready;
+  try {
+    for await (const m of client.iterMessages(peerOf(ch), {
+      filter: new Api.InputMessagesFilterDocument(),
+      limit: 1,
+    })) {
+      return m?.id != null ? Number(m.id) : null;
+    }
+  } catch (e) {
+    console.warn('[peekTopDocumentId]', ch?.name || ch?.id, e);
+  }
+  return null;
+}
+
+/**
+ * @param {object} ch
+ * @param {{ force?: boolean }} [opts] force=true ignora meta y relee todo
+ */
+async function fetchFiles(ch, opts = {}) {
+  await ready;
+  const force = !!opts.force;
   let prev = [];
   try { prev = (await kv.get('f:' + ch.id)) || []; } catch (_) { prev = []; }
-  // prev puede traer entradas agrupadas (con variants): aplanar para detectar cambios en cualquier versión
-  const prevById = new Map(flattenVersions(Array.isArray(prev) ? prev : []).map((x) => [String(x.id), x]));
+  const prevFlat = flattenVersions(Array.isArray(prev) ? prev : []);
+  const prevById = new Map(prevFlat.map((x) => [String(x.id), x]));
+
+  // Atajo: si el documento más reciente no ha cambiado, reutilizar caché
+  if (!force && prevFlat.length) {
+    try {
+      const meta = await getFilesMeta(ch.id);
+      const top = await peekTopDocumentId(ch);
+      if (
+        meta
+        && top != null
+        && Number(meta.topDocId) === Number(top)
+        && Number(meta.count) === prevFlat.length
+      ) {
+        return prev; // sin cambios detectables
+      }
+    } catch (_) {}
+  }
 
   const out = [];
+  let topDocId = null;
   for await (const m of client.iterMessages(peerOf(ch), { filter: new Api.InputMessagesFilterDocument(), limit: 100000 })) {
     const name = m.document?.attributes?.find((a) => a.className === 'DocumentAttributeFilename')?.fileName;
     if (!name || !/\.(cb[zr]|pdf)$/i.test(name)) continue;
+    if (topDocId == null && m.id != null) topDocId = Number(m.id);
     const caption = String(m.message || '').trim();
     out.push({
       id: m.id,
@@ -429,6 +477,12 @@ async function fetchFiles(ch) {
   // Versiones de calidad del mismo cómic (Alta / [WebP] Media / [2400px][WebP] Baja): una sola entrada
   const grouped = collapseVersions(out);
   await kv.set('f:' + ch.id, grouped);
+  const flatN = flattenVersions(grouped).length;
+  await setFilesMeta(ch.id, {
+    topDocId: topDocId != null ? topDocId : (out[0] ? Number(out[0].id) : 0),
+    count: flatN,
+    fetchedAt: Date.now(),
+  });
   return grouped;
 }
 
@@ -655,17 +709,38 @@ homeRefreshBtn.onclick = async () => {
   const prevTitle = titleEl.textContent;
   try {
     titleEl.textContent = 'Actualizando…';
-    const lib = LIB || [];
-    // Forzar re-lectura de mensajes de cada canal (actualiza f:<id> en IndexedDB)
-    for (let i = 0; i < lib.length; i++) {
-      const ch = lib[i];
+    const lib = Array.isArray(LIB) ? LIB.slice() : [];
+    let done = 0;
+    let skipped = 0;
+    // Varios canales a la vez (Telegram tolera ~3–4 bien desde cliente web)
+    const CONCURRENCY = 3;
+    await mapLimit(lib, CONCURRENCY, async (ch) => {
       try {
-        titleEl.textContent = `Actualizando… ${i + 1}/${lib.length}`;
-        await fetchFiles(ch);
+        const before = await getFilesMeta(ch.id);
+        const list = await fetchFiles(ch); // usa atajo por topDocId si no hay cambios
+        const after = await getFilesMeta(ch.id);
+        if (
+          before
+          && after
+          && Number(before.topDocId) === Number(after.topDocId)
+          && Number(before.count) === Number(after.count)
+          && before.fetchedAt
+          && after.fetchedAt
+          && Number(after.fetchedAt) === Number(before.fetchedAt)
+        ) {
+          skipped++;
+        }
       } catch (e) {
         console.warn('[refresh]', ch?.name, e);
+      } finally {
+        done++;
+        try {
+          titleEl.textContent = skipped
+            ? `Actualizando… ${done}/${lib.length} (${skipped} sin cambios)`
+            : `Actualizando… ${done}/${lib.length}`;
+        } catch (_) {}
       }
-    }
+    });
     try { searchIndex = null; } catch (_) {}
   } finally {
     homeRefreshBtn.dataset.busy = '0';
@@ -674,6 +749,43 @@ homeRefreshBtn.onclick = async () => {
   }
   try { refreshView(); } catch (_) { try { groupsView(); } catch (_) {} }
 };
+
+// Pulsación larga en actualizar = forzar relectura completa de todos los canales
+try {
+  if (typeof bindLongPress === 'function') {
+    bindLongPress(homeRefreshBtn, async () => {
+      if (homeRefreshBtn.dataset.busy === '1') return;
+      const ok = await appConfirm(
+        '¿Forzar actualización completa de todos los canales?\n\nIgnora la detección de “sin cambios” (más lento, útil si editaste captions).',
+        'Actualización forzada'
+      );
+      if (!ok) return;
+      homeRefreshBtn.dataset.busy = '1';
+      homeRefreshBtn.disabled = true;
+      const prevTitle = titleEl.textContent;
+      try {
+        const lib = Array.isArray(LIB) ? LIB.slice() : [];
+        let done = 0;
+        await mapLimit(lib, 3, async (ch) => {
+          try {
+            await fetchFiles(ch, { force: true });
+          } catch (e) {
+            console.warn('[refresh-force]', ch?.name, e);
+          } finally {
+            done++;
+            try { titleEl.textContent = `Forzando… ${done}/${lib.length}`; } catch (_) {}
+          }
+        });
+        try { searchIndex = null; } catch (_) {}
+      } finally {
+        homeRefreshBtn.dataset.busy = '0';
+        homeRefreshBtn.disabled = false;
+        titleEl.textContent = prevTitle || 'TGComics';
+      }
+      try { refreshView(); } catch (_) { try { groupsView(); } catch (_) {} }
+    });
+  }
+} catch (_) {}
 
 const top = $('#top');
 const h1 = titleEl;
