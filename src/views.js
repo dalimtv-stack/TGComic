@@ -1063,7 +1063,7 @@ function groupsView() {
       openSeries: (ch, seriesLabel, fs) => seriesView(ch, seriesLabel, fs),
       openComic: (ch, f) => openComic(ch, f),
       openGroup: (g) => channelsView(g),
-      openChannel: (ch) => filesView(ch),
+      openChannel: (ch, opts) => filesView(ch, opts || {}),
     }).then((idx) => {
       searchIndex = idx;
       return idx;
@@ -1865,7 +1865,7 @@ function channelsView(g) {
         openSeries: (ch, seriesLabel, fs) => seriesView(ch, seriesLabel, fs),
         openComic: (ch, f) => openComic(ch, f),
         openGroup: () => {},
-        openChannel: (ch) => filesView(ch),
+        openChannel: (ch, opts) => filesView(ch, opts || {}),
       });
     };
 
