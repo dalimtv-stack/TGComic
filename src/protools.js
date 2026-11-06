@@ -30,6 +30,14 @@ export function createProTools(d) {
     openPages,
     reloadStructureCovers,
   } = d;
+  const getLIB = () => {
+    try {
+      if (typeof d.LIB === 'function') return d.LIB() || [];
+      return Array.isArray(d.LIB) ? d.LIB : [];
+    } catch (_) { return []; }
+  };
+  const getClient = () => d.client;
+  const getReady = () => d.ready;
 
   // Preferencias solo locales (mismo prefijo que main)
   const pref = (k, def = '') => {
@@ -744,12 +752,139 @@ export function createProTools(d) {
     };
   }
 
+
+  async function collectTelegramMembership() {
+    const out = {
+      channels: 0,
+      supergroups: 0,
+      groups: 0,
+      users: 0,
+      dialogs: 0,
+      error: null,
+    };
+    try {
+      const ready = getReady();
+      if (ready && typeof ready.then === 'function') await ready;
+      const client = getClient();
+      if (!client) {
+        out.error = 'Sin cliente Telegram';
+        return out;
+      }
+      let dialogs = [];
+      if (typeof client.getDialogs === 'function') {
+        dialogs = await client.getDialogs({ limit: 200 });
+        let guard = 0;
+        while (dialogs.length >= 200 * (guard + 1) && guard < 8) {
+          guard++;
+          try {
+            const last = dialogs[dialogs.length - 1];
+            const more = await client.getDialogs({
+              limit: 200,
+              offsetDate: last?.message?.date || 0,
+            });
+            if (!more?.length) break;
+            const seen = new Set(dialogs.map((d) => String(d.id ?? d.entity?.id)));
+            let added = 0;
+            for (const d of more) {
+              const id = String(d.id ?? d.entity?.id);
+              if (seen.has(id)) continue;
+              seen.add(id);
+              dialogs.push(d);
+              added++;
+            }
+            if (!added) break;
+          } catch (_) { break; }
+        }
+      }
+      out.dialogs = dialogs.length;
+      for (const d of dialogs) {
+        const e = d.entity || d;
+        const cn = e?.className || e?.constructor?.name || '';
+        if (cn === 'Channel' || e?.broadcast != null || e?.megagroup != null) {
+          if (e.broadcast) out.channels++;
+          else if (e.megagroup) out.supergroups++;
+          else out.channels++;
+        } else if (cn === 'Chat') out.groups++;
+        else if (cn === 'User') out.users++;
+      }
+    } catch (e) {
+      out.error = e?.message || String(e);
+    }
+    return out;
+  }
+
+  /** Desglose biblioteca TGComic: editoriales → canales → series → nº cómics */
+  async function collectLibraryBreakdown() {
+    const lib = getLIB();
+    const byEd = new Map(); // editorial -> { channels: [{ name, series: [{label, count}], comics }] }
+    let totalChannels = 0;
+    let totalSeries = 0;
+    let totalComics = 0;
+
+    for (const ch of lib || []) {
+      if (!ch?.id) continue;
+      totalChannels++;
+      const ed = String(ch.group || 'Sin editorial').trim() || 'Sin editorial';
+      if (!byEd.has(ed)) byEd.set(ed, []);
+      let files = [];
+      try { files = (await kv.get('f:' + ch.id)) || []; } catch (_) { files = []; }
+      if (!Array.isArray(files)) files = [];
+      // aplanar versiones si vienen agrupadas
+      const flat = [];
+      for (const f of files) {
+        if (f?.variants && typeof f.variants === 'object') {
+          flat.push(f);
+          for (const v of Object.values(f.variants)) if (v && v.id) flat.push(v);
+        } else flat.push(f);
+      }
+      // usar listado tal cual para groupSeries (como en la UI)
+      const groups = typeof groupSeries === 'function'
+        ? groupSeries(files, ch.name, typeof seriesOverrideFor === 'function' ? seriesOverrideFor(ch) : null)
+        : [{ label: '', files }];
+      const seriesList = [];
+      let chComics = 0;
+      for (const g of groups || []) {
+        const n = Array.isArray(g.files) ? g.files.length : 0;
+        chComics += n;
+        const label = String(g.label || g.series || '(sin serie)').trim() || '(sin serie)';
+        seriesList.push({ label, count: n });
+        totalSeries++;
+      }
+      totalComics += chComics;
+      const chName = (typeof channelDisplayName === 'function' ? channelDisplayName(ch) : null) || ch.name || String(ch.id);
+      byEd.get(ed).push({
+        name: chName,
+        id: String(ch.id),
+        comics: chComics,
+        series: seriesList.sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' })),
+      });
+    }
+
+    // ordenar editoriales y canales
+    const editorials = [...byEd.entries()]
+      .map(([ed, channels]) => ({
+        name: (typeof groupDisplayName === 'function' ? groupDisplayName(ed) : null) || ed,
+        key: ed,
+        channels: channels.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })),
+        series: channels.reduce((s, c) => s + c.series.length, 0),
+        comics: channels.reduce((s, c) => s + c.comics, 0),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+
+    return {
+      totalChannels,
+      totalSeries,
+      totalComics,
+      editorials,
+    };
+  }
+
   function showDevCoverInfo() {
     document.querySelector('.info-frame.protools-dev')?.remove();
     const frame = el('div', 'info-frame protools-dev');
     const box = el('div', 'info-box');
     const head = el('div', 'info-head');
-    const titleSpan = el('span', 'info-head-title', 'Info desarrollo · Portadas');
+    const titleSpan = el('span', 'info-head-title', 'Info desarrollo');
     titleSpan.title = 'Pulsa para copiar';
     head.append(titleSpan);
     const close = el('button', 'btn info-close', '×');
@@ -766,9 +901,9 @@ export function createProTools(d) {
         }
       } catch (_) {}
       titleSpan.textContent = 'Copiado';
-      setTimeout(() => { titleSpan.textContent = 'Info desarrollo · Portadas'; }, 1200);
+      setTimeout(() => { titleSpan.textContent = 'Info desarrollo'; }, 1200);
     };
-    const loading = el('p', 'cover-pick-hint', 'Analizando caché de portadas…');
+    const loading = el('p', 'cover-pick-hint', 'Analizando…');
     body.append(loading);
     box.append(head, body);
     frame.append(box);
@@ -829,6 +964,61 @@ export function createProTools(d) {
               `${formatBytes(it.size)} · ${it.fmt} · ${dim}`
             ));
           }
+        }
+
+        // —— Telegram Global + Biblioteca ——
+        loading.textContent = 'Consultando Telegram y biblioteca…';
+        const row = (lab, val) => {
+          const r = el('div', 'info-row');
+          r.append(el('span', 'info-label', lab), el('span', 'info-value', String(val ?? '—')));
+          return r;
+        };
+
+        body.append(el('div', 'info-sec', 'Telegram Global'));
+        try {
+          const tg = await collectTelegramMembership();
+          if (tg?.error) {
+            body.append(row('Estado', 'No se pudo consultar: ' + String(tg.error).slice(0, 120)));
+          } else {
+            body.append(row('Canales a los que perteneces', tg.channels ?? 0));
+            body.append(row('Supergrupos a los que perteneces', tg.supergroups ?? 0));
+            body.append(row('Grupos básicos', tg.groups ?? 0));
+            body.append(row('Diálogos totales (aprox.)', tg.dialogs ?? 0));
+            const joined = (Number(tg.channels) || 0) + (Number(tg.supergroups) || 0) + (Number(tg.groups) || 0);
+            body.append(row('Canales + grupos unidos', joined + ' / ~500 (límite habitual de unión)'));
+          }
+        } catch (e) {
+          body.append(row('Estado', 'Error: ' + (e?.message || e)));
+        }
+
+        body.append(el('div', 'info-sec', 'Telegram Biblioteca'));
+        try {
+          const lib = await collectLibraryBreakdown();
+          body.append(row('Canales de la biblioteca', lib.totalChannels));
+          body.append(row('Series (en todos los canales)', lib.totalSeries));
+          body.append(row('Cómics listados', lib.totalComics));
+
+          for (const ed of lib.editorials || []) {
+            body.append(el('div', 'info-sec', 'Editorial: ' + ed.name));
+            body.append(row('Canales', ed.channels.length));
+            body.append(row('Series', ed.series));
+            body.append(row('Cómics', ed.comics));
+            for (const ch of ed.channels) {
+              body.append(el('p', 'cover-pick-hint',
+                'Canal: ' + ch.name + ' · ' + ch.series.length + ' serie(s) · ' + ch.comics + ' cómic(s)'
+              ));
+              for (const s of ch.series) {
+                body.append(el('p', 'cover-pick-hint',
+                  '  · ' + s.label + ' — ' + s.count + ' cómic(s)'
+                ));
+              }
+            }
+          }
+          if (!(lib.editorials || []).length) {
+            body.append(el('p', 'cover-pick-hint', 'Biblioteca vacía o aún no sincronizada.'));
+          }
+        } catch (e) {
+          body.append(row('Biblioteca', 'Error: ' + (e?.message || e)));
         }
 
         const actions = el('div', 'edit-actions');
