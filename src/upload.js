@@ -289,7 +289,9 @@ export function createUploadTool(d) {
       }
     }
 
-    const ISSUE_TAG = '(?:\\d+(?:\\.\\d+)?[a-zA-Z]?(?![\\w.])|(?:Special|Especial|Extras|Extra|Anual|Annual|[OÓoó]mnibus|Integral|One[\\s-]?Shot|OneShot)(?![A-Za-zÀ-ÿ]))';
+    const ISSUE_WORD = '(?:Special|Especial|Extras|Extra|Anual|Annual|[OÓoó]mnibus|Integral|One[\\s-]?Shot|OneShot)';
+    // Número, etiqueta sola, o etiqueta + número (Integral 1, Especial 2, Anual 1…)
+    const ISSUE_TAG = '(?:' + ISSUE_WORD + '\\s*\\d+(?:\\.\\d+)?[a-zA-Z]?|\\d+(?:\\.\\d+)?[a-zA-Z]?(?![\\w.])|' + ISSUE_WORD + ')(?![A-Za-zÀ-ÿ])';
     const tags = extras.length ? extras.map((x) => '[' + x + ']').join(' ') : '';
     const cleanInfoPart = (s) => String(s || '')
       .replace(/^\s*[-–—:]+\s*/g, '')
@@ -317,6 +319,8 @@ export function createUploadTool(d) {
       if (!rest || rest.toLowerCase() === hint.toLowerCase()) {
         return { series: hint, number: '', info: tags };
       }
+      // Sin número/especial detectado: el resto va a info adicional (no al número)
+      return { series: hint, number: '', info: joinInfo(rest, tags) };
     }
 
     // Del nombre de archivo: Serie #n - info
@@ -346,7 +350,12 @@ export function createUploadTool(d) {
         info: tags,
       };
     }
-    return { series: base || chName || '', number: '', info: tags };
+    // Sin numeración: no inventar serie desde todo el nombre; texto → info adicional
+    return {
+      series: hint || '',
+      number: '',
+      info: joinInfo(base, tags),
+    };
   }
 
   const isGramNoise = (e) => /Missing MTProto Entity|TL definition for ID 0|ENTITY_MEMBER_INVALID|constructor id/i.test(String(e?.message || e || ''));
@@ -957,7 +966,41 @@ export function createUploadTool(d) {
 
       const filesSec = el('div', 'info-sec', 'Cómics a subir');
       const filesHint = el('p', 'cover-pick-hint', 'Por cada archivo: número, info y ficha de caption (opcional). La serie de arriba es común.');
+      const sortLab = el('div', 'sync-label', 'Orden de la lista');
+      const sortSel = el('select', 'edit-input upload-sort-sel');
+      sortSel.innerHTML = '<option value="orig">Orden original</option>'
+        + '<option value="num">Ordenar por número</option>'
+        + '<option value="name">Ordenar por nombre de archivo</option>';
       const filesList = el('div', 'upload-files-list');
+
+      const applyRowSort = () => {
+        const mode = sortSel.value || 'orig';
+        if (mode === 'orig' || rows.length < 2) {
+          // reordenar según índice original
+          if (mode === 'orig') {
+            rows.sort((a, b) => (a._ord || 0) - (b._ord || 0));
+          }
+        } else if (mode === 'num') {
+          const key = (r) => String(r.numberInp?.value || '').trim();
+          rows.sort((a, b) => {
+            const ka = key(a), kb = key(b);
+            if (ka && kb) {
+              const na = parseFloat(ka.replace(/[^0-9.]/g, '')) || 0;
+              const nb = parseFloat(kb.replace(/[^0-9.]/g, '')) || 0;
+              if (na !== nb && (na || nb)) return na - nb;
+              return ka.localeCompare(kb, undefined, { numeric: true, sensitivity: 'base' });
+            }
+            if (ka && !kb) return -1;
+            if (!ka && kb) return 1;
+            return String(a.file?.name || '').localeCompare(String(b.file?.name || ''), undefined, { numeric: true, sensitivity: 'base' });
+          });
+        } else if (mode === 'name') {
+          rows.sort((a, b) => String(a.file?.name || '').localeCompare(String(b.file?.name || ''), undefined, { numeric: true, sensitivity: 'base' }));
+        }
+        filesList.replaceChildren();
+        for (const r of rows) filesList.append(r.rowEl);
+      };
+      sortSel.onchange = () => applyRowSort();
 
       /** @type {any[]} */
       let rows = [];
@@ -1247,6 +1290,8 @@ export function createUploadTool(d) {
         infoInp.oninput = () => { row.nameTouched = false; nameTouched = false; updateRowPreview(row); };
 
         rowEl.append(head, nLab, numberInp, iLab, infoInp, nameLab, nameInp, fichaLab, idBtn, fichaBox);
+        row.rowEl = rowEl;
+        row._ord = rows.length;
         filesList.append(rowEl);
         rows.push(row);
         updateRowPreview(row);
@@ -1293,7 +1338,7 @@ export function createUploadTool(d) {
       };
 
       fileBtn.onclick = () => fileInput.click();
-      fileInput.onchange = () => rebuildFileRows();
+      fileInput.onchange = () => { rebuildFileRows(); try { applyRowSort(); } catch (_) {} };
 
       editorialSel.onchange = () => {
         editorialInp.hidden = editorialSel.value !== '__new__';
@@ -1558,7 +1603,7 @@ export function createUploadTool(d) {
       body.append(el('div', 'info-sec', 'Serie'));
       body.append(seriesLab, seriesHint, seriesInp);
       body.append(includeChRow);
-      body.append(filesSec, filesHint, filesList);
+      body.append(filesSec, filesHint, sortLab, sortSel, filesList);
       body.append(midWebpRow, lowWebpRow, webpOptsBox);
       body.append(status);
       actions.append(cancel, goBtn);
