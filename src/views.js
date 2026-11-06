@@ -1998,16 +1998,22 @@ function channelsView(g) {
             sub: locks.isContentRestricted('channel', mac) ? '' : (n ? (n === 1 ? '1 cómic' : `${n} cómics`) : ''),
             isUnread: n ? secFiles.some((f) => !isComicRead(mac.id, f.id)) : true,
             go: () => {
-              if (!locks.guardRestricted('section', { ch: mac, section: sec }, label)
-                && !locks.guardRestricted('channel', mac, label)) return;
-              // Prefer section lock when available
-              if (locks.isContentRestricted('section', { ch: mac, section: sec })) return;
-              if (locks.isContentRestricted('channel', mac)) return;
+              // Sección bloqueada o canal macro bloqueado → no entrar
+              if (locks.isContentRestricted('section', { ch: mac, section: sec })
+                || locks.isContentRestricted('channel', mac)) {
+                if (!locks.guardRestricted('section', { ch: mac, section: sec }, label)) return;
+                if (!locks.guardRestricted('channel', mac, label)) return;
+                return;
+              }
               filesView(mac, { section: sec });
             },
             longPress: () => {
               const opts = [
                 ['Información', () => showChannelInfo(mac, { section: sec })],
+                ['Añadir versión WebP', () => {
+                  try { repackTool?.offerWebpVersionChannel?.(mac, secFiles, sec); }
+                  catch (e) { appAlert(e?.message || e); }
+                }],
                 ['Descargar en bloque', () => downloadComicsBulk(mac, secFiles, { mode: 'channel', section: sec })],
                 ...lockToggleOpts('section', { ch: mac, section: sec }, label, () => build()),
               ];
