@@ -4,6 +4,7 @@
  * - Progreso de borrado y de regeneración
  */
 import * as sync from './sync.js';
+import { isMacroLibEntry, collectSectionsFromFiles, sectionFromCaption } from './macro.js';
 
 export function createProTools(d) {
   const {
@@ -815,51 +816,65 @@ export function createProTools(d) {
   /** Desglose biblioteca TGComic: editoriales → canales → series → nº cómics */
   async function collectLibraryBreakdown() {
     const lib = getLIB();
-    const byEd = new Map(); // editorial -> { channels: [{ name, series: [{label, count}], comics }] }
+    const byEd = new Map();
     let totalChannels = 0;
     let totalSeries = 0;
     let totalComics = 0;
 
-    for (const ch of lib || []) {
-      if (!ch?.id) continue;
-      totalChannels++;
-      const ed = String(ch.group || 'Sin editorial').trim() || 'Sin editorial';
+    const pushChannel = (ed, chName, seriesList, chComics) => {
       if (!byEd.has(ed)) byEd.set(ed, []);
-      let files = [];
-      try { files = (await kv.get('f:' + ch.id)) || []; } catch (_) { files = []; }
-      if (!Array.isArray(files)) files = [];
-      // aplanar versiones si vienen agrupadas
-      const flat = [];
-      for (const f of files) {
-        if (f?.variants && typeof f.variants === 'object') {
-          flat.push(f);
-          for (const v of Object.values(f.variants)) if (v && v.id) flat.push(v);
-        } else flat.push(f);
-      }
-      // usar listado tal cual para groupSeries (como en la UI)
-      const groups = typeof groupSeries === 'function'
-        ? groupSeries(files, ch.name, typeof seriesOverrideFor === 'function' ? seriesOverrideFor(ch) : null)
-        : [{ label: '', files }];
-      const seriesList = [];
-      let chComics = 0;
-      for (const g of groups || []) {
-        const n = Array.isArray(g.files) ? g.files.length : 0;
-        chComics += n;
-        const label = String(g.label || g.series || '(sin serie)').trim() || '(sin serie)';
-        seriesList.push({ label, count: n });
-        totalSeries++;
-      }
-      totalComics += chComics;
-      const chName = (typeof channelDisplayName === 'function' ? channelDisplayName(ch) : null) || ch.name || String(ch.id);
       byEd.get(ed).push({
         name: chName,
-        id: String(ch.id),
         comics: chComics,
         series: seriesList.sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' })),
       });
+      totalChannels++;
+      totalSeries += seriesList.length;
+      totalComics += chComics;
+    };
+
+    for (const ch of lib || []) {
+      if (!ch?.id) continue;
+      const ed = String(ch.group || 'Sin editorial').trim() || 'Sin editorial';
+      let files = [];
+      try { files = (await kv.get('f:' + ch.id)) || []; } catch (_) { files = []; }
+      if (!Array.isArray(files)) files = [];
+
+      const seriesOf = (fileList) => {
+        const groups = typeof groupSeries === 'function'
+          ? groupSeries(fileList, ch.name, typeof seriesOverrideFor === 'function' ? seriesOverrideFor(ch) : null)
+          : [{ label: '', files: fileList }];
+        const seriesList = [];
+        let chComics = 0;
+        for (const g of groups || []) {
+          const n = Array.isArray(g.files) ? g.files.length : 0;
+          chComics += n;
+          const label = String(g.label || g.series || '(sin serie)').trim() || '(sin serie)';
+          seriesList.push({ label, count: n });
+        }
+        return { seriesList, chComics };
+      };
+
+      if (isMacroLibEntry(ch)) {
+        const secMap = new Map();
+        for (const f of files) {
+          const sec = sectionFromCaption(f?.caption || '') || '(Sin sección)';
+          const k = sec.trim().toLowerCase();
+          if (!secMap.has(k)) secMap.set(k, { name: sec, files: [] });
+          secMap.get(k).files.push(f);
+        }
+        for (const { name, files: sf } of secMap.values()) {
+          const { seriesList, chComics } = seriesOf(sf);
+          pushChannel(ed, name, seriesList, chComics);
+        }
+        continue;
+      }
+
+      const chName = (typeof channelDisplayName === 'function' ? channelDisplayName(ch) : null) || ch.name || String(ch.id);
+      const { seriesList, chComics } = seriesOf(files);
+      pushChannel(ed, chName, seriesList, chComics);
     }
 
-    // ordenar editoriales y canales
     const editorials = [...byEd.entries()]
       .map(([ed, channels]) => ({
         name: (typeof groupDisplayName === 'function' ? groupDisplayName(ed) : null) || ed,
@@ -870,13 +885,9 @@ export function createProTools(d) {
       }))
       .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
 
-    return {
-      totalChannels,
-      totalSeries,
-      totalComics,
-      editorials,
-    };
+    return { totalChannels, totalSeries, totalComics, editorials };
   }
+
 
   function showDevCoverInfo() {
     document.querySelector('.info-frame.protools-dev')?.remove();
