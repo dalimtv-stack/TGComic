@@ -739,6 +739,74 @@ document.addEventListener('click', (ev) => {
   if (!menuPanel.hidden && !menuPanel.contains(ev.target) && ev.target !== menuBtn) closeAppMenu();
 });
 
+
+/** Conteo de diálogos/canales en la cuenta de Telegram (límite práctico ~500 unidos). */
+async function collectTelegramMembership() {
+  const out = {
+    channels: 0,
+    supergroups: 0,
+    groups: 0,
+    users: 0,
+    dialogs: 0,
+    error: null,
+  };
+  try {
+    await ready;
+    if (!client) {
+      out.error = 'Sin cliente Telegram';
+      return out;
+    }
+    // getDialogs trae la lista de chats; paginamos por si hay muchos
+    let dialogs = [];
+    try {
+      if (typeof client.getDialogs === 'function') {
+        dialogs = await client.getDialogs({ limit: 200 });
+        // Si GramJS soporta más, intentar completar con lotes
+        let guard = 0;
+        while (dialogs.length >= 200 * (guard + 1) && guard < 8) {
+          guard++;
+          try {
+            const more = await client.getDialogs({ limit: 200, offsetDate: dialogs[dialogs.length - 1]?.message?.date || 0 });
+            if (!more?.length) break;
+            const seen = new Set(dialogs.map((d) => String(d.id ?? d.entity?.id)));
+            let added = 0;
+            for (const d of more) {
+              const id = String(d.id ?? d.entity?.id);
+              if (seen.has(id)) continue;
+              seen.add(id);
+              dialogs.push(d);
+              added++;
+            }
+            if (added === 0) break;
+          } catch (_) {
+            break;
+          }
+        }
+      }
+    } catch (e) {
+      out.error = e?.message || String(e);
+      return out;
+    }
+    out.dialogs = dialogs.length;
+    for (const d of dialogs) {
+      const e = d.entity || d;
+      const cn = e?.className || e?.constructor?.name || '';
+      if (cn === 'Channel' || (e?.broadcast != null || e?.megagroup != null)) {
+        if (e.broadcast) out.channels++;
+        else if (e.megagroup) out.supergroups++;
+        else out.channels++;
+      } else if (cn === 'Chat') {
+        out.groups++;
+      } else if (cn === 'User') {
+        out.users++;
+      }
+    }
+  } catch (e) {
+    out.error = e?.message || String(e);
+  }
+  return out;
+}
+
 function showInfoFrame() {
   closeAppMenu();
   document.querySelector('.info-frame')?.remove();
@@ -770,7 +838,10 @@ function showInfoFrame() {
     titleSpan.title = 'Toca para copiar la información';
   }
 
-  collectAppStats().then((s) => {
+  Promise.all([
+    collectAppStats(),
+    collectTelegramMembership().catch((e) => ({ channels: 0, supergroups: 0, groups: 0, users: 0, dialogs: 0, error: e?.message || String(e) })),
+  ]).then(([s, tg]) => {
     body.replaceChildren();
     const lines = [];
     const sec = (t, cls = '') => {
@@ -797,6 +868,18 @@ function showInfoFrame() {
       ? (typeof sync.formatSyncDate === 'function' ? (sync.formatSyncDate(s.lastSync) || s.lastSync) : s.lastSync)
       : '—');
     add('Subidas / recargas fallidas', String(s.failedUploads || 0));
+
+    sec('Telegram');
+    if (tg?.error) {
+      add('Estado', 'No se pudo consultar: ' + String(tg.error).slice(0, 120));
+    } else {
+      add('Canales a los que perteneces', String(tg.channels ?? 0));
+      add('Supergrupos a los que perteneces', String(tg.supergroups ?? 0));
+      add('Grupos básicos', String(tg.groups ?? 0));
+      add('Diálogos totales (aprox.)', String(tg.dialogs ?? 0));
+      const joined = (Number(tg.channels) || 0) + (Number(tg.supergroups) || 0) + (Number(tg.groups) || 0);
+      add('Canales + grupos unidos', String(joined) + ' / ~500 (límite habitual de unión)');
+    }
 
     sec('Biblioteca');
     add('Canales', String(s.channels));
