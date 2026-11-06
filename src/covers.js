@@ -50,12 +50,19 @@ export function createCovers(state, d) {
 
   const cq = [];
   let crun = 0;
-  // Paralelismo alto otra vez: el fallo de «solo la 1ª» se arregla con reintentos + unobserve solo si OK,
-  // no limitando a 1 (eso hacía la rejilla muy lenta en iPhone).
+  let cheavy = 0; // CBR / PDF / RAR en curso (descarga completa)
   const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent || '');
   const isMobile = isIOS || /Android/i.test(navigator.userAgent || '');
-  const QUEUE_N = isIOS ? 20 : (isMobile ? 15 : 15);
+  // CBZ (por trozos): alto paralelismo. CBR/PDF: como mucho 2 a la vez.
+  const QUEUE_N = isIOS ? 15 : (isMobile ? 15 : 20);
+  const QUEUE_HEAVY_N = 2;
   const COVER_TIMEOUT_MS = isIOS ? 100000 : 180000;
+  const COVER_TIMEOUT_HEAVY_MS = isIOS ? 180000 : 300000;
+
+  function isHeavyCoverFile(f) {
+    const n = String(f?.name || sourceNameOf?.(f) || '').toLowerCase();
+    return /\.(cbr|cb7|rar|pdf)(\b|$)/i.test(n);
+  }
 
   function withTimeout(promise, ms, label) {
     let t;
@@ -65,26 +72,38 @@ export function createCovers(state, d) {
     return Promise.race([promise, timeout]).finally(() => { try { clearTimeout(t); } catch (_) {} });
   }
 
-  const enqueue = (fn) => new Promise((res) => {
-    cq.push(() => withTimeout(
-      Promise.resolve().then(fn),
-      COVER_TIMEOUT_MS,
-      'cover timeout'
-    ).then(res, (e) => { console.warn('[cover]', e); res(null); }));
+  /**
+   * @param {() => Promise<any>} fn
+   * @param {boolean} [heavy] CBR/PDF: cuenta para el tope QUEUE_HEAVY_N
+   */
+  const enqueue = (fn, heavy = false) => new Promise((res) => {
+    const ms = heavy ? COVER_TIMEOUT_HEAVY_MS : COVER_TIMEOUT_MS;
+    cq.push({
+      heavy: !!heavy,
+      run: () => withTimeout(
+        Promise.resolve().then(fn),
+        ms,
+        heavy ? 'cover timeout (CBR/PDF)' : 'cover timeout'
+      ).then(res, (e) => { console.warn('[cover]', e); res(null); }),
+    });
     pump();
   });
+
   /** @param {{ force?: boolean }} [opts] force=true: procesa aunque state.reading (batch de portadas) */
   function pump(opts) {
     if (state.reading && !opts?.force) return;
     while (crun < QUEUE_N && cq.length) {
+      const idx = cq.findIndex((j) => !j.heavy || cheavy < QUEUE_HEAVY_N);
+      if (idx < 0) break; // solo quedan heavy y ya hay QUEUE_HEAVY_N en curso
+      const job = cq.splice(idx, 1)[0];
       crun++;
-      const run = cq.shift();
+      if (job.heavy) cheavy++;
       Promise.resolve()
-        .then(() => run())
+        .then(() => job.run())
         .finally(() => {
           crun--;
-          // Pequeña pausa en iOS entre portadas para no saturar getMessages / DC
-          const gap = isIOS ? 60 : 0;
+          if (job.heavy) cheavy--;
+          const gap = isIOS ? 40 : 0;
           if (gap) setTimeout(() => pump(opts), gap);
           else pump(opts);
         });
@@ -137,7 +156,7 @@ export function createCovers(state, d) {
         const sig = adaptSig(cfg);
         const applied = await kv.get(ckey);
         if ((applied !== sig || !b) && !customFailed.has(ch.id + ':' + f.id + ':' + sig)) {
-          const nb = await enqueue(() => makeCustomCover(ch, f, key, cfg));
+          const nb = await enqueue(() => makeCustomCover(ch, f, key, cfg), isHeavyCoverFile(f));
           if (nb) {
             try { await kv.set(ckey, sig); } catch (_) {}
             return nb;
@@ -148,7 +167,7 @@ export function createCovers(state, d) {
       }
     } catch (_) {}
 
-    if (!b) b = await enqueue(() => makeCover(ch, f, key));
+    if (!b) b = await enqueue(() => makeCover(ch, f, key), isHeavyCoverFile(f));
     return b && b !== 'none' ? b : null;
   }
 
@@ -630,7 +649,7 @@ export function createCovers(state, d) {
           if (!d.isConnected) return;
           if (attempt >= 1) {
             try { await kv.del(`c:${ch.id}:${f.id}`); } catch (_) {}
-            b = await enqueue(() => makeCover(ch, f, `c:${ch.id}:${f.id}`, { forceMsg: true, _retried: attempt > 1 }));
+            b = await enqueue(() => makeCover(ch, f, `c:${ch.id}:${f.id}`, { forceMsg: true, _retried: attempt > 1 }), isHeavyCoverFile(f));
           } else {
             b = await getCover(ch, f, { force: false });
           }
