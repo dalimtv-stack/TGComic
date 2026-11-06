@@ -347,9 +347,22 @@ async function connect() {
 
 function parseFolder(title) {
   if (!title.endsWith(POST)) return null;
-  const [full, category = ''] = title.slice(0, -POST.length).split(SEP);
-  const [name, group = ''] = full.split(TSEP);
-  return { name, group: group || 'Sin editorial', category };
+  // body: "Batman:DC::Comics" | "DC::Comics"  (sin ::tgstorage)
+  const body = title.slice(0, -POST.length);
+  const parts = body.split(SEP);
+  if (parts.length < 2) return null;
+  const category = parts[parts.length - 1] || '';
+  const full = parts.slice(0, -1).join(SEP); // por si hubiera más ::
+  // Canal dedicado: Nombre:Editorial::Comics::tgstorage
+  if (full.includes(TSEP)) {
+    const idx = full.indexOf(TSEP);
+    const name = full.slice(0, idx).trim();
+    const group = full.slice(idx + TSEP.length).trim() || 'Sin editorial';
+    return { name, group, category, macro: false };
+  }
+  // Macro editorial: Editorial::Comics::tgstorage  (sin "Nombre:")
+  const ed = full.trim() || 'Sin editorial';
+  return { name: ed, group: ed, category, macro: true };
 }
 
 async function refreshLibrary() {
@@ -358,7 +371,15 @@ async function refreshLibrary() {
   const add = (ch) => {
     if (ch?.className !== 'Channel') return;
     const info = parseFolder(ch.title || '');
-    if (info && info.category.toLowerCase() === LIBRARY) found.set(String(ch.id), { id: String(ch.id), hash: String(ch.accessHash), name: info.name, group: info.group });
+    if (info && info.category.toLowerCase() === LIBRARY) {
+      found.set(String(ch.id), {
+        id: String(ch.id),
+        hash: String(ch.accessHash),
+        name: info.name,
+        group: info.group,
+        macro: !!info.macro,
+      });
+    }
   };
   try { (await client.invoke(new Api.contacts.Search({ q: POST, limit: 100 }))).chats.forEach(add); } catch (e) { console.warn(e); }
   for await (const d of client.iterDialogs({})) add(d.entity);
