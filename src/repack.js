@@ -2,6 +2,7 @@
  * Herramienta: convertir CBR → CBZ y re-subir (también mensajes reenviados).
  * Móvil: poca RAM, un archivo a la vez, liberar buffers.
  */
+import { isMacroLibEntry, sectionFromCaption, withSectionInCaption } from './macro.js';
 import * as zip from '@zip.js/zip.js';
 import { fitTelegramCaption } from './caption.js';
 import { withQualityTags, existingCopy, flattenVersions, sourceNameOf, parseQuality, QUALITY_LABEL } from './quality.js';
@@ -924,6 +925,16 @@ export function createRepackTool(d) {
           }
           caption = fitted;
         }
+        // Macro: Sección obligatoria; conservar siempre la del mensaje original
+        try {
+          const secKeep = sectionFromCaption(String(item.f?.caption || item.caption || caption || ''));
+          if (secKeep) caption = withSectionInCaption(caption, secKeep);
+          else if (isMacroLibEntry(ch)) {
+            const sec2 = sectionFromCaption(String(caption || ''));
+            if (sec2) caption = withSectionInCaption(caption, sec2);
+          }
+        } catch (_) {}
+
         status(caption ? ('Caption: ' + caption.length + ' caracteres') : 'Sin caption');
         try {
           await uploadCbz(ch, outName, cbz, caption, statusWithProg);
