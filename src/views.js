@@ -51,7 +51,6 @@ export function createViews(d) {
     updateTelegramCaption,
     flattenVersions,
   } = d;
-  const repackTool = d.repackTool;
   const openComic = (...a) => d.openComic(...a);
   const getClient = () => (typeof d.client === 'function' ? d.client() : d.client);
   const getReady = () => (typeof d.ready === 'function' ? d.ready() : d.ready);
