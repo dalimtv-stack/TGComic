@@ -846,21 +846,23 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
     fnInp.type = 'text';
     fnInp.placeholder = 'Ej: Serie #01 - Título.cbz';
     fnInp.autocomplete = 'off';
-    // Pre-relleno: caption → nombre Telegram → sugerencia repack
-    let suggestedFn = '';
+    // Pre-relleno: nombre REAL del documento en Telegram.
+    // Si el caption trae "Nombre de archivo" y es más completo (Telegram a veces recorta), usarlo.
+    // Nunca inventar prefijos de editorial/canal (p. ej. "DC - …").
+    let suggestedFn = String(f?.name || '').trim();
     try {
-      const cap = typeof parseComicCaption === 'function' ? parseComicCaption(f?.caption || '') : {};
-      suggestedFn = String(cap?.fileName || '').trim();
-    } catch (_) {}
-    if (!suggestedFn) {
-      try {
-        const rt = typeof d.repackTool === 'function' ? d.repackTool() : d.repackTool;
-        if (rt && typeof rt.suggestUploadName === 'function') {
-          suggestedFn = String(rt.suggestUploadName(ch, f, true, true) || '').trim();
+      const fromCap = typeof parseComicCaption === 'function'
+        ? String((parseComicCaption(f?.caption || '') || {}).fileName || '').trim()
+        : '';
+      if (fromCap) {
+        const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        // Preferir caption si es más largo o coincide sin espacios raros (versión "limpia")
+        if (!suggestedFn || fromCap.length >= suggestedFn.length || norm(fromCap) === norm(suggestedFn)) {
+          suggestedFn = fromCap;
         }
-      } catch (_) {}
-    }
-    if (!suggestedFn) suggestedFn = String(f?.name || '').trim();
+      }
+    } catch (_) {}
+    if (!suggestedFn) suggestedFn = 'comic.cbz';
     fnInp.value = suggestedFn;
 
     (async () => {
