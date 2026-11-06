@@ -16,6 +16,7 @@ import {
   filesInSection,
   sectionFromCaption,
   normalizeSectionKey,
+  countNavChannels,
 } from './macro.js';
 
 /**
