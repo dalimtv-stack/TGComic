@@ -48,6 +48,10 @@ import { initBalance } from './balance.js';
 import { collapseVersions, flattenVersions, splitStats, QUALITIES, QUALITY_LABEL, parseQuality, sourceNameOf, aiLabel } from './quality.js';
 import { createSearchFilters } from './search_filters.js';
 import { openPdfFromBytes, isPdfMagic } from './pdfPages.js';
+import {
+  isMacroTelegramTitle,
+  editorialFromMacroTitle,
+} from './macro.js';
 
 const apiId = Number(import.meta.env.VITE_API_ID);
 const apiHash = import.meta.env.VITE_API_HASH;
@@ -346,10 +350,16 @@ async function connect() {
 }
 
 function parseFolder(title) {
-  if (!title.endsWith(POST)) return null;
+  if (!title || !String(title).endsWith(POST)) return null;
+  // Macro: Editorial::Comics::tgstorage
+  if (isMacroTelegramTitle(title)) {
+    const ed = editorialFromMacroTitle(title) || 'Sin editorial';
+    return { name: ed, group: ed, category: LIBRARY, macro: true };
+  }
+  // Dedicado: Canal:Editorial::Comics::tgstorage
   const [full, category = ''] = title.slice(0, -POST.length).split(SEP);
   const [name, group = ''] = full.split(TSEP);
-  return { name, group: group || 'Sin editorial', category };
+  return { name, group: group || 'Sin editorial', category, macro: false };
 }
 
 async function refreshLibrary() {
@@ -358,7 +368,15 @@ async function refreshLibrary() {
   const add = (ch) => {
     if (ch?.className !== 'Channel') return;
     const info = parseFolder(ch.title || '');
-    if (info && info.category.toLowerCase() === LIBRARY) found.set(String(ch.id), { id: String(ch.id), hash: String(ch.accessHash), name: info.name, group: info.group });
+    if (info && info.category.toLowerCase() === LIBRARY) {
+      found.set(String(ch.id), {
+        id: String(ch.id),
+        hash: String(ch.accessHash),
+        name: info.name,
+        group: info.group,
+        macro: !!info.macro,
+      });
+    }
   };
   try { (await client.invoke(new Api.contacts.Search({ q: POST, limit: 100 }))).chats.forEach(add); } catch (e) { console.warn(e); }
   for await (const d of client.iterDialogs({})) add(d.entity);
