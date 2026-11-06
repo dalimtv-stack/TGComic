@@ -365,6 +365,20 @@ function parseFolder(title) {
   return { name: ed, group: ed, category, macro: true };
 }
 
+
+function normalizeLibMacros(list) {
+  if (!Array.isArray(list)) return [];
+  return list.map((c) => {
+    if (!c || typeof c !== 'object') return c;
+    if (c.macro === true || c.isMacro === true) return { ...c, macro: true };
+    if (c.macro === false || c.isMacro === false) return { ...c, macro: false };
+    const n = String(c.name || '').trim().toLowerCase();
+    const g = String(c.group || '').trim().toLowerCase();
+    if (n && g && n === g) return { ...c, macro: true };
+    return { ...c, macro: false };
+  });
+}
+
 async function refreshLibrary() {
   await ready;
   const found = new Map();
@@ -383,7 +397,7 @@ async function refreshLibrary() {
   };
   try { (await client.invoke(new Api.contacts.Search({ q: POST, limit: 100 }))).chats.forEach(add); } catch (e) { console.warn(e); }
   for await (const d of client.iterDialogs({})) add(d.entity);
-  const lib = [...found.values()];
+  const lib = normalizeLibMacros([...found.values()]);
   await kv.set('lib', lib);
   return lib;
 }
