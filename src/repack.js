@@ -1108,13 +1108,56 @@ export function createRepackTool(d) {
     fmtRow.append(fmtChk, document.createTextNode(' Nombres formateados'));
     body.append(fmtRow);
 
+    // Serie común editable (antes no se podía renombrar en bloque)
+    const seriesLab = el('div', 'sync-label', 'Serie (para todos)');
+    const seriesInp = el('input', 'edit-input');
+    seriesInp.type = 'text';
+    seriesInp.placeholder = 'Nombre de la serie';
+    seriesInp.autocomplete = 'off';
+    try {
+      const first = selected[0];
+      let s = '';
+      if (first && typeof candidateSeries === 'function') s = candidateSeries(first.ch, first.f) || '';
+      if (!s && first) {
+        try {
+          const p = parseComicName?.(sourceNameOf?.(first.f) || first.f?.name || '', first.ch?.name);
+          s = p?.series || '';
+        } catch (_) {}
+      }
+      seriesInp.value = s || '';
+    } catch (_) { seriesInp.value = ''; }
+    body.append(seriesLab, seriesInp);
+
     const inputs = [];
     const applyNames = () => {
       const withCh = !!includeChChk.checked;
       const fmt = !!fmtChk.checked;
-      for (const inp of inputs) {
+      const ser = String(seriesInp.value || '').trim();
+      for (const row of inputs) {
+        const inp = row.nameInp;
         if (inp._manual) continue;
         let name = suggestUploadName(inp._item.ch, inp._item.f, withCh, fmt);
+        // Sustituir serie detectada por la del campo común si hay valor
+        if (ser && fmt) {
+          try {
+            const chName = inp._item.ch?.name || '';
+            const num = String(row.numberInp?.value || '').trim();
+            const info = String(row.infoInp?.value || '').trim();
+            let bodyName = '';
+            if (num) bodyName = ser + ' #' + num;
+            else bodyName = ser;
+            if (info) bodyName += ' - ' + info;
+            if (withCh && chName) bodyName = chName + ' - ' + bodyName;
+            name = bodyName.replace(/\s+/g, ' ').trim();
+            if (!/\.cbz$/i.test(name)) name += '.cbz';
+          } catch (_) {}
+        } else if (row.infoInp && String(row.infoInp.value || '').trim()) {
+          // Añadir info al nombre sugerido si no es manual
+          const info = String(row.infoInp.value || '').trim();
+          if (info && !name.toLowerCase().includes(info.toLowerCase())) {
+            name = name.replace(/\.cbz$/i, '').replace(/\s*-\s*$/, '') + ' - ' + info + '.cbz';
+          }
+        }
         if (asWebp) name = withQualityTags(name, { webp: true, resize: rz });
         inp.value = name;
       }
@@ -1124,6 +1167,35 @@ export function createRepackTool(d) {
       const suggested = suggestUploadName(item.ch, item.f, true, true);
       const row = el('div', 'repack-name-row');
       row.append(el('div', 'repack-name-from', item.f.name || ''));
+
+      // Número detectado (editable)
+      let detNum = '';
+      let detInfo = '';
+      try {
+        const p = parseComicName?.(sourceNameOf?.(item.f) || item.f?.name || '', item.ch?.name);
+        detNum = p?.number || p?.issue || '';
+        detInfo = p?.info || '';
+      } catch (_) {}
+      try {
+        const m = String(suggested || '').match(/#\s*([^#\-]+?)(?:\s*-\s*|$)/);
+        if (!detNum && m) detNum = m[1].trim();
+      } catch (_) {}
+
+      const nLab = el('div', 'sync-label', 'Número');
+      const numberInp = el('input', 'edit-input');
+      numberInp.type = 'text';
+      numberInp.placeholder = 'Número / Especial / Integral 1…';
+      numberInp.value = detNum;
+      numberInp.oninput = () => { applyNames(); };
+
+      const iLab = el('div', 'sync-label', 'Info adicional');
+      const infoInp = el('input', 'edit-input');
+      infoInp.type = 'text';
+      infoInp.placeholder = 'Info adicional';
+      infoInp.value = detInfo;
+      infoInp.oninput = () => { applyNames(); };
+
+      const nameLab = el('div', 'sync-label', 'Nombre final');
       const inp = el('input', 'edit-input repack-name-input');
       inp.type = 'text';
       inp.value = asWebp ? withQualityTags(suggested, { webp: true, resize: rz }) : suggested;
@@ -1131,13 +1203,22 @@ export function createRepackTool(d) {
       inp._item = item;
       inp._manual = false;
       inp.oninput = () => { inp._manual = true; };
-      inputs.push(inp);
-      row.append(inp);
+
+      row.append(nLab, numberInp, iLab, infoInp, nameLab, inp);
       row.append(el('small', '', item.ch.name || ''));
       body.append(row);
+      inputs.push({ nameInp: inp, numberInp, infoInp, _item: item });
     }
     includeChChk.onchange = applyNames;
     fmtChk.onchange = applyNames;
+    seriesInp.oninput = () => {
+      for (const row of inputs) {
+        if (row.nameInp) row.nameInp._manual = false;
+      }
+      applyNames();
+    };
+    // Primera pasada con serie común
+    applyNames();
 
     const actions = el('div', 'edit-actions');
     const cancel = el('button', 'btn', 'Cancelar');
@@ -1145,14 +1226,16 @@ export function createRepackTool(d) {
     const goBtn = el('button', 'btn edit-save', 'Subir');
     goBtn.onclick = async () => {
       const withCh = !!includeChChk.checked;
-      const ready = inputs.map((inp) => {
+      const ready = inputs.map((row) => {
+        const inp = row.nameInp || row;
+        const item = inp._item || row._item;
         let name = String(inp.value || '').trim();
-        if (!name) name = suggestUploadName(inp._item.ch, inp._item.f, withCh, !!fmtChk.checked);
+        if (!name) name = suggestUploadName(item.ch, item.f, withCh, !!fmtChk.checked);
         name = name.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
         if (!/\.cbz$/i.test(name)) name = name.replace(/\.cb[zr]$/i, '') + '.cbz';
         if (!/\.cbz$/i.test(name)) name += '.cbz';
         if (asWebp) name = withQualityTags(name, { webp: true, resize: rz });
-        return { ...inp._item, outName: name, asWebp, webpOpts };
+        return { ...item, outName: name, asWebp, webpOpts };
       });
       const dups = findDuplicates(ready.map((x) => ({ f: x.f, outName: x.outName })));
       if (dups.length && !(await askConfirm(dupMessage(dups)))) return;
