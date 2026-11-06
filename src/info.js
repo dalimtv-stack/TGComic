@@ -1,3 +1,4 @@
+import { isMacroLibEntry, sectionFromCaption, displayChannelForComic, collectSectionsFromFiles } from './macro.js';
 import { isComicRead, getPageIndex, getPagesTotal, readProgress } from './progress.js';
 import * as sync from './sync.js';
 import { splitStats, flattenVersions, sourceNameOf, stripQualityTags, parseQuality } from './quality.js';
@@ -472,7 +473,7 @@ function showComicInfo(ch, f, displayTitle, opts = {}) {
     body.append(el('div', 'info-sec', 'Archivo'));
     body.append(row('Título', title));
     body.append(row('Serie', series));
-    body.append(row('Canal', ch ? channelDisplayName(ch) : '—'));
+    body.append(row('Canal', ch ? displayChannelForComic(ch, f, channelDisplayName) : '—'));
     body.append(row('Editorial canal', ch?.group || '—'));
     body.append(row('Archivo', fname || '—'));
     body.append(row('Formato', fmt));
@@ -2672,7 +2673,9 @@ async function showGroupInfo(originalName) {
   try {
     document.querySelector('.info-frame.group-info')?.remove();
     const display = groupDisplayName(originalName);
-    const chs = getLIB().filter((c) => c.group === originalName);
+    const chsAll = getLIB().filter((c) => c.group === originalName);
+    const chs = chsAll.filter((c) => !isMacroLibEntry(c));
+    const macrosG = chsAll.filter((c) => isMacroLibEntry(c));
     let comics = 0, bytes = 0;
     const stAgg = {
       main: { n: 0, bytes: 0 },
@@ -2871,7 +2874,9 @@ async function showGroupCoverPicker(originalName, after) {
     }
   })();
 
-  const chs = getLIB().filter((c) => c.group === originalName);
+  const chsAll = getLIB().filter((c) => c.group === originalName);
+  const chs = chsAll.filter((c) => !isMacroLibEntry(c));
+  const macrosG = chsAll.filter((c) => isMacroLibEntry(c));
   if (chs.length) {
     body.append(el('div', 'info-sec', 'Canales'));
     const gridCh = el('div', 'cover-pick-grid');
