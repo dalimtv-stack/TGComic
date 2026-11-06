@@ -23,7 +23,14 @@ export function dedicatedChannelTitle(channelName, editorial) {
 }
 
 export function isMacroLibEntry(ch) {
-  return !!(ch && (ch.macro === true || ch.isMacro === true));
+  if (!ch) return false;
+  if (ch.macro === true || ch.isMacro === true) return true;
+  // Explícito no-macro (canal dedicado Nombre:Editorial aunque Nombre === Editorial)
+  if (ch.macro === false || ch.isMacro === false) return false;
+  // LIB antigua sin flag: macro real tiene name === group (título Editorial::Comics::tgstorage)
+  const n = String(ch.name || '').trim().toLowerCase();
+  const g = String(ch.group || '').trim().toLowerCase();
+  return !!(n && g && n === g);
 }
 
 /** ¿El título de Telegram corresponde a un macro de editorial? */
