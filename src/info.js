@@ -2510,7 +2510,12 @@ function channelCoverNode(ch, files, section) {
     } catch (_) {}
   };
   io.observe(host);
+    // Carga inmediata (no depender solo del observer al reentrar en la editorial)
+  try {
+    queueMicrotask(() => { try { host._load?.(); } catch (_) {} });
+  } catch (_) {}
   return host;
+
 }
 async function clearChannelCover(ch) {
   try { await kv.del(channelCoverKey(ch, secLabel)); } catch (_) {}
@@ -2944,18 +2949,32 @@ async function showGroupCoverPicker(originalName, after) {
   document.body.append(frame);
 }
 
-async function showChannelInfo(ch) {
+async function showChannelInfo(ch, opts = {}) {
   try {
     document.querySelector('.info-frame.channel-info')?.remove();
-    const display = channelDisplayName(ch);
-    let files = (await kv.get('f:' + ch.id)) || [];
+    const section = String(opts.section || '').trim();
+    const isMacro = isMacroLibEntry(ch);
+    let filesAll = (await kv.get('f:' + ch.id)) || [];
+    if (!Array.isArray(filesAll)) filesAll = [];
+    let files = filesAll;
+    if (section) {
+      files = filesAll.filter((f) => {
+        const s = sectionFromCaption(f?.caption || '');
+        return s.trim().toLowerCase() === section.toLowerCase();
+      });
+    }
+    const display = section
+      ? section
+      : (isMacro ? (channelDisplayName(ch) || ch.name || 'Macro') : channelDisplayName(ch));
     const st = splitStats(files);
     const n = st.main.n;
     const bytes = st.main.bytes;
     let seriesCount = 0;
+    let seriesMulti = 0;
     try {
       const groups = groupSeries(files, ch.name, seriesOverrideFor(ch));
-      seriesCount = groups.filter((g) => g.files.length > 1).length;
+      seriesCount = groups.length;
+      seriesMulti = groups.filter((g) => g.files.length > 1).length;
     } catch (_) {}
     const frame = el('div', 'info-frame channel-info');
     const box = el('div', 'info-box');
@@ -2970,21 +2989,50 @@ async function showChannelInfo(ch) {
       r.append(el('span', 'info-label', label), el('span', 'info-value', String(value ?? '—')));
       return r;
     };
-    body.append(el('div', 'info-sec', 'Canal'));
-    body.append(row('Nombre', display));
-    if (display !== ch.name) body.append(row('Nombre original', ch.name));
-    body.append(row('Editorial', ch.group || '—'));
+    if (section && isMacro) {
+      body.append(el('div', 'info-sec', 'Sección'));
+      body.append(row('Nombre', display));
+      body.append(row('Tipo', 'Sección en canal macro de editorial'));
+      body.append(row('Editorial', ch.group || '—'));
+      body.append(row('Canal Telegram (macro)', ch.name || '—'));
+    } else if (isMacro && !section) {
+      body.append(el('div', 'info-sec', 'Canal macro (editorial)'));
+      body.append(row('Nombre', display));
+      body.append(row('Tipo', 'Macro · título Telegram: ' + (ch.group || ch.name) + '::Comics::tgstorage'));
+      body.append(row('Editorial', ch.group || '—'));
+      // Desglose secciones
+      const secs = collectSectionsFromFiles(filesAll, (cap) => {
+        const s = sectionFromCaption(cap);
+        return s ? { section: s } : {};
+      });
+      body.append(row('Secciones', String(secs.length)));
+      for (const sec of secs) {
+        const nf = filesAll.filter((f) => sectionFromCaption(f?.caption || '').trim().toLowerCase() === sec.trim().toLowerCase()).length;
+        body.append(row('  · ' + sec, nf + (nf === 1 ? ' cómic' : ' cómics')));
+      }
+      const orphans = filesAll.filter((f) => !sectionFromCaption(f?.caption || '')).length;
+      if (orphans) body.append(row('Sin Sección', orphans + (orphans === 1 ? ' cómic' : ' cómics')));
+    } else {
+      body.append(el('div', 'info-sec', 'Canal'));
+      body.append(row('Nombre', display));
+      if (display !== ch.name) body.append(row('Nombre original', ch.name));
+      body.append(row('Editorial', ch.group || '—'));
+    }
     body.append(row('Cómics', String(n)));
-    body.append(row('Series (agrupadas)', String(seriesCount)));
+    body.append(row('Series', String(seriesCount)));
+    body.append(row('Series (varios números)', String(seriesMulti)));
     body.append(row('Tamaño total', formatBytes(bytes)));
     addWebpInfo(body, row, st);
     addAiInfo(body, row, st);
     try { addTotalInfo(body, row, st); } catch (_) {}
     body.append(el('div', 'info-sec', 'Desarrollo'));
-    body.append(resolveCoverRow(row('Portada', describeCoverSource(channelCoverKey(ch), ch, files, 'channel')), channelCoverKey(ch), ch, files, 'channel'));
+    const coverKey = channelCoverKey(ch, section || undefined);
+    body.append(resolveCoverRow(
+      row('Portada', describeCoverSource(coverKey, ch, files, 'channel')),
+      coverKey, ch, files, 'channel'
+    ));
     box.append(head, body);
     frame.append(box);
-  // No cerrar al pulsar fuera: solo × / Cancelar
     document.body.append(frame);
   } catch (err) {
     console.error(err);
