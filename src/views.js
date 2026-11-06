@@ -10,6 +10,13 @@ import {
   getPagesTotal as getPagesTotalFn,
   listUnfinishedProgress as listUnfinishedProgressFn,
 } from './progress.js';
+import {
+  isMacroLibEntry,
+  collectSectionsFromFiles,
+  filesInSection,
+  sectionFromCaption,
+  normalizeSectionKey,
+} from './macro.js';
 
 /**
  * Vistas de navegación: home (editoriales), canales, series, archivos.
@@ -1839,7 +1846,9 @@ function channelsView(g) {
     e._uploadCtx = { editorial: g };
     // LIB actual en cada repintado (canal recién creado tras subida)
     const LIB = libNow();
-    const chs = LIB.filter((c) => c.group === g);
+    // Canales reales (no macros); las secciones del macro se añaden como tarjetas virtuales
+    const chs = LIB.filter((c) => c.group === g && !isMacroLibEntry(c));
+    const macros = LIB.filter((c) => c.group === g && isMacroLibEntry(c));
     let searchIndex = null;
 
     const buildIndex = async () => {
@@ -1939,6 +1948,40 @@ function channelsView(g) {
           },
         });
       }
+
+      // Secciones del canal macro (mismo aspecto que un canal)
+      for (const mac of macros) {
+        let mfiles = [];
+        try { mfiles = (await kv.get('f:' + mac.id)) || []; } catch (_) {}
+        const sections = collectSectionsFromFiles(mfiles, parseComicCaption);
+        for (const sec of sections) {
+          const secFiles = filesInSection(mfiles, sec, parseComicCaption);
+          const n = secFiles.length;
+          const label = sec;
+          gridItems.push({
+            kind: 'channel',
+            _section: sec,
+            _macro: mac,
+            cover: () => locks.isContentRestricted('channel', mac)
+              ? locks.lockedCoverNode(ART)
+              : channelCoverNode(mac, secFiles),
+            hiddenMeta: locks.isContentRestricted('channel', mac),
+            label: locks.isContentRestricted('channel', mac) ? '' : label,
+            sub: locks.isContentRestricted('channel', mac) ? '' : (n ? (n === 1 ? '1 cómic' : `${n} cómics`) : ''),
+            isUnread: n ? secFiles.some((f) => !isComicRead(mac.id, f.id)) : true,
+            go: () => {
+              if (!locks.guardRestricted('channel', mac, label)) return;
+              filesView(mac, { section: sec });
+            },
+            longPress: () => {
+              sheet(label, [
+                ['Información', () => showChannelInfo(mac)],
+              ]);
+            },
+          });
+        }
+      }
+
       gridItems.sort((a, b) => natural(a.label, b.label));
 
       // UI: buscador estilo home + grid de canales (o lista de resultados)
@@ -2054,14 +2097,20 @@ function channelsView(g) {
     });
   });
 }
-function filesView(ch) {
+function filesView(ch, opts = {}) {
   const LIB = libNow();
+  const sectionFilter = String(opts.section || '').trim();
 
-  if (!locks.guardRestricted('channel', ch, channelDisplayName(ch))) return;
+  if (!locks.guardRestricted('channel', ch, sectionFilter || channelDisplayName(ch))) return;
 
-  go(channelDisplayName(ch), async (e) => {
-    e._uploadCtx = { editorial: ch.group || 'Sin editorial', channel: ch };
+  go(sectionFilter || channelDisplayName(ch), async (e) => {
+    e._uploadCtx = {
+      editorial: ch.group || 'Sin editorial',
+      channel: ch,
+      seccion: sectionFilter || undefined,
+    };
     e._chId = ch.id;
+    e._sectionFilter = sectionFilter || '';
     let cur = [];
     let channelQueue = []; // cómics en el orden visible del canal
     const draw = (files) => {
@@ -2214,13 +2263,17 @@ function filesView(ch) {
       } catch (_) {}
       grid(sorted, true, 'Buscar en este canal…', 'mixed');
     };
+    const filterSec = (list) => {
+      if (!sectionFilter) return list || [];
+      return filesInSection(list || [], sectionFilter, parseComicCaption);
+    };
     const cached = await kv.get('f:' + ch.id);
-    if (cached) draw(cached); else msg('Cargando…');
+    if (cached) draw(filterSec(cached)); else msg('Cargando…');
     try {
       const force = !!e._forceFiles;
       e._forceFiles = false;
       const fresh = await fetchFiles(ch);
-      if (force || JSON.stringify(fresh) !== JSON.stringify(cached)) draw(fresh);
+      if (force || JSON.stringify(fresh) !== JSON.stringify(cached)) draw(filterSec(fresh));
     } catch (err) { if (!cached) msg('Error: ' + err.message); }
   });
 }
