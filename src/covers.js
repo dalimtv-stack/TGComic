@@ -50,10 +50,26 @@ export function createCovers(state, d) {
 
   const cq = [];
   let crun = 0;
-  // 4 en paralelo: CBZ solo pide trozos; evita que 1 CBR lento bloquee toda la rejilla tanto tiempo
-  const QUEUE_N = 4;
+  // iPhone: 1 a la vez (Telegram + Safari se ahogan con varias descargas y fallan el resto sin reintento)
+  const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+  const isMobile = isIOS || /Android/i.test(navigator.userAgent || '');
+  const QUEUE_N = isIOS ? 1 : (isMobile ? 2 : 3);
+  const COVER_TIMEOUT_MS = isIOS ? 120000 : 180000;
+
+  function withTimeout(promise, ms, label) {
+    let t;
+    const timeout = new Promise((_, rej) => {
+      t = setTimeout(() => rej(new Error(label || 'cover timeout')), ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => { try { clearTimeout(t); } catch (_) {} });
+  }
+
   const enqueue = (fn) => new Promise((res) => {
-    cq.push(() => fn().then(res, (e) => { console.warn('[cover]', e); res(null); }));
+    cq.push(() => withTimeout(
+      Promise.resolve().then(fn),
+      COVER_TIMEOUT_MS,
+      'cover timeout'
+    ).then(res, (e) => { console.warn('[cover]', e); res(null); }));
     pump();
   });
   /** @param {{ force?: boolean }} [opts] force=true: procesa aunque state.reading (batch de portadas) */
@@ -61,7 +77,16 @@ export function createCovers(state, d) {
     if (state.reading && !opts?.force) return;
     while (crun < QUEUE_N && cq.length) {
       crun++;
-      cq.shift()().finally(() => { crun--; pump(opts); });
+      const run = cq.shift();
+      Promise.resolve()
+        .then(() => run())
+        .finally(() => {
+          crun--;
+          // Pequeña pausa en iOS entre portadas para no saturar getMessages / DC
+          const gap = isIOS ? 280 : 0;
+          if (gap) setTimeout(() => pump(opts), gap);
+          else pump(opts);
+        });
     }
   }
 
@@ -497,9 +522,46 @@ export function createCovers(state, d) {
     }
   }
 
+  /**
+   * Solo dejamos de observar cuando la portada cargó bien.
+   * Antes: unobserve al primer intersect → si fallaba (flood/timeout en iPhone)
+   * nunca se reintentaba y solo se veía la 1ª portada.
+   */
   const io = new IntersectionObserver((es) => es.forEach((x) => {
-    if (x.isIntersecting) { io.unobserve(x.target); x.target._load?.(); }
-  }), { rootMargin: '400px' });
+    if (!x.isIntersecting) return;
+    const el = x.target;
+    if (!el || el._coverOk || el._coverLoading) return;
+    el._coverLoading = true;
+    Promise.resolve()
+      .then(() => el._load?.())
+      .catch((e) => console.warn('cover io', e))
+      .finally(() => {
+        el._coverLoading = false;
+        if (el._coverOk) {
+          try { io.unobserve(el); } catch (_) {}
+        }
+        // Si falló y sigue visible, reintentar tras una pausa
+        else if (el.isConnected) {
+          const n = (el._coverFails | 0) + 1;
+          el._coverFails = n;
+          const wait = Math.min(12000, 900 * n);
+          setTimeout(() => {
+            if (!el.isConnected || el._coverOk || el._coverLoading) return;
+            // Volver a encolar si sigue en viewport (isIntersecting no se re-dispara solo)
+            el._coverLoading = true;
+            Promise.resolve()
+              .then(() => el._load?.())
+              .catch(() => {})
+              .finally(() => {
+                el._coverLoading = false;
+                if (el._coverOk) {
+                  try { io.unobserve(el); } catch (_) {}
+                }
+              });
+          }, wait);
+        }
+      });
+  }), { rootMargin: '500px 0px', threshold: 0.01 });
 
   function comicCover(ch, f, badge, series) {
     const d = el('div', 'cover cover-comic');
@@ -526,6 +588,7 @@ export function createCovers(state, d) {
     }
     const paintBlob = (b) => {
       if (!b || !d.isConnected) return false;
+      d._coverOk = true;
       const img = new Image();
       if (d._objUrl) { try { URL.revokeObjectURL(d._objUrl); } catch (_) {} }
       let url;
@@ -560,16 +623,18 @@ export function createCovers(state, d) {
       try {
         let b = await getCover(ch, f);
         if (paintBlob(b)) return;
-        // 1 reintento: cómic nuevo a veces falla el 1er getMessages / trozo ZIP
-        await new Promise((r) => setTimeout(r, 600));
-        if (!d.isConnected) return;
-        b = await getCover(ch, f, { force: false });
-        // Si sigue vacío, forzar regeneración (borra caché 'none' y reintenta red)
-        if (!b) {
-          try { await kv.del(`c:${ch.id}:${f.id}`); } catch (_) {}
-          b = await enqueue(() => makeCover(ch, f, `c:${ch.id}:${f.id}`, { forceMsg: true }));
+        // Reintentos: cómics nuevos / iPhone (flood o timeout del 1er lote)
+        for (let attempt = 0; attempt < 3 && d.isConnected && !d._coverOk; attempt++) {
+          await new Promise((r) => setTimeout(r, 500 + attempt * 700));
+          if (!d.isConnected) return;
+          if (attempt >= 1) {
+            try { await kv.del(`c:${ch.id}:${f.id}`); } catch (_) {}
+            b = await enqueue(() => makeCover(ch, f, `c:${ch.id}:${f.id}`, { forceMsg: true, _retried: attempt > 1 }));
+          } else {
+            b = await getCover(ch, f, { force: false });
+          }
+          if (paintBlob(b)) return;
         }
-        paintBlob(b);
       } catch (e) {
         console.warn('cover load', e);
       }
