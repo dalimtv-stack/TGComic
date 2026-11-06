@@ -337,6 +337,9 @@ export function parseComicCaption(text) {
     'original title': 'originalTitle',
     'serie': 'series',
     'series': 'series',
+    'seccion': 'section',
+    'sección': 'section',
+    'section': 'section',
     'guionista': 'writer',
     'writer': 'writer',
     'script': 'writer',
@@ -403,6 +406,7 @@ export function buildComicCaption(fields = {}) {
     if (s) lines.push(k + ': ' + s);
   };
   add('Nombre de archivo', fields.fileName);
+  add('Sección', fields.section || fields.seccion);
   add('Título España', fields.titleEs);
   add('Título original', fields.originalTitle);
   add('Serie', fields.series);
