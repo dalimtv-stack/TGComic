@@ -1548,7 +1548,27 @@ async function postErrorPlaceholder(ch, fileName, errMsg) {
 
       editorialSel.onchange = () => {
         editorialInp.hidden = editorialSel.value !== '__new__';
-        rebuildChannels();
+        rebuildChannels().then(() => {
+        try {
+          const sec = String(ctx?.seccion || '').trim();
+          if (!sec) return;
+          // Buscar opción de sección o poner + Nuevo con nombre
+          const opts = [...channelSel.options];
+          const hit = opts.find((o) => o._dest?.kind === 'section' && String(o._dest.section || '').toLowerCase() === sec.toLowerCase());
+          if (hit) {
+            channelSel.value = hit.value;
+            channelInp.hidden = true;
+            realChRow.hidden = true;
+          } else {
+            channelSel.value = '__new__';
+            channelInp.hidden = false;
+            realChRow.hidden = false;
+            channelInp.value = sec;
+            realChChk.checked = false;
+          }
+          updateAllPreviews();
+        } catch (_) {}
+      });
       };
       editorialInp.oninput = () => { if (editorialSel.value === '__new__') rebuildChannels(); else updateAllPreviews(); };
       channelSel.onchange = () => {
@@ -1604,7 +1624,9 @@ async function postErrorPlaceholder(ch, fileName, errMsg) {
           let outName = String(row.nameInp.value || '').trim();
           if (!outName || !row.nameTouched) {
             outName = composeFileName({
-              channel: includeChChk.checked ? chName : '',
+              channel: includeChChk.checked
+                ? (dest.kind === 'section' || dest.kind === 'new_section' ? (dest.section || chName) : chName)
+                : '',
               series: seriesInp.value,
               number: row.numberInp.value,
               info: row.infoInp.value,
