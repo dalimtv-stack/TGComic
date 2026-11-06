@@ -606,8 +606,11 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
    * mode 'series': todos en la carpeta elegida.
    * mode 'channel': crea subcarpeta por serie (aunque esté desagrupado o haya un solo número).
    */
-  async function downloadComicsBulk(ch, fileList, { mode = 'series', seriesLabel = '' } = {}) {
-    const files = (fileList || []).filter(Boolean);
+  async function downloadComicsBulk(ch, fileList, { mode = 'series', seriesLabel = '', section = '' } = {}) {
+    let files = (fileList || []).filter(Boolean);
+    if (section) {
+      files = files.filter((f) => sectionFromCaption(f?.caption || '').trim().toLowerCase() === String(section).trim().toLowerCase());
+    }
     if (!ch || !files.length) {
       await appAlert('No hay cómics para descargar.');
       return;
@@ -1008,6 +1011,7 @@ function lockToggleOpts(kind, ref, label, redraw) {
   const marked =
     kind === 'group' ? locks.isGroupMarked(ref)
     : kind === 'channel' ? locks.isChannelMarked(ref)
+    : kind === 'section' ? !!(locks.isSectionMarked && locks.isSectionMarked(ref.ch, ref.section))
     : kind === 'series' ? locks.isSeriesMarked(ref.ch, ref.seriesLabel)
     : kind === 'comic' ? locks.isComicMarked(ref.ch, ref.f)
     : false;
@@ -1020,6 +1024,7 @@ function lockToggleOpts(kind, ref, label, redraw) {
       }
       if (kind === 'group') locks.setGroupLocked(ref, false);
       else if (kind === 'channel') locks.setChannelLocked(ref, false);
+      else if (kind === 'section') locks.setSectionLocked?.(ref.ch, ref.section, false);
       else if (kind === 'series') locks.setSeriesLocked(ref.ch, ref.seriesLabel, false);
       else if (kind === 'comic') locks.setComicLocked(ref.ch, ref.f, false);
       redraw?.();
@@ -1033,6 +1038,7 @@ function lockToggleOpts(kind, ref, label, redraw) {
     }
     if (kind === 'group') locks.setGroupLocked(ref, true);
     else if (kind === 'channel') locks.setChannelLocked(ref, true);
+    else if (kind === 'section') locks.setSectionLocked?.(ref.ch, ref.section, true);
     else if (kind === 'series') locks.setSeriesLocked(ref.ch, ref.seriesLabel, true);
     else if (kind === 'comic') locks.setComicLocked(ref.ch, ref.f, true);
     redraw?.();
@@ -1386,11 +1392,11 @@ function groupsView() {
       for (const name of gs) {
         // Editorial bloqueada + candado cerrado → no se muestra en Home
         if (locks.isContentRestricted('group', name)) continue;
-        const n = LIB.filter((c) => c.group === name).length;
         const label = groupDisplayName(name);
-        g.append(cardNode({
+        const nReals = LIB.filter((c) => c.group === name && !isMacroLibEntry(c)).length;
+        const cardEl = cardNode({
           label,
-          sub: n === 1 ? '1 canal' : `${n} canales`,
+          sub: nReals === 1 ? '1 canal' : `${nReals} canales`,
           cover: () => groupCoverNode(name),
           go: () => {
             if (!locks.guardRestricted('group', name, label)) return;
@@ -1425,7 +1431,21 @@ function groupsView() {
             }
             sheet(label, opts);
           },
-        }));
+        });
+        g.append(cardEl);
+        (async () => {
+          try {
+            const filesBy = {};
+            for (const ch of LIB) {
+              if (String(ch.group || '') !== name || !isMacroLibEntry(ch)) continue;
+              try { filesBy[String(ch.id)] = (await kv.get('f:' + ch.id)) || []; } catch (_) { filesBy[String(ch.id)] = []; }
+            }
+            const nn = countNavChannels(LIB, name, filesBy);
+            const small = cardEl.querySelector('small');
+            if (small) small.textContent = nn === 1 ? '1 canal' : (nn + ' canales');
+          } catch (_) {}
+        })();
+
       }
       fold.append(g);
       fold.addEventListener('toggle', () => setPref('pubsOpen', fold.open ? '1' : '0'));
@@ -1970,18 +1990,43 @@ function channelsView(g) {
             sub: locks.isContentRestricted('channel', mac) ? '' : (n ? (n === 1 ? '1 cómic' : `${n} cómics`) : ''),
             isUnread: n ? secFiles.some((f) => !isComicRead(mac.id, f.id)) : true,
             go: () => {
-              if (!locks.guardRestricted('channel', mac, label)) return;
+              if (!locks.guardRestricted('section', { ch: mac, section: sec }, label)
+                && !locks.guardRestricted('channel', mac, label)) return;
+              // Prefer section lock when available
+              if (locks.isContentRestricted('section', { ch: mac, section: sec })) return;
+              if (locks.isContentRestricted('channel', mac)) return;
               filesView(mac, { section: sec });
             },
             longPress: () => {
-              sheet(label, [
+              const opts = [
                 ['Información', () => showChannelInfo(mac)],
-              ]);
+                ['Descargar en bloque', () => downloadComicsBulk(mac, secFiles, { mode: 'channel', section: sec })],
+                ...lockToggleOpts('section', { ch: mac, section: sec }, label, () => build()),
+              ];
+              sheet(label, opts);
             },
           });
         }
       }
 
+
+      for (const mac of macros) {
+        let mfiles = [];
+        try { mfiles = (await kv.get('f:' + mac.id)) || []; } catch (_) {}
+        const orphans = (mfiles || []).filter((f) => !sectionFromCaption(f?.caption || ''));
+        if (!orphans.length) continue;
+        const on = orphans.length;
+        gridItems.push({
+          kind: 'channel',
+          _orphan: true,
+          cover: () => channelCoverNode(mac, orphans),
+          label: '(Sin sección)',
+          sub: on === 1 ? '1 cómic sin Sección' : `${on} cómics sin Sección`,
+          isUnread: true,
+          go: () => filesView(mac, { orphansOnly: true }),
+          longPress: () => sheet('(Sin sección)', [['Información', () => showChannelInfo(mac)]]),
+        });
+      }
       gridItems.sort((a, b) => natural(a.label, b.label));
 
       // UI: buscador estilo home + grid de canales (o lista de resultados)
@@ -2100,14 +2145,22 @@ function channelsView(g) {
 function filesView(ch, opts = {}) {
   const LIB = libNow();
   const sectionFilter = String(opts.section || '').trim();
+  const orphansOnly = !!opts.orphansOnly;
 
-  if (!locks.guardRestricted('channel', ch, sectionFilter || channelDisplayName(ch))) return;
+  if (sectionFilter) {
+    if (locks.isContentRestricted('section', { ch, section: sectionFilter })
+      || locks.isContentRestricted('channel', ch)
+      || locks.isContentRestricted('group', ch.group)) {
+      if (!locks.guardRestricted('section', { ch, section: sectionFilter }, sectionFilter)) return;
+    }
+  } else if (!locks.guardRestricted('channel', ch, channelDisplayName(ch))) return;
 
-  go(sectionFilter || channelDisplayName(ch), async (e) => {
+  go(orphansOnly ? '(Sin sección)' : (sectionFilter || channelDisplayName(ch)), async (e) => {
     e._uploadCtx = {
       editorial: ch.group || 'Sin editorial',
-      channel: ch,
+      channel: isMacroLibEntry(ch) ? undefined : ch,
       seccion: sectionFilter || undefined,
+      macroChannel: isMacroLibEntry(ch) ? ch : undefined,
     };
     e._chId = ch.id;
     e._sectionFilter = sectionFilter || '';
@@ -2264,8 +2317,10 @@ function filesView(ch, opts = {}) {
       grid(sorted, true, 'Buscar en este canal…', 'mixed');
     };
     const filterSec = (list) => {
-      if (!sectionFilter) return list || [];
-      return filesInSection(list || [], sectionFilter, parseComicCaption);
+      const arr = list || [];
+      if (orphansOnly) return arr.filter((f) => !sectionFromCaption(f?.caption || ''));
+      if (!sectionFilter) return arr;
+      return arr.filter((f) => sectionFromCaption(f?.caption || '').trim().toLowerCase() === sectionFilter.trim().toLowerCase());
     };
     const cached = await kv.get('f:' + ch.id);
     if (cached) draw(filterSec(cached)); else msg('Cargando…');
