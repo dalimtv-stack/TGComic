@@ -21,10 +21,11 @@ function readLocks() {
       channels: Array.isArray(o.channels) ? o.channels.map(String) : [],
       series: Array.isArray(o.series) ? o.series.map(String) : [],
       comics: Array.isArray(o.comics) ? o.comics.map(String) : [],
+      sections: Array.isArray(o.sections) ? o.sections.map(String) : [],
       updatedAt: Number(o.updatedAt) || 0,
     };
   } catch (_) {
-    return { groups: [], channels: [], series: [], comics: [], updatedAt: 0 };
+    return { groups: [], channels: [], series: [], comics: [], sections: [], updatedAt: 0 };
   }
 }
 
@@ -34,6 +35,7 @@ function writeLocks(o) {
     channels: [...new Set(o.channels || [])],
     series: [...new Set(o.series || [])],
     comics: [...new Set(o.comics || [])],
+    sections: [...new Set(o.sections || [])],
     // Marca temporal: al sincronizar gana la versión más reciente
     // (evita que un dispositivo sin locks borre los del otro)
     updatedAt: Date.now(),
@@ -71,6 +73,25 @@ export function seriesLockKey(chId, seriesLabel) {
 
 export function comicLockKey(chId, fileId) {
   return String(chId) + '::' + String(fileId);
+}
+
+export function sectionLockKey(chId, section) {
+  return String(chId) + '::sec::' + String(section || '').trim().toLowerCase();
+}
+
+export function isSectionMarked(ch, section) {
+  if (!ch?.id || !section) return false;
+  return readLocks().sections.includes(sectionLockKey(ch.id, section));
+}
+
+export function setSectionLocked(ch, section, locked) {
+  if (!ch?.id || !section) return;
+  const o = readLocks();
+  if (!Array.isArray(o.sections)) o.sections = [];
+  const k = sectionLockKey(ch.id, section);
+  o.sections = o.sections.filter((x) => x !== k);
+  if (locked) o.sections.push(k);
+  writeLocks(o);
 }
 
 export function isGroupMarked(groupName) {
@@ -146,6 +167,11 @@ function seriesOfComic(ch, f) {
 export function isContentRestricted(kind, ref) {
   if (sessionUnlocked) return false;
   if (kind === 'group') return isGroupMarked(ref);
+  if (kind === 'section') {
+    const ch = ref?.ch;
+    const sec = ref?.section;
+    return isSectionMarked(ch, sec) || isChannelMarked(ch) || isGroupMarked(ch?.group);
+  }
   if (kind === 'channel') {
     const ch = ref;
     return isChannelMarked(ch) || isGroupMarked(ch?.group);
