@@ -50,11 +50,12 @@ export function createCovers(state, d) {
 
   const cq = [];
   let crun = 0;
-  // iPhone: 1 a la vez (Telegram + Safari se ahogan con varias descargas y fallan el resto sin reintento)
+  // Paralelismo alto otra vez: el fallo de «solo la 1ª» se arregla con reintentos + unobserve solo si OK,
+  // no limitando a 1 (eso hacía la rejilla muy lenta en iPhone).
   const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent || '');
   const isMobile = isIOS || /Android/i.test(navigator.userAgent || '');
-  const QUEUE_N = isIOS ? 1 : (isMobile ? 2 : 3);
-  const COVER_TIMEOUT_MS = isIOS ? 120000 : 180000;
+  const QUEUE_N = isIOS ? 3 : (isMobile ? 3 : 4);
+  const COVER_TIMEOUT_MS = isIOS ? 100000 : 180000;
 
   function withTimeout(promise, ms, label) {
     let t;
@@ -83,7 +84,7 @@ export function createCovers(state, d) {
         .finally(() => {
           crun--;
           // Pequeña pausa en iOS entre portadas para no saturar getMessages / DC
-          const gap = isIOS ? 280 : 0;
+          const gap = isIOS ? 60 : 0;
           if (gap) setTimeout(() => pump(opts), gap);
           else pump(opts);
         });
