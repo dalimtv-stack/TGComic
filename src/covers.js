@@ -54,7 +54,7 @@ export function createCovers(state, d) {
   // no limitando a 1 (eso hacía la rejilla muy lenta en iPhone).
   const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent || '');
   const isMobile = isIOS || /Android/i.test(navigator.userAgent || '');
-  const QUEUE_N = isIOS ? 3 : (isMobile ? 3 : 4);
+  const QUEUE_N = isIOS ? 9 : (isMobile ? 3 : 4);
   const COVER_TIMEOUT_MS = isIOS ? 100000 : 180000;
 
   function withTimeout(promise, ms, label) {
