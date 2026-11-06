@@ -21,6 +21,7 @@ import {
   setLocalSection,
   getLocalSection,
   withSectionInCaption,
+  withFileNameInCaption,
 } from './macro.js';
 
 /**
@@ -45,7 +46,7 @@ export function createViews(d) {
     pref, setPref,
     appAlert, appConfirm, appPrompt,
     parseComicName, issueDisplay,
-    parseComicCaption,
+    parseComicCaption, buildComicCaption,
     buildSearchIndex, filterSearchIndex,
     getLIB,
     updateTelegramCaption,
@@ -802,7 +803,7 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
   }
 
 
-  /** Asignar sección a un cómic en canal macro (sin Sección en caption). */
+  /** Asignar sección + confirmar Nombre de archivo (caption / local / recarga). */
   function showAssignSectionForm(ch, f, label, redraw, mode = 'caption') {
     // mode: 'caption' | 'local' | 'reload'
     document.querySelector('.info-frame.assign-section')?.remove();
@@ -820,12 +821,13 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
     const body = el('div', 'info-body');
     body.append(el('p', 'cover-pick-hint',
       mode === 'local'
-        ? 'Este archivo es un reenvío: la sección se guardará solo en este dispositivo (no se puede editar el caption de Telegram).'
+        ? 'Confirma sección y nombre de archivo. La sección se guardará solo en este dispositivo (reenvío: no se puede editar el caption de Telegram).'
         : mode === 'reload'
-          ? 'Elige la sección de destino. Al continuar se abrirá el formulario de recarga externa.'
-          : 'Elige una sección existente o escribe una nueva. Se actualizará el caption en Telegram.'
+          ? 'Confirma sección y nombre de archivo. Al continuar se abrirá la recarga externa con esos datos.'
+          : 'Confirma sección y nombre de archivo. Se actualizará el caption en Telegram.'
     ));
 
+    // --- Sección / Canal ---
     const secLab = el('div', 'sync-label', 'Sección / Canal');
     const secSel = el('select', 'edit-input');
     const oNew = el('option');
@@ -838,6 +840,29 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
     secInp.autocomplete = 'off';
     secInp.hidden = true;
 
+    // --- Nombre de archivo (obligatorio confirmar) ---
+    const fnLab = el('div', 'sync-label', 'Nombre de archivo');
+    const fnInp = el('input', 'edit-input');
+    fnInp.type = 'text';
+    fnInp.placeholder = 'Ej: Serie #01 - Título.cbz';
+    fnInp.autocomplete = 'off';
+    // Pre-relleno: caption → nombre Telegram → sugerencia repack
+    let suggestedFn = '';
+    try {
+      const cap = typeof parseComicCaption === 'function' ? parseComicCaption(f?.caption || '') : {};
+      suggestedFn = String(cap?.fileName || '').trim();
+    } catch (_) {}
+    if (!suggestedFn) {
+      try {
+        const rt = typeof d.repackTool === 'function' ? d.repackTool() : d.repackTool;
+        if (rt && typeof rt.suggestUploadName === 'function') {
+          suggestedFn = String(rt.suggestUploadName(ch, f, true, true) || '').trim();
+        }
+      } catch (_) {}
+    }
+    if (!suggestedFn) suggestedFn = String(f?.name || '').trim();
+    fnInp.value = suggestedFn;
+
     (async () => {
       let files = [];
       try { files = (await kv.get('f:' + ch.id)) || []; } catch (_) {}
@@ -848,7 +873,18 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
         o.textContent = s;
         secSel.append(o);
       }
-      if (sections.length) {
+      // Preferir sección ya efectiva del cómic si existe
+      let curSec = '';
+      try { curSec = effectiveSection(ch, f, parseComicCaption) || ''; } catch (_) {}
+      if (curSec && sections.some((s) => s.toLowerCase() === curSec.toLowerCase())) {
+        const hit = sections.find((s) => s.toLowerCase() === curSec.toLowerCase());
+        secSel.value = hit;
+        secInp.hidden = true;
+      } else if (curSec) {
+        secSel.value = '__new__';
+        secInp.hidden = false;
+        secInp.value = curSec;
+      } else if (sections.length) {
         secSel.value = sections[0];
         secInp.hidden = true;
       } else {
@@ -862,12 +898,12 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
       if (secSel.value !== '__new__') secInp.value = '';
     };
 
-    body.append(secLab, secSel, secInp);
+    body.append(secLab, secSel, secInp, fnLab, fnInp);
 
     const actions = el('div', 'edit-actions');
     const cancel = el('button', 'btn', 'Cancelar');
     cancel.onclick = () => frame.remove();
-    const goBtn = el('button', 'btn edit-save', mode === 'reload' ? 'Recargar externo' : 'Guardar');
+    const goBtn = el('button', 'btn edit-save', mode === 'reload' ? 'Continuar' : 'Guardar');
     goBtn.onclick = async () => {
       const chosen = secSel.value === '__new__'
         ? String(secInp.value || '').trim()
@@ -876,6 +912,17 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
         await appAlert('Indica el nombre de la sección');
         return;
       }
+      let fileName = String(fnInp.value || '').trim();
+      if (!fileName) {
+        await appAlert('Indica el nombre de archivo');
+        return;
+      }
+      // Normalizar extensión visible
+      if (!/\.cb[zr]$/i.test(fileName) && !/\.pdf$/i.test(fileName)) {
+        const ext = /\.cbr$/i.test(f?.name || '') ? '.cbr' : /\.pdf$/i.test(f?.name || '') ? '.pdf' : '.cbz';
+        fileName = fileName.replace(/\.(cb[zr]|pdf)$/i, '') + ext;
+      }
+
       // ¿Coincide con un canal real (no macro) de la misma editorial?
       const LIB = (typeof getLIB === 'function' ? getLIB() : d.LIB) || [];
       const lib = Array.isArray(LIB) ? LIB : [];
@@ -894,7 +941,7 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
           frame.remove();
           try {
             if (typeof repackTool?.offerReloadExternal === 'function') {
-              repackTool.offerReloadExternal(ch, f, { targetCh: matchCh, deleteOriginal: true });
+              repackTool.offerReloadExternal(ch, f, { targetCh: matchCh, deleteOriginal: true, outName: fileName });
             } else {
               await appAlert('Recarga no disponible. Usa «Recargar CBR / externos».');
             }
@@ -908,7 +955,7 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
       if (mode === 'reload') {
         frame.remove();
         try {
-          repackTool?.offerReloadExternal?.(ch, f, { section: chosen, deleteOriginal: false });
+          repackTool?.offerReloadExternal?.(ch, f, { section: chosen, deleteOriginal: false, outName: fileName });
         } catch (e) {
           await appAlert(e?.message || e);
         }
@@ -918,46 +965,54 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
       if (mode === 'local') {
         try {
           setLocalSection(ch.id, f.id, chosen);
-          // Aplicar a todas las versiones del mismo cómic en listado local
-          try {
-            const all = (await kv.get('f:' + ch.id)) || [];
-            // no cambia caption; solo override por id
-          } catch (_) {}
           frame.remove();
           try { redraw?.(); } catch (_) {}
           try { window.dispatchEvent(new CustomEvent('tgcomic:changed', { detail: { chId: ch.id, kind: 'section-local' } })); } catch (_) {}
-          await appAlert('Sección guardada en este dispositivo: «' + chosen + '».', 'Sección');
+          await appAlert(
+            'Sección guardada en este dispositivo: «' + chosen + '».\n'
+            + 'Nombre de archivo anotado: «' + fileName + '» (solo visible al recargar/re-subir; el caption de Telegram no se puede editar en reenvíos).',
+            'Sección'
+          );
         } catch (e) {
           await appAlert('Error: ' + (e?.message || e));
         }
         return;
       }
 
-      // mode caption: editar Telegram
+      // mode caption: editar Telegram (Sección + Nombre de archivo)
       goBtn.disabled = true;
       try {
         if (typeof updateTelegramCaption !== 'function') {
           throw new Error('No se puede editar el caption (updateTelegramCaption no disponible)');
         }
-        const baseCap = String(f.caption || '');
-        const newCap = withSectionInCaption(baseCap, chosen);
-        await updateTelegramCaption(ch, f, newCap);
-        // Hermanos de calidad si la API de info lo permite
-        try {
-          if (typeof updateCaptionOnAllVersions === 'function') {
-            // no-op path - updateTelegramCaption already one file
+        let newCap = String(f.caption || '');
+        // Preferir rebuild completo si hay parse/build
+        if (typeof parseComicCaption === 'function' && typeof buildComicCaption === 'function') {
+          try {
+            const fields = parseComicCaption(newCap) || {};
+            fields.section = chosen;
+            fields.fileName = fileName;
+            newCap = buildComicCaption(fields);
+          } catch (_) {
+            newCap = withFileNameInCaption(withSectionInCaption(newCap, chosen), fileName);
           }
-        } catch (_) {}
+        } else {
+          newCap = withFileNameInCaption(withSectionInCaption(newCap, chosen), fileName);
+        }
+        await updateTelegramCaption(ch, f, newCap);
+        // Refrescar listado local del archivo
         try {
-          // Actualizar variants en el mismo mensaje group si existen en kv
           const all = (await kv.get('f:' + ch.id)) || [];
-          const flat = flattenVersions ? flattenVersions(all) : all;
-          // Also set caption on siblings same base name without quality tags? soft: just primary
+          const next = (all || []).map((x) => {
+            if (String(x.id) !== String(f.id)) return x;
+            return { ...x, caption: newCap };
+          });
+          await kv.set('f:' + ch.id, next);
         } catch (_) {}
         frame.remove();
         try { redraw?.(); } catch (_) {}
         try { window.dispatchEvent(new CustomEvent('tgcomic:changed', { detail: { chId: ch.id, kind: 'section-caption' } })); } catch (_) {}
-        await appAlert('Sección añadida al caption: «' + chosen + '».', 'Sección');
+        await appAlert('Caption actualizado:\nSección: «' + chosen + '»\nNombre de archivo: «' + fileName + '»', 'Sección');
       } catch (e) {
         goBtn.disabled = false;
         await appAlert('No se pudo guardar en Telegram: ' + (e?.message || e)

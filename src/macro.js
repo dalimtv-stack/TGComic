@@ -153,6 +153,20 @@ export function withSectionInCaption(caption, section) {
   return line + '\n' + text;
 }
 
+/** Añade o sustituye la línea Nombre de archivo: en un caption */
+export function withFileNameInCaption(caption, fileName) {
+  const fn = String(fileName || '').trim();
+  const text = String(caption || '').trim();
+  if (!fn) return text;
+  const line = 'Nombre de archivo: ' + fn;
+  if (!text) return line;
+  if (/^\s*Nombre de archivo\s*:/imu.test(text)) {
+    return text.replace(/^\s*Nombre de archivo\s*:.*$/imu, line);
+  }
+  // Al principio del caption (antes de Sección u otros campos)
+  return line + '\n' + text;
+}
+
 
 /** Etiqueta de "canal" para UI: sección si el contenedor es macro */
 export function displayChannelForComic(ch, f, channelDisplayNameFn) {

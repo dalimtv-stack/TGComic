@@ -2,7 +2,7 @@
  * Herramienta: convertir CBR → CBZ y re-subir (también mensajes reenviados).
  * Móvil: poca RAM, un archivo a la vez, liberar buffers.
  */
-import { isMacroLibEntry, sectionFromCaption, withSectionInCaption } from './macro.js';
+import { isMacroLibEntry, sectionFromCaption, withSectionInCaption, withFileNameInCaption } from './macro.js';
 import * as zip from '@zip.js/zip.js';
 import { fitTelegramCaption } from './caption.js';
 import { withQualityTags, existingCopy, flattenVersions, sourceNameOf, parseQuality, QUALITY_LABEL } from './quality.js';
@@ -1228,10 +1228,13 @@ export function createRepackTool(d) {
       const nameLab = el('div', 'sync-label', 'Nombre final');
       const inp = el('input', 'edit-input repack-name-input');
       inp.type = 'text';
-      inp.value = asWebp ? withQualityTags(suggested, { webp: true, resize: rz }) : suggested;
+      // Si viene preconfirmado (p. ej. desde Asignar sección), respetarlo
+      const pre = String(item.outName || '').trim();
+      const baseName = pre || suggested;
+      inp.value = asWebp ? withQualityTags(baseName, { webp: true, resize: rz }) : baseName;
       inp.autocomplete = 'off';
       inp._item = item;
-      inp._manual = false;
+      inp._manual = !!pre;
       inp.oninput = () => { inp._manual = true; };
 
       row.append(nLab, numberInp, iLab, infoInp, nameLab, inp);
@@ -1318,6 +1321,7 @@ export function createRepackTool(d) {
   function offerReloadExternal(ch, f, opts = {}) {
     if (!ch || !f) return;
     const section = String(opts.section || '').trim();
+    const preferredName = String(opts.outName || opts.fileName || '').trim();
     const targetCh = opts.targetCh || ch;
     const deleteOriginal = opts.deleteOriginal !== false && !!opts.targetCh
       ? true
@@ -1333,16 +1337,25 @@ export function createRepackTool(d) {
       _sourceCh: opts.targetCh ? ch : null,
       _sourceF: opts.targetCh ? f : null,
     };
-    // Caption con sección si aplica (antes de mostrar nombres)
+    // Caption con sección y nombre de archivo si aplica (antes de mostrar nombres)
+    let cap = String(f.caption || '');
     if (section) {
-      try {
-        item.f = { ...item.f, caption: withSectionInCaption(String(f.caption || ''), section) };
-        item.caption = item.f.caption;
-      } catch (_) {}
+      try { cap = withSectionInCaption(cap, section); } catch (_) {}
     }
+    if (preferredName) {
+      try { cap = withFileNameInCaption(cap, preferredName.replace(/\.cb[zr]$/i, '') + ( /\.cbr$/i.test(f.name) ? '.cbr' : '.cbz')); } catch (_) {}
+    }
+    try {
+      item.f = { ...item.f, caption: cap };
+      item.caption = cap;
+    } catch (_) {}
     // Si el destino es otro canal, el item.ch ya es targetCh; processOne sube allí
     // showNameReview espera selected con .ch y .f del origen de descarga: la descarga
     // debe ser del mensaje original (ch,f), la subida al targetCh.
+    let outName = preferredName;
+    if (outName && !/\.cb[zr]$/i.test(outName)) {
+      outName = outName.replace(/\.cb[zr]$/i, '') + '.cbz';
+    }
     const selected = [{
       ch, // descarga desde origen
       f,
@@ -1352,6 +1365,7 @@ export function createRepackTool(d) {
       caption: item.f.caption || item.caption || f.caption || '',
       _forceSection: section || undefined,
       deleteOriginalAfter: deleteOriginal,
+      outName: outName || undefined,
     }];
     showNameReview(selected, !!deleteOriginal, false, {}, {});
   }

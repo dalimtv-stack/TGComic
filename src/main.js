@@ -2174,6 +2174,8 @@ const viewsApi = createViews({
   pref, setPref,
   appAlert, appConfirm, appPrompt,
   parseComicName, issueDisplay,
+  parseComicCaption, buildComicCaption,
+  getLIB: () => LIB,
   seriesBase,
   setBlobImg,
 });
