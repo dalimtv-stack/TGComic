@@ -2390,9 +2390,9 @@ async function getChannelCoverBlob(ch, files) {
   }
   return null;
 }
-async function setChannelCoverBlob(ch, blob) {
+async function setChannelCoverBlob(ch, blob, section) {
   if (!blob) return;
-  const key = channelCoverKey(ch);
+  const key = channelCoverKey(ch, section);
   try {
     const opt = await optimizeImageBlob(blob, coverEdge('channel', 384), 0.75, { keepAlpha: true });
     const saved = opt || blob;
@@ -2484,27 +2484,34 @@ function channelCoverNode(ch, files, section) {
     } catch (_) {}
 
     // 2) Arte GitHub / public/channels (solo si no hay origen personalizado)
+    // Para Secciones: intentar primero arte con el nombre de la sección
     try {
-      const gh = await getGithubChannelArtBlob(ch);
+      const gh = secLabel
+        ? (await getGithubChannelArtBlob({ name: secLabel, group: ch?.group })
+            || await getGithubChannelArtBlob(ch))
+        : await getGithubChannelArtBlob(ch);
       if (gh instanceof Blob && gh.size) {
         try {
-          const m = await kv.get('art:channels:' + artNorm((ch?.name || '').normalize('NFC').trim()));
+          const artName = (secLabel || ch?.name || '').normalize('NFC').trim();
+          const m = await kv.get('art:channels:' + artNorm(artName));
           const u = m?.url || '';
           let file = u; try { file = decodeURIComponent(u.split('/').pop().split('?')[0]); } catch (_) {}
           recordCoverOrigin(channelCoverKey(ch, secLabel), { t: 'gh', url: u, file });
         } catch (_) {}
+        // Persist under section-aware key so re-entry does not re-fetch
+        try { await setChannelCoverBlob(ch, gh, secLabel || undefined); } catch (_) {}
         showOnHost(gh);
         return;
       }
     } catch (_) {}
 
-    // 3) Primer cómic del canal (orden por issue: #00 antes que #01)
+    // 3) Primer cómic de la sección/canal (orden por issue: #00 antes que #01)
     try {
       const comic = await firstAvailableCover(ch, files);
       if (comic) {
         showOnHost(comic);
         recordCoverOrigin(channelCoverKey(ch, secLabel), firstAvailableCover.last);
-        try { await setChannelCoverBlob(ch, comic); } catch (_) {}
+        try { await setChannelCoverBlob(ch, comic, secLabel || undefined); } catch (_) {}
         return;
       }
     } catch (_) {}
@@ -2517,8 +2524,8 @@ function channelCoverNode(ch, files, section) {
   return host;
 
 }
-async function clearChannelCover(ch) {
-  try { await kv.del(channelCoverKey(ch, secLabel)); } catch (_) {}
+async function clearChannelCover(ch, section) {
+  try { await kv.del(channelCoverKey(ch, section)); } catch (_) {}
 }
 async function getGithubChannelArtBlob(ch, preferredUrl) {
   const nfc = (ch?.name || '').normalize('NFC').trim();
@@ -2963,9 +2970,12 @@ async function showChannelInfo(ch, opts = {}) {
         return s.trim().toLowerCase() === section.toLowerCase();
       });
     }
+    // Sección = nombre de canal virtual; macro sin sección = editorial (no la palabra "Macro")
     const display = section
       ? section
-      : (isMacro ? (channelDisplayName(ch) || ch.name || 'Macro') : channelDisplayName(ch));
+      : (isMacro
+          ? (String(ch.group || ch.name || channelDisplayName(ch) || '').trim() || 'Editorial')
+          : channelDisplayName(ch));
     const st = splitStats(files);
     const n = st.main.n;
     const bytes = st.main.bytes;
@@ -2989,10 +2999,14 @@ async function showChannelInfo(ch, opts = {}) {
       r.append(el('span', 'info-label', label), el('span', 'info-value', String(value ?? '—')));
       return r;
     };
-    // Misma ficha que un canal: Nombre, Editorial, cómics/series. Sin jerga interna.
-    body.append(el('div', 'info-sec', 'Canal'));
+    // Sección se presenta como canal; el canal Telegram macro no se muestra como "Macro"
+    body.append(el('div', 'info-sec', section ? 'Sección' : 'Canal'));
     body.append(row('Nombre', display));
-    if (!section && !isMacro && display !== ch.name) body.append(row('Nombre original', ch.name));
+    if (section && isMacro) {
+      body.append(row('Canal Telegram', String(ch.group || ch.name || '—')));
+    } else if (!section && !isMacro && display !== ch.name) {
+      body.append(row('Nombre original', ch.name));
+    }
     body.append(row('Editorial', ch.group || '—'));
     body.append(row('Cómics', String(n)));
     body.append(row('Series (agrupadas)', String(seriesMulti)));
