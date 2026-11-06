@@ -347,36 +347,9 @@ async function connect() {
 
 function parseFolder(title) {
   if (!title.endsWith(POST)) return null;
-  // body: "Batman:DC::Comics" | "DC::Comics"  (sin ::tgstorage)
-  const body = title.slice(0, -POST.length);
-  const parts = body.split(SEP);
-  if (parts.length < 2) return null;
-  const category = parts[parts.length - 1] || '';
-  const full = parts.slice(0, -1).join(SEP); // por si hubiera más ::
-  // Canal dedicado: Nombre:Editorial::Comics::tgstorage
-  if (full.includes(TSEP)) {
-    const idx = full.indexOf(TSEP);
-    const name = full.slice(0, idx).trim();
-    const group = full.slice(idx + TSEP.length).trim() || 'Sin editorial';
-    return { name, group, category, macro: false };
-  }
-  // Macro editorial: Editorial::Comics::tgstorage  (sin "Nombre:")
-  const ed = full.trim() || 'Sin editorial';
-  return { name: ed, group: ed, category, macro: true };
-}
-
-
-function normalizeLibMacros(list) {
-  if (!Array.isArray(list)) return [];
-  return list.map((c) => {
-    if (!c || typeof c !== 'object') return c;
-    if (c.macro === true || c.isMacro === true) return { ...c, macro: true };
-    if (c.macro === false || c.isMacro === false) return { ...c, macro: false };
-    const n = String(c.name || '').trim().toLowerCase();
-    const g = String(c.group || '').trim().toLowerCase();
-    if (n && g && n === g) return { ...c, macro: true };
-    return { ...c, macro: false };
-  });
+  const [full, category = ''] = title.slice(0, -POST.length).split(SEP);
+  const [name, group = ''] = full.split(TSEP);
+  return { name, group: group || 'Sin editorial', category };
 }
 
 async function refreshLibrary() {
@@ -385,19 +358,11 @@ async function refreshLibrary() {
   const add = (ch) => {
     if (ch?.className !== 'Channel') return;
     const info = parseFolder(ch.title || '');
-    if (info && info.category.toLowerCase() === LIBRARY) {
-      found.set(String(ch.id), {
-        id: String(ch.id),
-        hash: String(ch.accessHash),
-        name: info.name,
-        group: info.group,
-        macro: !!info.macro,
-      });
-    }
+    if (info && info.category.toLowerCase() === LIBRARY) found.set(String(ch.id), { id: String(ch.id), hash: String(ch.accessHash), name: info.name, group: info.group });
   };
   try { (await client.invoke(new Api.contacts.Search({ q: POST, limit: 100 }))).chats.forEach(add); } catch (e) { console.warn(e); }
   for await (const d of client.iterDialogs({})) add(d.entity);
-  const lib = normalizeLibMacros([...found.values()]);
+  const lib = [...found.values()];
   await kv.set('lib', lib);
   return lib;
 }
@@ -773,7 +738,6 @@ menuBtn.onclick = (ev) => { ev.stopPropagation(); toggleAppMenu(); };
 document.addEventListener('click', (ev) => {
   if (!menuPanel.hidden && !menuPanel.contains(ev.target) && ev.target !== menuBtn) closeAppMenu();
 });
-
 
 function showInfoFrame() {
   closeAppMenu();
@@ -2082,6 +2046,7 @@ const showComicInfo = infoApi.showComicInfo || (() => {});
 const showCaptionEditor = infoApi.showCaptionEditor || (() => {});
 const showComicVinePicker = infoApi.showComicVinePicker || (() => {});
 const showEditComicTitle = infoApi.showEditComicTitle || (() => {});
+const updateTelegramCaption = infoApi.updateTelegramCaption;
 const showCoverFitEditor = infoApi.showCoverFitEditor || (() => {});
 const showPickCoverFromComic = infoApi.showPickCoverFromComic || (() => {});
 const showSeriesInfo = infoApi.showSeriesInfo || (() => {});
@@ -2163,8 +2128,6 @@ const viewsApi = createViews({
   getMsg,
   get client() { return client; },
   get ready() { return ready; },
-  Api,
-  peerOf,
 
   get LIB() { return LIB; },
   get synced() { return synced; },
@@ -2184,6 +2147,7 @@ const viewsApi = createViews({
   sheet, bindLongPress, grid,
   showGroupInfo, showEditGroup, showChannelInfo, showEditChannel,
   showSeriesInfo, showEditSeries, showEditSeriesName, showSeriesCoverPicker, showSeriesBulkCaptionEditor, showSeriesCvFillForm, comicNeedsCvFill, showComicInfo, showEditComicTitle,
+  updateTelegramCaption,
   showCoverFitEditor, showPickCoverFromComic, getCoverFit,
   getContinueList, readProgress, isComicRead, markComicRead, markComicUnread,
   markSeriesRead, markSeriesUnread, getPageIndex, getPagesTotal,
@@ -2326,13 +2290,7 @@ const repackTool = createRepackTool({
         (chName && title && (title === chName || title.includes(chName) || chName.includes(title)))
         || (group && title && (title === group || title.includes(group)));
       if (!affects) return;
-      try { top.scrollY = window.scrollY || 0; } catch (_) {}
-      try { top._forceFiles = true; } catch (_) {}
-      try {
-        window.dispatchEvent(new CustomEvent('tgcomic:changed', {
-          detail: { chId: ch?.id, kind: 'repack' },
-        }));
-      } catch (_) {}
+      top.scrollY = window.scrollY || 0;
       refreshView();
     } catch (_) {}
   },
@@ -2429,15 +2387,9 @@ try {
           );
 
         if (sameChannel || sameEditorial || onHome || editorialContext) {
-          // Guardar scroll y forzar relectura de Telegram (si no, a veces no repinta canal/serie)
+          // Guardar scroll aproximado y repintar
           try {
             if (!document.getElementById('rd')) top.scrollY = window.scrollY || document.documentElement.scrollTop || 0;
-          } catch (_) {}
-          try { top._forceFiles = true; } catch (_) {}
-          try {
-            window.dispatchEvent(new CustomEvent('tgcomic:changed', {
-              detail: { chId: ch?.id, kind: 'upload' },
-            }));
           } catch (_) {}
           refreshView();
         }
@@ -2462,8 +2414,6 @@ const proTools = createProTools({
   setDevPref,
   applyGridLayoutPref,
   get LIB() { return LIB; },
-  get client() { return client; },
-  get ready() { return ready; },
   getCover,
   groupSeries,
   seriesOverrideFor,
