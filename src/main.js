@@ -2290,7 +2290,13 @@ const repackTool = createRepackTool({
         (chName && title && (title === chName || title.includes(chName) || chName.includes(title)))
         || (group && title && (title === group || title.includes(group)));
       if (!affects) return;
-      top.scrollY = window.scrollY || 0;
+      try { top.scrollY = window.scrollY || 0; } catch (_) {}
+      try { top._forceFiles = true; } catch (_) {}
+      try {
+        window.dispatchEvent(new CustomEvent('tgcomic:changed', {
+          detail: { chId: ch?.id, kind: 'repack' },
+        }));
+      } catch (_) {}
       refreshView();
     } catch (_) {}
   },
@@ -2387,9 +2393,15 @@ try {
           );
 
         if (sameChannel || sameEditorial || onHome || editorialContext) {
-          // Guardar scroll aproximado y repintar
+          // Guardar scroll y forzar relectura de Telegram (si no, a veces no repinta canal/serie)
           try {
             if (!document.getElementById('rd')) top.scrollY = window.scrollY || document.documentElement.scrollTop || 0;
+          } catch (_) {}
+          try { top._forceFiles = true; } catch (_) {}
+          try {
+            window.dispatchEvent(new CustomEvent('tgcomic:changed', {
+              detail: { chId: ch?.id, kind: 'upload' },
+            }));
           } catch (_) {}
           refreshView();
         }
