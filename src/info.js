@@ -2989,38 +2989,13 @@ async function showChannelInfo(ch, opts = {}) {
       r.append(el('span', 'info-label', label), el('span', 'info-value', String(value ?? '—')));
       return r;
     };
-    if (section && isMacro) {
-      body.append(el('div', 'info-sec', 'Sección'));
-      body.append(row('Nombre', display));
-      body.append(row('Tipo', 'Sección en canal macro de editorial'));
-      body.append(row('Editorial', ch.group || '—'));
-      body.append(row('Canal Telegram (macro)', ch.name || '—'));
-    } else if (isMacro && !section) {
-      body.append(el('div', 'info-sec', 'Canal macro (editorial)'));
-      body.append(row('Nombre', display));
-      body.append(row('Tipo', 'Macro · título Telegram: ' + (ch.group || ch.name) + '::Comics::tgstorage'));
-      body.append(row('Editorial', ch.group || '—'));
-      // Desglose secciones
-      const secs = collectSectionsFromFiles(filesAll, (cap) => {
-        const s = sectionFromCaption(cap);
-        return s ? { section: s } : {};
-      });
-      body.append(row('Secciones', String(secs.length)));
-      for (const sec of secs) {
-        const nf = filesAll.filter((f) => sectionFromCaption(f?.caption || '').trim().toLowerCase() === sec.trim().toLowerCase()).length;
-        body.append(row('  · ' + sec, nf + (nf === 1 ? ' cómic' : ' cómics')));
-      }
-      const orphans = filesAll.filter((f) => !sectionFromCaption(f?.caption || '')).length;
-      if (orphans) body.append(row('Sin Sección', orphans + (orphans === 1 ? ' cómic' : ' cómics')));
-    } else {
-      body.append(el('div', 'info-sec', 'Canal'));
-      body.append(row('Nombre', display));
-      if (display !== ch.name) body.append(row('Nombre original', ch.name));
-      body.append(row('Editorial', ch.group || '—'));
-    }
+    // Misma ficha que un canal: Nombre, Editorial, cómics/series. Sin jerga interna.
+    body.append(el('div', 'info-sec', 'Canal'));
+    body.append(row('Nombre', display));
+    if (!section && !isMacro && display !== ch.name) body.append(row('Nombre original', ch.name));
+    body.append(row('Editorial', ch.group || '—'));
     body.append(row('Cómics', String(n)));
-    body.append(row('Series', String(seriesCount)));
-    body.append(row('Series (varios números)', String(seriesMulti)));
+    body.append(row('Series (agrupadas)', String(seriesMulti)));
     body.append(row('Tamaño total', formatBytes(bytes)));
     addWebpInfo(body, row, st);
     addAiInfo(body, row, st);
