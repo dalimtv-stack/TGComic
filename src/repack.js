@@ -1297,6 +1297,18 @@ export function createRepackTool(d) {
           });
         }
         
+        return { ...it, outputs };
+      });
+      runQueue(jobs, deleteOriginal, false, {});
+    };
+    actions.append(cancel, goBtn);
+    body.append(actions);
+    box.append(head, body);
+    frame.append(box);
+    // Solo cierra con Cancelar / ×
+    document.body.append(frame);
+  }
+
   /**
    * Recarga un único cómic (p. ej. reenvío en macro) con sección opcional o canal destino.
    * @param {object} ch canal actual
@@ -1342,18 +1354,6 @@ export function createRepackTool(d) {
       deleteOriginalAfter: deleteOriginal,
     }];
     showNameReview(selected, !!deleteOriginal, false, {}, {});
-  }
-
-return { ...it, outputs };
-      });
-      runQueue(jobs, deleteOriginal, false, {});
-    };
-    actions.append(cancel, goBtn);
-    body.append(actions);
-    box.append(head, body);
-    frame.append(box);
-    // Solo cierra con Cancelar / ×
-    document.body.append(frame);
   }
 
   function showRepackFrame() {
