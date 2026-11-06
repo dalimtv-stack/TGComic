@@ -1,12 +1,20 @@
+import {
+  isMacroLibEntry,
+  collectSectionsFromFiles,
+  filesInSection,
+  sectionFromCaption,
+} from './macro.js';
+
 /**
  * Buscador general (home): indexa editoriales, canales, series y cómics
  * a partir de LIB + caché local de archivos.
+ * Los canales macro no se listan: en su lugar aparecen las Secciones como "Canal".
  */
 
 /**
  * @param {object} deps
  * @param {Array} deps.LIB
- * @param {(ch: any) => Promise<any[]>} deps.getFiles  // async (ch) => files
+ * @param {(ch: any) => Promise<any[]>} deps.getFiles
  * @param {(name: string) => string} deps.groupDisplayName
  * @param {(ch: any) => string} deps.channelDisplayName
  * @param {(ch: any, label: string) => string} deps.seriesDisplayName
@@ -16,7 +24,7 @@
  * @param {(ch: any, seriesLabel: string, files: any[]) => void} deps.openSeries
  * @param {(ch: any, f: any) => void} deps.openComic
  * @param {(group: string) => void} deps.openGroup
- * @param {(ch: any) => void} deps.openChannel
+ * @param {(ch: any, opts?: { section?: string }) => void} deps.openChannel
  */
 export async function buildSearchIndex(deps) {
   const {
@@ -38,42 +46,10 @@ export async function buildSearchIndex(deps) {
   const items = [];
   const seenGroup = new Set();
 
-  for (const ch of LIB || []) {
-    const g = ch.group || 'Sin editorial';
-    if (!seenGroup.has(g)) {
-      seenGroup.add(g);
-      const gl = groupDisplayName(g);
-      items.push({
-        type: 'group',
-        typeLabel: 'Editorial',
-        label: gl,
-        sub: 'Editorial',
-        searchText: (gl + ' ' + g).toLowerCase(),
-        go: () => openGroup(g),
-        group: g,
-      });
-    }
-
-    const cl = channelDisplayName(ch);
-    items.push({
-      type: 'channel',
-      typeLabel: 'Canal',
-      label: cl,
-      sub: groupDisplayName(g),
-      searchText: (cl + ' ' + (ch.name || '') + ' ' + g).toLowerCase(),
-      go: () => openChannel(ch),
-      ch,
-    });
-
-    let files = [];
-    try {
-      files = (await getFiles(ch)) || [];
-    } catch (_) {
-      files = [];
-    }
-
+  const indexFileGroups = (ch, files, channelLabel) => {
+    const cl = channelLabel;
     const override = seriesOverrideFor ? seriesOverrideFor(ch) : undefined;
-    for (const { label: seriesLabel, files: fs } of groupSeries(files, ch.name, override)) {
+    for (const { label: seriesLabel, files: fs } of groupSeries(files || [], ch.name, override)) {
       const seriesShown = seriesDisplayName(ch, seriesLabel);
       if (fs.length > 1) {
         items.push({
@@ -102,6 +78,69 @@ export async function buildSearchIndex(deps) {
         });
       }
     }
+  };
+
+  for (const ch of LIB || []) {
+    const g = ch.group || 'Sin editorial';
+    if (!seenGroup.has(g)) {
+      seenGroup.add(g);
+      const gl = groupDisplayName(g);
+      items.push({
+        type: 'group',
+        typeLabel: 'Editorial',
+        label: gl,
+        sub: 'Editorial',
+        searchText: (gl + ' ' + g).toLowerCase(),
+        go: () => openGroup(g),
+        group: g,
+      });
+    }
+
+    let files = [];
+    try {
+      files = (await getFiles(ch)) || [];
+    } catch (_) {
+      files = [];
+    }
+
+    if (isMacroLibEntry(ch)) {
+      const secList = collectSectionsFromFiles(files, (cap) => {
+        const sec = sectionFromCaption(cap);
+        return sec ? { section: sec } : {};
+      });
+      for (const sec of secList) {
+        const secFiles = (files || []).filter((f) => {
+          const s = sectionFromCaption(f?.caption || '');
+          return s.trim().toLowerCase() === String(sec).trim().toLowerCase();
+        });
+        items.push({
+          type: 'channel',
+          typeLabel: 'Canal',
+          label: sec,
+          sub: groupDisplayName(g),
+          searchText: (sec + ' ' + g + ' sección').toLowerCase(),
+          go: () => openChannel(ch, { section: sec }),
+          ch,
+          section: sec,
+        });
+        indexFileGroups(ch, secFiles, sec);
+      }
+      const orphan = (files || []).filter((f) => !sectionFromCaption(f?.caption || ''));
+      if (orphan.length) indexFileGroups(ch, orphan, '(Sin sección)');
+      continue;
+    }
+
+    const cl = channelDisplayName(ch);
+    items.push({
+      type: 'channel',
+      typeLabel: 'Canal',
+      label: cl,
+      sub: groupDisplayName(g),
+      searchText: (cl + ' ' + (ch.name || '') + ' ' + g).toLowerCase(),
+      go: () => openChannel(ch),
+      ch,
+    });
+    indexFileGroups(ch, files, cl);
   }
 
   return items;
