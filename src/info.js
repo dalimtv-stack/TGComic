@@ -3990,6 +3990,7 @@ function showSeriesBulkCaptionEditor(ch, seriesLabel, files, onBack) {
     showCaptionEditor,
     showComicVinePicker,
     showEditComicTitle,
+    updateTelegramCaption,
     showSeriesInfo,
     showEditSeries,
     showEditSeriesName,
