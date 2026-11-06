@@ -8,6 +8,14 @@ import * as zip from '@zip.js/zip.js';
 import { createExtractorFromData } from 'node-unrar-js';
 import rarWasm from 'node-unrar-js/esm/js/unrar.wasm?url';
 import { buildComicCaption, parseComicCaption } from './parse.js';
+import {
+  macroChannelTitle,
+  dedicatedChannelTitle,
+  isMacroLibEntry,
+  collectSectionsFromFiles,
+  withSectionInCaption,
+  normalizeSectionKey,
+} from './macro.js';
 import { fitTelegramCaption } from './caption.js';
 import { withQualityTags, stripQualityTags, existingCopy, flattenVersions, parseQuality, QUALITY_LABEL } from './quality.js';
 
@@ -199,9 +207,7 @@ export function createUploadTool(d) {
 
 
   function channelTitle(channelName, editorial) {
-    const ch = String(channelName || '').trim();
-    const ed = String(editorial || '').trim() || 'Sin editorial';
-    return `${ch}${TSEP}${ed}${SEP}${LIBRARY_LABEL}${POST}`;
+    return dedicatedChannelTitle(channelName, editorial);
   }
 
   /** Quita extensiones (.cbr/.cbz/.zip/.rar/…) y deja un solo .cbz (opcional [WebP]). */
@@ -729,7 +735,8 @@ export function createUploadTool(d) {
 
     const lib = Array.isArray(getLIB()) ? getLIB() : [];
     const found = lib.find(
-      (c) => c.name.toLowerCase() === name.toLowerCase()
+      (c) => !isMacroLibEntry(c)
+        && c.name.toLowerCase() === name.toLowerCase()
         && (c.group || '').toLowerCase() === group.toLowerCase()
     );
     if (found) return found;
@@ -769,6 +776,7 @@ export function createUploadTool(d) {
       hash: String(chEntity.accessHash),
       name,
       group,
+      macro: false,
     };
 
     // Archivar el canal (como tgstorage: no aparece en la lista principal de chats)
@@ -833,6 +841,104 @@ export function createUploadTool(d) {
     }
 
     status?.('Canal listo (archivado)');
+    return entry;
+  }
+
+  /** Canal macro de editorial: título `{Editorial}::Comics::tgstorage`, flag LIB.macro = true */
+  async function ensureMacroChannel(editorial, status) {
+    await getReady();
+    const client = getClient();
+    const group = String(editorial || '').trim() || 'Sin editorial';
+    const lib = Array.isArray(getLIB()) ? getLIB() : [];
+    const found = lib.find(
+      (c) => isMacroLibEntry(c) && (c.group || '').toLowerCase() === group.toLowerCase()
+    );
+    if (found) return found;
+
+    const title = macroChannelTitle(group);
+    status?.(`Creando canal macro «${title}»…`);
+
+    let created;
+    try {
+      created = await client.invoke(new Api.channels.CreateChannel({
+        title,
+        about: 'Biblioteca de cómics (macro editorial tgstorage)',
+        broadcast: true,
+        megagroup: false,
+      }));
+    } catch (e) {
+      try {
+        created = await client.invoke(new Api.channels.CreateChannel({
+          title,
+          about: 'Biblioteca de cómics (macro editorial tgstorage)',
+          broadcast: false,
+          megagroup: true,
+        }));
+      } catch (e2) {
+        throw new Error('No se pudo crear el canal macro: ' + (e2?.message || e?.message || e2 || e));
+      }
+    }
+
+    const chats = created?.chats || [];
+    const chEntity = chats.find((c) => c.className === 'Channel') || chats[0];
+    if (!chEntity) throw new Error('Canal macro creado pero sin entidad');
+
+    const entry = {
+      id: String(chEntity.id),
+      hash: String(chEntity.accessHash),
+      name: group,
+      group,
+      macro: true,
+    };
+
+    try {
+      status?.('Archivando canal macro…');
+      const inputPeer = new Api.InputPeerChannel({
+        channelId: bigInt(entry.id),
+        accessHash: bigInt(entry.hash),
+      });
+      await client.invoke(new Api.folders.EditPeerFolders({
+        folderPeers: [
+          new Api.InputFolderPeer({ peer: inputPeer, folderId: 1 }),
+        ],
+      }));
+    } catch (e) {
+      console.warn('[upload] no se pudo archivar el macro', e);
+    }
+
+    try {
+      if (typeof refreshLibrary === 'function') {
+        const fresh = await refreshLibrary();
+        if (Array.isArray(fresh) && fresh.length) {
+          // Preservar flag macro si refresh no lo trae
+          const mapped = fresh.map((c) => {
+            if (String(c.id) === entry.id) return { ...c, macro: true, name: c.name || group, group: c.group || group };
+            return c;
+          });
+          const again = mapped.find((c) => String(c.id) === entry.id);
+          if (again) {
+            setLIB(mapped);
+            try { await kv.set('lib', mapped); } catch (_) {}
+            try {
+              status?.('Mensaje inicial en el macro…');
+              await client.sendMessage(peerOf(again), { message: group });
+            } catch (_) {}
+            status?.('Canal macro listo');
+            return { ...again, macro: true };
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[upload] refreshLibrary tras macro', e);
+    }
+
+    const next = [...lib.filter((c) => String(c.id) !== entry.id), entry];
+    setLIB(next);
+    try { await kv.set('lib', next); } catch (_) {}
+    try {
+      await client.sendMessage(peerOf(entry), { message: group });
+    } catch (_) {}
+    status?.('Canal macro listo');
     return entry;
   }
 
@@ -919,8 +1025,16 @@ export function createUploadTool(d) {
       const channelSel = el('select', 'edit-input upload-select');
       const channelInp = el('input', 'edit-input');
       channelInp.type = 'text';
-      channelInp.placeholder = 'Nombre del canal';
+      channelInp.placeholder = 'Nombre del canal o sección';
       channelInp.hidden = true;
+
+      // Solo visible con "+ Nuevo canal…": desmarcado = sección en macro editorial
+      const realChRow = el('label', 'repack-check');
+      realChRow.hidden = true;
+      const realChChk = el('input');
+      realChChk.type = 'checkbox';
+      realChChk.checked = false;
+      realChRow.append(realChChk, document.createTextNode(' Crear canal real en Telegram (si no, sección en el canal de la editorial)'));
 
       // Serie GLOBAL (misma para todos los archivos): contexto de la vista o del nombre del archivo
       const seriesLab = el('div', 'sync-label', 'Serie');
@@ -1075,7 +1189,32 @@ export function createUploadTool(d) {
       const currentChannelName = () => {
         if (channelSel.value === '__new__') return channelInp.value.trim();
         const opt = [...channelSel.options].find((o) => o.value === channelSel.value);
-        return (opt?._ch?.name || opt?.textContent || '').trim();
+        if (opt?._dest?.kind === 'section') return String(opt._dest.section || opt.textContent || '').trim();
+        return (opt?._ch?.name || opt?._dest?.ch?.name || opt?.textContent || '').trim();
+      };
+
+      /** Destino de subida: canal real, sección en macro, o nuevo */
+      const resolveUploadDest = () => {
+        const ed = editorialSel.value === '__new__' ? editorialInp.value.trim() : editorialSel.value;
+        if (channelSel.value === '__new__') {
+          const label = channelInp.value.trim();
+          if (realChChk.checked) {
+            return { kind: 'new_channel', editorial: ed, channelName: label, section: null };
+          }
+          return { kind: 'new_section', editorial: ed, channelName: null, section: label };
+        }
+        const opt = [...channelSel.options].find((o) => o.value === channelSel.value);
+        if (opt?._dest?.kind === 'section') {
+          return {
+            kind: 'section',
+            editorial: ed,
+            channelName: null,
+            section: opt._dest.section,
+            ch: opt._dest.ch,
+          };
+        }
+        const ch = opt?._ch || opt?._dest?.ch;
+        return { kind: 'channel', editorial: ed, channelName: ch?.name, section: null, ch };
       };
 
       const updateRowPreview = (row) => {
@@ -1095,7 +1234,7 @@ export function createUploadTool(d) {
         for (const row of rows) updateRowPreview(row);
       };
 
-      const rebuildChannels = () => {
+      const rebuildChannels = async () => {
         const g = editorialSel.value === '__new__'
           ? (editorialInp.value.trim() || 'Sin editorial')
           : editorialSel.value;
@@ -1104,22 +1243,45 @@ export function createUploadTool(d) {
         optNewCh.value = '__new__';
         optNewCh.textContent = '+ Nuevo canal…';
         channelSel.append(optNewCh);
-        const list = (channelsByGroup[g] || []).slice().sort((a, b) =>
+
+        const all = channelsByGroup[g] || [];
+        const reals = all.filter((c) => !isMacroLibEntry(c)).slice().sort((a, b) =>
           (natural || ((x, y) => String(x).localeCompare(String(y))))(a.name, b.name)
         );
-        for (const c of list) {
+        const macros = all.filter((c) => isMacroLibEntry(c));
+
+        for (const c of reals) {
           const o = el('option');
           o.value = c.id;
           o.textContent = c.name;
           o._ch = c;
+          o._dest = { kind: 'channel', ch: c };
           channelSel.append(o);
         }
-        if (list.length) {
-          channelSel.value = list[0].id;
+
+        // Secciones ya vistas en el/los macros de esta editorial
+        for (const mac of macros) {
+          let files = [];
+          try { files = (await kv.get('f:' + mac.id)) || []; } catch (_) {}
+          const sections = collectSectionsFromFiles(files, parseComicCaption);
+          for (const sec of sections) {
+            const o = el('option');
+            o.value = 'sec:' + mac.id + ':' + normalizeSectionKey(sec);
+            o.textContent = sec;
+            o._dest = { kind: 'section', ch: mac, section: sec };
+            channelSel.append(o);
+          }
+        }
+
+        const hasOpts = reals.length > 0 || channelSel.options.length > 1;
+        if (reals.length) {
+          channelSel.value = reals[0].id;
           channelInp.hidden = true;
+          realChRow.hidden = true;
         } else {
           channelSel.value = '__new__';
           channelInp.hidden = false;
+          realChRow.hidden = false;
         }
         updateAllPreviews();
       };
@@ -1346,7 +1508,9 @@ export function createUploadTool(d) {
       };
       editorialInp.oninput = () => { if (editorialSel.value === '__new__') rebuildChannels(); else updateAllPreviews(); };
       channelSel.onchange = () => {
-        channelInp.hidden = channelSel.value !== '__new__';
+        const isNew = channelSel.value === '__new__';
+        channelInp.hidden = !isNew;
+        realChRow.hidden = !isNew;
         updateAllPreviews();
       };
       channelInp.oninput = () => updateAllPreviews();
@@ -1371,9 +1535,21 @@ export function createUploadTool(d) {
           return;
         }
         const ed = editorialSel.value === '__new__' ? editorialInp.value.trim() : editorialSel.value;
-        const chName = currentChannelName();
+        const dest = resolveUploadDest();
+        const chName = dest.kind === 'section' || dest.kind === 'new_section'
+          ? (dest.section || '')
+          : (dest.channelName || currentChannelName());
         if (!ed) { await uiAlert('Indica la editorial'); return; }
-        if (!chName) { await uiAlert('Indica el canal'); return; }
+        if (!chName) {
+          await uiAlert(dest.kind === 'new_section' || dest.kind === 'section'
+            ? 'Indica el nombre de la sección'
+            : 'Indica el canal');
+          return;
+        }
+        if ((dest.kind === 'new_section' || dest.kind === 'section') && !String(dest.section || chName).trim()) {
+          await uiAlert('La sección es obligatoria en el canal de la editorial');
+          return;
+        }
 
         let quality = parseFloat(String(qualityInp.value).replace(',', '.'));
         if (!(quality > 0 && quality <= 1)) quality = 0.40;
@@ -1408,6 +1584,10 @@ export function createUploadTool(d) {
                 description: row.descInp?.value || '',
               })
             : buildComicCaption({ fileName: outName });
+          // Sección obligatoria si el destino es el macro de editorial
+          if (dest.kind === 'section' || dest.kind === 'new_section') {
+            caption = withSectionInCaption(caption, dest.section || chName);
+          }
           // Ajustar al límite de Telegram (1024) antes de encolar
           caption = fitTelegramCaption(caption, 1024);
           return { file: row.file, outName, caption };
@@ -1468,7 +1648,15 @@ export function createUploadTool(d) {
               await yieldTick();
               await ctx.waitWhilePaused?.();
               if (ctx.isAborted?.()) throw Object.assign(new Error('cancelado'), { cancelled: true });
-              ch = await ensureChannel(chName, ed, st);
+              if (dest.kind === 'section') {
+                ch = dest.ch || await ensureMacroChannel(ed, st);
+              } else if (dest.kind === 'new_section') {
+                ch = await ensureMacroChannel(ed, st);
+              } else if (dest.kind === 'channel' && dest.ch) {
+                ch = dest.ch;
+              } else {
+                ch = await ensureChannel(dest.channelName || chName, ed, st);
+              }
               ctx.setProgress(20);
               const variants = [{ outName, asWebp: false, webpOpts: {} }];
               if (wantMid) {
@@ -1599,7 +1787,7 @@ export function createUploadTool(d) {
       body.append(el('div', 'info-sec', 'Editorial'));
       body.append(editorialSel, editorialInp);
       body.append(el('div', 'info-sec', 'Canal'));
-      body.append(channelSel, channelInp);
+      body.append(channelSel, channelInp, realChRow);
       body.append(el('div', 'info-sec', 'Serie'));
       body.append(seriesLab, seriesHint, seriesInp);
       body.append(includeChRow);
