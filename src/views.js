@@ -1049,6 +1049,8 @@ function groupsView() {
   clearSortButton();
   const LIB = libNow();
   const synced = syncedNow();
+  // Forzar reíndice (macros/secciones cambian tras sync)
+  try { groupsView._searchIndex = null; groupsView._searchIndexPromise = null; } catch (_) {}
   if (!LIB.length) return msg(synced ? 'No se encontraron canales ...::Comics::tgstorage.' : 'Conectando…');
 
   let searchIndex = null;
@@ -1441,8 +1443,12 @@ function groupsView() {
               try { filesBy[String(ch.id)] = (await kv.get('f:' + ch.id)) || []; } catch (_) { filesBy[String(ch.id)] = []; }
             }
             const nn = countNavChannels(LIB, name, filesBy);
-            const small = cardEl.querySelector('small');
+            const small = cardEl.querySelector('.meta small') || cardEl.querySelector('small');
             if (small) small.textContent = nn === 1 ? '1 canal' : (nn + ' canales');
+            else {
+              const meta = cardEl.querySelector('.meta');
+              if (meta) meta.append(el('small', '', nn === 1 ? '1 canal' : (nn + ' canales')));
+            }
           } catch (_) {}
         })();
 
@@ -1874,7 +1880,8 @@ function channelsView(g) {
     const buildIndex = async () => {
       // Mismo formato que el buscador general, acotado a esta editorial
       return buildSearchIndex({
-        LIB: chs,
+        // Incluir macros para indexar Secciones como canales
+        LIB: [...chs, ...macros],
         getFiles: async (ch) => (await kv.get('f:' + ch.id)) || [],
         groupDisplayName,
         channelDisplayName,
@@ -1999,7 +2006,7 @@ function channelsView(g) {
             },
             longPress: () => {
               const opts = [
-                ['Información', () => showChannelInfo(mac)],
+                ['Información', () => showChannelInfo(mac, { section: sec })],
                 ['Descargar en bloque', () => downloadComicsBulk(mac, secFiles, { mode: 'channel', section: sec })],
                 ...lockToggleOpts('section', { ch: mac, section: sec }, label, () => build()),
               ];
