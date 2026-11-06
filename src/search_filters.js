@@ -3,6 +3,8 @@
  * Corpus cacheado: al volver desde un cómic NO se reconstruye.
  * WebP / IA anidados bajo el cómic original (collapseVersions).
  */
+import { isMacroLibEntry, sectionFromCaption } from './macro.js';
+
 export function createSearchFilters(d) {
   const {
     el, kv, go, show, stack,
@@ -214,13 +216,27 @@ export function createSearchFilters(d) {
             })
           : [];
 
+        // En canal macro, la "sección" del caption es el canal virtual de la UI
+        let channelName = channelDisplayName?.(ch) || ch.name || '';
+        let channelId = String(ch.id);
+        let sectionLabel = '';
+        try {
+          if (isMacroLibEntry(ch)) {
+            sectionLabel = sectionFromCaption(f?.caption || '', parseComicCaption) || '';
+            channelName = sectionLabel || '(Sin sección)';
+            // Clave distinta por sección para agrupar en búsqueda avanzada
+            channelId = String(ch.id) + '::sec::' + (sectionLabel.trim().toLowerCase() || '_none');
+          }
+        } catch (_) {}
+
         items.push({
           ch,
           f,
           seriesLabel,
           editorial: ch.group || 'Sin editorial',
-          channelId: String(ch.id),
-          channelName: channelDisplayName?.(ch) || ch.name || '',
+          channelId,
+          channelName,
+          sectionLabel,
           editorialName: groupDisplayName?.(ch.group) || ch.group || 'Sin editorial',
           seriesName: seriesLabel ? (seriesDisplayName?.(ch, seriesLabel) || seriesLabel) : '',
           title: itemTitle(ch, f),
@@ -541,16 +557,18 @@ export function createSearchFilters(d) {
       sheet(seriesName || seriesLabel, seriesSheetOpts(ch, seriesLabel, files, () => paintUI(entry, corpus)));
     };
 
-    const openChannelMenu = (ch, channelName) => {
+    const openChannelMenu = (ch, channelName, items) => {
       if (typeof sheet !== 'function') return;
+      const sec = String(items?.[0]?.sectionLabel || '').trim();
       const opts = [];
       if (typeof showChannelInfo === 'function') {
-        opts.push(['Información', () => showChannelInfo(ch)]);
+        opts.push(['Información', () => showChannelInfo(ch, sec ? { section: sec } : {})]);
       }
-      if (typeof showEditChannel === 'function') {
+      // No "Editar canal Telegram" sobre una Sección virtual (macro)
+      if (!sec && typeof showEditChannel === 'function') {
         opts.push(['Editar', () => showEditChannel(ch, [], () => paintUI(entry, corpus))]);
       }
-      if (opts.length) sheet(channelName || ch?.name || 'Canal', opts);
+      if (opts.length) sheet(channelName || sec || ch?.name || 'Canal', opts);
     };
 
         /** Fila de cómic: click = desplegar versiones (Original primero). Long-press/derecho = menú. */
@@ -777,7 +795,7 @@ export function createSearchFilters(d) {
       const cov = el('div', 'sf-group-cover sf-group-cover-channel');
       try {
         if (typeof channelCoverNode === 'function') {
-          appendCover(cov, channelCoverNode(ch, items.map((x) => x.f)));
+          appendCover(cov, channelCoverNode(ch, items.map((x) => x.f), items[0]?.sectionLabel || ''));
         }
       } catch (_) {}
 
@@ -794,7 +812,8 @@ export function createSearchFilters(d) {
       const bytes = originalsBytes(items);
 
       const text = el('div', 'sf-group-text');
-      text.append(el('div', 'sf-group-kind', 'CANAL'));
+      const isSec = !!(items[0]?.sectionLabel);
+      text.append(el('div', 'sf-group-kind', isSec ? 'SECCIÓN' : 'CANAL'));
       text.append(el('b', '', channelName || ch?.name || 'Canal'));
       const parts = [];
       if (nSeries) parts.push(nSeries + (nSeries === 1 ? ' serie' : ' series'));
@@ -841,10 +860,10 @@ export function createSearchFilters(d) {
       };
       head.oncontextmenu = (ev) => {
         try { ev.preventDefault(); ev.stopPropagation(); } catch (_) {}
-        openChannelMenu(ch, channelName);
+        openChannelMenu(ch, channelName, items);
       };
       if (typeof bindLongPress === 'function') {
-        bindLongPress(head, () => openChannelMenu(ch, channelName));
+        bindLongPress(head, () => openChannelMenu(ch, channelName, items));
       }
 
       block.append(head, body);
