@@ -669,6 +669,28 @@ export function createRepackTool(d) {
       console.warn('[repack] delete', e);
       throw new Error('Subido OK, pero no se pudo borrar el original (¿falta permiso de admin?)');
     }
+    // Quitar ya de la caché local (no depender del atajo de fetchFiles)
+    try {
+      const id = String(msgId);
+      let files = (await kv.get('f:' + ch.id)) || [];
+      if (Array.isArray(files) && files.length) {
+        const next = files.filter((x) => String(x?.id) !== id).map((x) => {
+          if (!x?.variants && !x?.ai) return x;
+          const nv = x.variants ? { ...x.variants } : null;
+          if (nv) {
+            for (const k of Object.keys(nv)) {
+              if (String(nv[k]?.id) === id) delete nv[k];
+            }
+          }
+          let ai = Array.isArray(x.ai) ? x.ai.filter((a) => String(a?.id) !== id) : x.ai;
+          return { ...x, variants: nv || x.variants, ai };
+        });
+        await kv.set('f:' + ch.id, next);
+      }
+      try { localStorage.removeItem('secOverride:' + String(ch.id) + ':' + id); } catch (_) {}
+    } catch (e) {
+      console.warn('[repack] kv after delete', e);
+    }
   }
 
   /** Serie efectiva de un archivo (override manual o parseo del nombre, con renombre). */
@@ -988,7 +1010,9 @@ export function createRepackTool(d) {
         await deleteMessage(ch, f.id);
         status('Original borrado');
       }
-      try { await fetchFiles(ch); } catch (_) {}
+      try { await fetchFiles(ch, { force: true }); } catch (_) {
+        try { await fetchFiles(ch); } catch (_) {}
+      }
       try {
         if (typeof onUploadDone === 'function') {
           const secMeta = sectionFromCaption(String(caption || item.f?.caption || ''), parseComicCaption) || '';

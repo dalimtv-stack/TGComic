@@ -1041,25 +1041,35 @@ export function createReader(state, d) {
     }
     let n = Math.min(chId != null ? getPageIndex(chId, f.id) : 0, pages.length - 1);
     const urls = new Map(); // i → Promise<string objectURL>
-    const blobFor = async (i) => {
+    const blobFor = async (i, { skipCache = false } = {}) => {
       if (i < 0 || i >= pages.length) return null;
-      // Caché persistente
-      if (pageCache && chId != null) {
+      if (!skipCache && pageCache && chId != null) {
         try {
           const hit = await pageCache.get(chId, srcId, i);
-          if (hit) return hit;
+          // Blob vacío o minúsculo = caché inválida (no usar)
+          if (hit && !(hit.size > 64)) {
+            try { /* se reemplazará abajo */ } catch (_) {}
+          } else if (hit) return hit;
         } catch (_) {}
       }
       const b = await pageBlob(pages[i]);
-      if (b && pageCache && chId != null) {
+      if (b && b.size > 0 && pageCache && chId != null) {
         pageCache.set(chId, srcId, i, b).catch(() => {});
       }
+      if (b && !(b.size > 0)) return null;
       return b;
     };
-    const load = (i) => {
+    const load = (i, opts = {}) => {
       if (i < 0 || i >= pages.length) return null;
+      if (opts.skipCache) {
+        const p = urls.get(i);
+        if (p) {
+          p.then((u) => { try { URL.revokeObjectURL(u); } catch (_) {} }, () => {});
+          urls.delete(i);
+        }
+      }
       if (!urls.has(i)) {
-        const p = blobFor(i).then((b) => {
+        const p = blobFor(i, opts).then((b) => {
           if (!b) throw new Error('sin blob');
           return URL.createObjectURL(b);
         });
@@ -1067,6 +1077,23 @@ export function createReader(state, d) {
         urls.set(i, p);
       }
       return urls.get(i);
+    };
+    /** Asigna src a un img; si no decodifica, reintenta sin caché una vez */
+    const assignPageImg = async (img, i) => {
+      let u = await load(i);
+      img.src = u;
+      try {
+        await img.decode();
+        return u;
+      } catch (_) {
+        try {
+          drop(i);
+          u = await load(i, { skipCache: true });
+          img.src = u;
+          await img.decode().catch(() => {});
+        } catch (_) {}
+        return u;
+      }
     };
     const drop = (i) => {
       const p = urls.get(i);
@@ -1928,9 +1955,7 @@ export function createReader(state, d) {
               pagePanelsCache.clear();
               panelSrcKey = keyNow;
             }
-            const u = await load(i);
-            img.src = u;
-            await img.decode().catch(() => {});
+            const u = await assignPageImg(img, i);
             const cacheKey = srcId + '::' + i + '::' + panelDetectSig();
             if (!opts.forceDetect && pagePanelsCache.has(cacheKey)) {
               panels = pagePanelsCache.get(cacheKey) || [];

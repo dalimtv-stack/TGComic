@@ -1667,7 +1667,9 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
           const editOpts = [];
           // Siempre intentar escribir Sección: en el caption (Telegram)
           editOpts.push(['Añadir Sección', () => showAssignSectionForm(ch, f, label, redraw, 'caption')]);
-          editOpts.push(['Recargar externo', () => showAssignSectionForm(ch, f, label, redraw, 'reload')]);
+          if (f?.forwarded) {
+            editOpts.push(['Recargar externo', () => showAssignSectionForm(ch, f, label, redraw, 'reload')]);
+          }
           editOpts.push(['Eliminar', () => deleteThisComic()]);
           sheet('Editar', editOpts, {
             cancelLabel: 'Volver',
