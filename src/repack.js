@@ -1259,7 +1259,7 @@ export function createRepackTool(d) {
       infoInp.oninput = () => { applyNames(); };
 
       const nameLab = el('div', 'sync-label', 'Nombre final (automático)');
-      const inp = el('input', 'edit-input repack-name-input');
+      const inp = el('input', 'edit-input repack-name-input upload-preview');
       inp.type = 'text';
       inp.readOnly = true;
       inp.title = 'Se genera a partir de serie, número, info y canal';

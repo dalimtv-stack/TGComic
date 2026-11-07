@@ -520,7 +520,24 @@ body:has(.sheet) #app{
 .continue-fold-body .continue-track{padding-left:.65rem;padding-right:.65rem}
 
 .job-queue-eta{font-size:.8rem;color:var(--mut);padding:0 2px 6px}
-.upload-preview{font-size:.85rem;color:var(--acc);margin:.35rem 0;word-break:break-word}
+/* Nombre final (Subir / Recarga externa): acento dorado legible */
+.upload-preview,
+.repack-name-input.upload-preview,
+input.edit-input.upload-preview{
+  font-size:.95rem;
+  font-weight:650;
+  color:var(--acc);
+  margin:.35rem 0;
+  word-break:break-word;
+}
+input.edit-input.upload-preview[readonly],
+.repack-name-input.upload-preview[readonly]{
+  opacity:1;
+  cursor:default;
+  background:#ffffff0c;
+  border:1px solid color-mix(in srgb, var(--acc) 35%, transparent);
+  color:var(--acc);
+}
 .upload-select{width:100%;margin:.25rem 0}
 
 /* Cola de tareas: secciones desplegables */
