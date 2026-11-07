@@ -744,15 +744,228 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
     await appAlert(msg, 'Descarga en bloque');
   }
 
-  /** Submenú de serie: Información · Editar TODA la serie · Marcar · Desagrupar/Agrupar · Añadir versión WebP (+ Bloquear aparte) */
-  function seriesSheetOpts(ch, seriesLabel, fs, redraw, { groupState = 'grouped', afterBack = null } = {}) {
+  /** Submenú de serie: Información · Editar · … (+ Bloquear aparte) */
+  function seriesSheetOpts(ch, seriesLabel, fs, redraw, { groupState = 'grouped', afterBack = null, noSection = null } = {}) {
     const back = afterBack || redraw;
     const files = fs || [];
+    const openRoot = () => sheet(
+      seriesDisplayName(ch, seriesLabel),
+      seriesSheetOpts(ch, seriesLabel, files, redraw, { groupState, afterBack, noSection })
+        .concat(lockToggleOpts('series', { ch, seriesLabel }, seriesDisplayName(ch, seriesLabel), redraw))
+    );
+    // Serie en macro sin sección (p. ej. vista «(Sin sección)»): menú mínimo
+    const isNoSec = noSection != null
+      ? !!noSection
+      : (isMacroLibEntry(ch)
+        && files.length > 0
+        && files.every((f) => !effectiveSection(ch, f, parseComicCaption)));
+
+    if (isNoSec) {
+      const applySectionToSeries = (mode) => {
+        // Un solo formulario de sección; se aplica a todos los cómics de la serie
+        const first = files[0];
+        if (!first) return;
+        // Reutilizar UI de sección: tras elegir, aplicar a la serie
+        document.querySelector('.info-frame.assign-section')?.remove();
+        const frame = el('div', 'info-frame assign-section');
+        const box = el('div', 'info-box');
+        const head = el('div', 'info-head');
+        head.append(el('span', '', mode === 'reload' ? 'Añadir Sección/Canal (recarga serie)' : 'Añadir Sección/Canal Externo (serie)'));
+        const close = el('button', 'btn info-close', '×');
+        close.onclick = () => frame.remove();
+        head.append(close);
+        const body = el('div', 'info-body');
+        body.append(el('p', 'cover-pick-hint',
+          mode === 'reload'
+            ? 'Elige la sección. Se abrirá la recarga externa para cada cómic de la serie.'
+            : 'Elige la sección. Se aplicará a todos los cómics de esta serie (' + files.length + ').'
+        ));
+        const secLab = el('div', 'sync-label', 'Sección / Canal');
+        const secSel = el('select', 'edit-input');
+        const oNew = el('option');
+        oNew.value = '__new__';
+        oNew.textContent = 'Nueva sección…';
+        secSel.append(oNew);
+        const secInp = el('input', 'edit-input');
+        secInp.type = 'text';
+        secInp.placeholder = 'Nombre de la sección';
+        secInp.autocomplete = 'off';
+        (async () => {
+          let all = [];
+          try { all = (await kv.get('f:' + ch.id)) || []; } catch (_) {}
+          const sections = collectSectionsFromFiles(all, parseComicCaption, ch.id);
+          for (const s of sections) {
+            const o = el('option');
+            o.value = s;
+            o.textContent = s;
+            secSel.append(o);
+          }
+          if (sections.length) {
+            secSel.value = sections[0];
+            secInp.hidden = true;
+          } else {
+            secSel.value = '__new__';
+            secInp.hidden = false;
+          }
+        })();
+        secSel.onchange = () => {
+          secInp.hidden = secSel.value !== '__new__';
+          if (secSel.value !== '__new__') secInp.value = '';
+        };
+        body.append(secLab, secSel, secInp);
+        const actions = el('div', 'edit-actions');
+        const cancel = el('button', 'btn', 'Cancelar');
+        cancel.onclick = () => frame.remove();
+        const goBtn = el('button', 'btn edit-save', mode === 'reload' ? 'Continuar' : 'Guardar');
+        goBtn.onclick = async () => {
+          const chosen = secSel.value === '__new__'
+            ? String(secInp.value || '').trim()
+            : String(secSel.value || '').trim();
+          if (!chosen) {
+            await appAlert('Indica el nombre de la sección');
+            return;
+          }
+          goBtn.disabled = true;
+          frame.remove();
+          if (mode === 'reload') {
+            try {
+              repackTool?.offerReloadExternal?.(ch, files, { section: chosen, deleteOriginal: true });
+            } catch (e) {
+              console.warn('[series-reload]', e);
+              await appAlert('Recarga no disponible: ' + (e?.message || e));
+            }
+            return;
+          }
+          // local (reenvíos) o caption
+          let ok = 0, fail = 0;
+          for (const f of files) {
+            try {
+              if (f?.forwarded || mode === 'local') {
+                setLocalSection(ch.id, f.id, chosen);
+                ok++;
+              } else if (typeof updateTelegramCaption === 'function') {
+                let newCap = String(f.caption || '');
+                if (typeof parseComicCaption === 'function' && typeof buildComicCaption === 'function') {
+                  try {
+                    const fields = parseComicCaption(newCap) || {};
+                    fields.section = chosen;
+                    newCap = buildComicCaption(fields);
+                  } catch (_) {
+                    newCap = withSectionInCaption(newCap, chosen);
+                  }
+                } else {
+                  newCap = withSectionInCaption(newCap, chosen);
+                }
+                await updateTelegramCaption(ch, f, newCap);
+                try {
+                  f.caption = newCap;
+                } catch (_) {}
+                ok++;
+              } else {
+                setLocalSection(ch.id, f.id, chosen);
+                ok++;
+              }
+            } catch (e) {
+              fail++;
+              console.warn('[series-section]', f?.name, e);
+            }
+          }
+          try {
+            // Actualizar listado en caché
+            let all = (await kv.get('f:' + ch.id)) || [];
+            const byId = new Map(files.map((x) => [String(x.id), x]));
+            all = all.map((x) => {
+              const u = byId.get(String(x.id));
+              return u ? { ...x, caption: u.caption != null ? u.caption : x.caption } : x;
+            });
+            await kv.set('f:' + ch.id, all);
+          } catch (_) {}
+          try { window.dispatchEvent(new CustomEvent('tgcomic:changed', { detail: { chId: ch.id, kind: 'section-series' } })); } catch (_) {}
+          try { redraw?.(); } catch (_) {}
+          await appAlert(
+            'Sección «' + chosen + '» aplicada a ' + ok + ' cómic(s)'
+            + (fail ? ('. Fallos: ' + fail) : '.'),
+            'Sección'
+          );
+        };
+        actions.append(cancel, goBtn);
+        body.append(actions);
+        box.append(head, body);
+        frame.append(box);
+        document.body.append(frame);
+      };
+
+      const deleteSeriesComics = async () => {
+        try {
+          if (!locks.isSessionUnlocked()) {
+            const pw = await appPrompt('Contraseña de sincronización', 'Eliminar serie', '', 'password');
+            if (pw == null) return;
+            if (!(await locks.unlockSession(pw))) {
+              return appAlert('Contraseña incorrecta', 'Eliminar');
+            }
+          }
+          const ok = await appConfirm(
+            '¿Eliminar permanentemente los ' + files.length + ' cómic(s) de la serie «'
+            + (seriesDisplayName(ch, seriesLabel) || seriesLabel)
+            + '» de Telegram?\n\nEsta acción no se puede deshacer.',
+            'Eliminar serie'
+          );
+          if (!ok) return;
+          const readyP = getReady?.();
+          if (readyP && typeof readyP.then === 'function') await readyP;
+          const client = getClient?.();
+          if (!client) return appAlert('Cliente Telegram no disponible (sin sesión)');
+          let peer;
+          try { peer = peerOfFn(ch); } catch (_) {
+            return appAlert('Cliente Telegram no disponible (peerOf)');
+          }
+          if (!peer) return appAlert('Cliente Telegram no disponible (peerOf)');
+          const ids = [];
+          const pushId = (x) => { if (x?.id != null) ids.push(Number(x.id)); };
+          for (const f of files) {
+            pushId(f);
+            if (f?.variants && typeof f.variants === 'object') {
+              for (const v of Object.values(f.variants)) pushId(v);
+            }
+            if (Array.isArray(f?.ai)) for (const v of f.ai) pushId(v);
+          }
+          const uniq = [...new Set(ids.filter((n) => Number.isFinite(n)))];
+          if (!uniq.length) return appAlert('No hay mensajes que eliminar');
+          await client.deleteMessages(peer, uniq, { revoke: true });
+          try {
+            let all = (await kv.get('f:' + ch.id)) || [];
+            const drop = new Set(uniq.map(String));
+            all = all.filter((x) => !drop.has(String(x.id)));
+            await kv.set('f:' + ch.id, all);
+          } catch (_) {}
+          try { window.dispatchEvent(new CustomEvent('tgcomic:changed', { detail: { chId: ch.id, kind: 'delete-series' } })); } catch (_) {}
+          try { redraw?.(); } catch (_) {}
+          await appAlert('Serie eliminada (' + uniq.length + ' mensaje(s)).', 'Eliminar');
+        } catch (e) {
+          await appAlert('No se pudo eliminar: ' + (e?.message || e), 'Eliminar');
+        }
+      };
+
+      return [
+        ['Información', () => showSeriesInfo(ch, seriesLabel, files)],
+        ['Editar', () => {
+          sheet('Editar', [
+            ['Añadir Sección/Canal Externo', () => applySectionToSeries('local')],
+            ['Recargar externo', () => applySectionToSeries('reload')],
+            ['Eliminar', () => deleteSeriesComics()],
+          ], { cancelLabel: 'Volver', onCancel: openRoot });
+        }],
+        ['Descargar en bloque', () => {
+          downloadComicsBulk(ch, files, { mode: 'series', seriesLabel });
+        }],
+      ];
+    }
+
     const opts = [
       ['Información', () => showSeriesInfo(ch, seriesLabel, files)],
       ['Editar', () => {
-        const openRoot = () => sheet(seriesDisplayName(ch, seriesLabel), seriesSheetOpts(ch, seriesLabel, files, redraw, { groupState, afterBack }));
-        const openEdit = () => sheet('Editar', editOpts, { cancelLabel: 'Volver', onCancel: openRoot });
+        const openRoot2 = () => sheet(seriesDisplayName(ch, seriesLabel), seriesSheetOpts(ch, seriesLabel, files, redraw, { groupState, afterBack, noSection }));
+        const openEdit = () => sheet('Editar', editOpts, { cancelLabel: 'Volver', onCancel: openRoot2 });
         const editOpts = [
           ['Editar nombre de la serie a la que pertenece', () => showEditSeriesName(ch, seriesLabel, files, openEdit)],
           ['Seleccionar portada de la serie', () => showSeriesCoverPicker(ch, seriesLabel, files, openEdit)],
@@ -2682,7 +2895,10 @@ function filesView(ch, opts = {}) {
           });
         } else {
           const seriesUnread = fs.some((f) => !isComicRead(ch.id, f.id));
-          const seriesOpts = seriesSheetOpts(ch, seriesLabel, fs, redraw, { groupState: 'grouped' });
+          const seriesOpts = seriesSheetOpts(ch, seriesLabel, fs, redraw, {
+            groupState: 'grouped',
+            noSection: !!(isMacroLibEntry(ch) && fs.length && fs.every((f) => !effectiveSection(ch, f, parseComicCaption))),
+          });
           const seriesSearch = (seriesShown + ' ' + seriesLabel + ' ' + fs.map((f) => f.name).join(' ')).toLowerCase();
           const seriesRestricted = locks.isContentRestricted('series', { ch, seriesLabel });
           const seriesLockOpts = () => lockToggleOpts('series', { ch, seriesLabel }, seriesDisplayName(ch, seriesLabel), redraw);

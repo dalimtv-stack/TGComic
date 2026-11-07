@@ -1363,52 +1363,44 @@ export function createRepackTool(d) {
    * @param {object} f archivo
    * @param {{ section?: string, targetCh?: object, deleteOriginal?: boolean }} [opts]
    */
-  function offerReloadExternal(ch, f, opts = {}) {
-    if (!ch || !f) return;
+  /**
+   * Recarga uno o varios cómics (reenvíos / CBR) con sección opcional o canal destino.
+   * @param {object} ch canal actual
+   * @param {object|object[]} fOrFiles archivo o lista
+   * @param {{ section?: string, targetCh?: object, deleteOriginal?: boolean }} [opts]
+   */
+  function offerReloadExternal(ch, fOrFiles, opts = {}) {
+    const list = (Array.isArray(fOrFiles) ? fOrFiles : [fOrFiles]).filter(Boolean);
+    if (!ch || !list.length) return;
     const section = String(opts.section || '').trim();
     const preferredName = String(opts.outName || opts.fileName || '').trim();
     const targetCh = opts.targetCh || ch;
-    // Por defecto borrar el previo (reenvío / CBR); el usuario puede desmarcar en el menú de nombres
     const deleteOriginal = (opts.deleteOriginal === undefined || opts.deleteOriginal === null)
       ? true
       : !!opts.deleteOriginal;
-    const item = {
-      ch: targetCh,
-      f: { ...f, caption: f.caption },
-      series: candidateSeries(ch, f),
-      reasons: [f.forwarded ? 'Reenviado' : null, isCbrName(f.name) ? 'CBR' : null].filter(Boolean),
-      // Si recargamos al mismo canal macro, forzar sección en caption al subir
-      _forceSection: section || undefined,
-      // Origen para borrar tras mover
-      _sourceCh: opts.targetCh ? ch : null,
-      _sourceF: opts.targetCh ? f : null,
-    };
-    // Caption con sección y nombre de archivo si aplica (antes de mostrar nombres)
-    let cap = String(f.caption || '');
-    if (section) {
-      try { cap = withSectionInCaption(cap, section); } catch (_) {}
-    }
-    if (preferredName) {
-      try { cap = withFileNameInCaption(cap, preferredName.replace(/\.cb[zr]$/i, '') + ( /\.cbr$/i.test(f.name) ? '.cbr' : '.cbz')); } catch (_) {}
-    }
-    try {
-      item.f = { ...item.f, caption: cap };
-      item.caption = cap;
-    } catch (_) {}
-    // Si el destino es otro canal, el item.ch ya es targetCh; processOne sube allí
-    // showNameReview espera selected con .ch y .f del origen de descarga: la descarga
-    // debe ser del mensaje original (ch,f), la subida al targetCh.
-    const selected = [{
-      ch, // descarga desde origen
-      f,
-      series: item.series,
-      reasons: item.reasons,
-      uploadCh: targetCh,
-      caption: item.f.caption || item.caption || f.caption || '',
-      _forceSection: section || undefined,
-      deleteOriginalAfter: deleteOriginal,
-      // sin outName fijo: el menú genera el nombre a partir de serie/número/sección
-    }];
+
+    const selected = list.map((f) => {
+      let cap = String(f.caption || '');
+      if (section) {
+        try { cap = withSectionInCaption(cap, section); } catch (_) {}
+      }
+      if (preferredName && list.length === 1) {
+        try {
+          const ext = /\.cbr$/i.test(f.name || '') ? '.cbr' : '.cbz';
+          cap = withFileNameInCaption(cap, preferredName.replace(/\.cb[zr]$/i, '') + ext);
+        } catch (_) {}
+      }
+      return {
+        ch, // descarga desde origen
+        f: { ...f, caption: cap },
+        series: candidateSeries(ch, f),
+        reasons: [f.forwarded ? 'Reenviado' : null, isCbrName(f.name) ? 'CBR' : null].filter(Boolean),
+        uploadCh: targetCh,
+        caption: cap,
+        _forceSection: section || undefined,
+        deleteOriginalAfter: deleteOriginal,
+      };
+    });
     showNameReview(selected, !!deleteOriginal, false, {}, {});
   }
 
