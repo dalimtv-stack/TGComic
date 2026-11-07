@@ -797,8 +797,15 @@ async function updateCaptionOnAllVersions(ch, primary, fields, onStatus) {
       // Otras versiones: no tocar Nombre de archivo
       fileName = prev.fileName || sourceNameOf(sib) || sib.name || '';
     }
+    // Conservar Sección: del caption previo (macros / canales virtuales)
+    const sectionKeep = String(
+      (fields.section != null && String(fields.section).trim())
+        ? fields.section
+        : (prev.section || prev.seccion || '')
+    ).trim();
     const caption = buildComicCaption({
       fileName,
+      section: sectionKeep,
       titleEs: fields.titleEs ?? '',
       originalTitle: fields.originalTitle ?? '',
       series: fields.series ?? '',
@@ -1005,6 +1012,8 @@ function showCaptionEditor(ch, f, after, opts = {}) {
     // Guardar lo que hay en los inputs (según checks ya aplicados)
     const fields = {
       fileName: fileNameCtrl.inp.value,
+      // No se edita en el formulario de ficha: conservar la del caption actual
+      section: String(cap.section || cap.seccion || '').trim(),
       titleEs: titleEsCtrl.inp.value,
       originalTitle: origCtrl.inp.value,
       series: seriesCtrl.inp.value,
@@ -1934,6 +1943,7 @@ async function runSeriesCvFill(ch, seriesLabel, files, volId, sourceUrl, opts = 
         const localPub = localPublisherOf(ch);
         const fields = {
           fileName: niceFile,
+          section: String(capPrev.section || capPrev.seccion || '').trim(),
           titleEs,
           originalTitle: keep(capPrev.originalTitle, cvTitle),
           series: keep(capPrev.series, seriesLabel || parsed?.series || ''),
@@ -3874,6 +3884,7 @@ function showSeriesBulkCaptionEditor(ch, seriesLabel, files, onBack) {
           };
           const next = {
             fileName: prev.fileName || f?.name || '',
+            section: String(prev.section || prev.seccion || '').trim(),
             titleEs: prev.titleEs || '',
             originalTitle: prev.originalTitle || '',
             series: pick(patch.series, prev.series),
