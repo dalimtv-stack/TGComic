@@ -2657,9 +2657,43 @@ async function migrateCacheImages() {
   migrateCacheImages();
   ready = connect();
   ready.catch((e) => msg('Error de conexión: ' + e.message));
-  ready.then(refreshLibrary).then((lib) => {
+  ready.then(refreshLibrary).then(async (lib) => {
     const changed = JSON.stringify(lib) !== JSON.stringify(LIB);
     LIB = lib; synced = true;
     if ((changed || !lib.length) && stack.length === 1) show();
+
+    // Actualización rápida en segundo plano: listados de cada canal sin bloquear la UI
+    // (mismo atajo topDocId que el botón Actualizar; no force)
+    const channels = Array.isArray(lib) ? lib.slice() : [];
+    if (!channels.length) return;
+    try {
+      // Ceder un frame para que se pinte la home
+      await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+      let done = 0;
+      await mapLimit(channels, 2, async (ch) => {
+        try {
+          await fetchFiles(ch);
+        } catch (e) {
+          console.warn('[bg-refresh]', ch?.name || ch?.id, e?.message || e);
+        } finally {
+          done++;
+        }
+      });
+      try { searchIndex = null; } catch (_) {}
+      // Si el usuario sigue en una vista de listado, refrescar datos en silencio
+      try {
+        if (document.querySelector('.info-frame, .sheet, .app-dialog, #rd')) return;
+        const ae = document.activeElement;
+        if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return;
+        const top = stack[stack.length - 1];
+        if (top && !top._isComic) {
+          top.scrollY = window.scrollY || document.documentElement.scrollTop || 0;
+          refreshView();
+        }
+      } catch (_) {}
+      console.info('[bg-refresh] listados actualizados:', done, 'canales');
+    } catch (e) {
+      console.warn('[bg-refresh]', e);
+    }
   }).catch((e) => console.error(e));
 })();
