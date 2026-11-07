@@ -109,7 +109,29 @@ const sizeLabel = (f, ch) => {
   const tot = ch ? getPagesTotal(ch.id, f.id) : 0;
   return tot > 0 ? `${mb} · ${tot} pág.` : mb;
 };
-const pagesOf = (entries) => entries.filter((e) => !e.directory && /\.(jpe?g|png|webp|gif|avif)$/i.test(e.filename)).sort((a, b) => natural(a.filename, b.filename));
+const pagesOf = (entries) => {
+  const list = [];
+  for (const e of entries || []) {
+    if (!e || e.directory) continue;
+    const raw = String(e.filename || '').replace(/\\/g, '/');
+    // Basura típica de ZIP / macOS
+    if (raw.includes('__MACOSX/') || /(^|\/)\._/.test(raw)) continue;
+    const base = raw.split('/').pop() || raw;
+    if (!/\.(jpe?g|png|webp|gif|avif)$/i.test(base)) continue;
+    list.push(e);
+  }
+  // Misma página dos veces (ruta distinta o entrada duplicada en el ZIP) → una sola
+  const best = new Map();
+  for (const e of list) {
+    const base = String(e.filename || '').replace(/\\/g, '/').split('/').pop().toLowerCase();
+    const sz = Number(e.uncompressedSize || e.compressedSize || 0);
+    const prev = best.get(base);
+    if (!prev) { best.set(base, e); continue; }
+    const prevSz = Number(prev.uncompressedSize || prev.compressedSize || 0);
+    if (sz >= prevSz) best.set(base, e);
+  }
+  return [...best.values()].sort((a, b) => natural(a.filename, b.filename));
+};
 
 // Caché persistente (IndexedDB): biblioteca, listados y portadas
 const kv = (() => {
@@ -662,6 +684,18 @@ async function openPages(m, size, status, ac) {
     new Uint8Array(copy).set(src);
     out.push({ filename: base, blob: new Blob([copy], { type: mimeOf(base) }) });
     await new Promise((res) => setTimeout(res, 0));
+  }
+  // Deduplicar por nombre de archivo (RAR a veces lista dos veces)
+  {
+    const best = new Map();
+    for (const p of out) {
+      const k = String(p.filename || '').toLowerCase();
+      const prev = best.get(k);
+      const sz = p.blob?.size || 0;
+      if (!prev || sz >= (prev.blob?.size || 0)) best.set(k, p);
+    }
+    out.length = 0;
+    out.push(...best.values());
   }
   out.sort((x, y) => natural(x.filename, y.filename));
   if (!out.length) throw new Error('El CBR no contiene imágenes legibles.');
