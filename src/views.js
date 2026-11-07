@@ -1118,6 +1118,100 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
     const afterBack = ctx.afterDesagrupar;
     const openRoot = () => sheet(label, comicSheetOpts(ch, f, label, redraw, ctx).concat(lockToggleOpts('comic', { ch, f }, label, redraw)));
 
+    const noSec = isMacroLibEntry(ch) && !effectiveSection(ch, f, parseComicCaption);
+
+    /** Eliminar cómic en Telegram (+ caché local). */
+    const deleteThisComic = async () => {
+      try {
+        if (!locks.isSessionUnlocked()) {
+          const pw = await appPrompt('Contraseña de sincronización', 'Eliminar cómic', '', 'password');
+          if (pw == null) return;
+          if (!(await locks.unlockSession(pw))) {
+            return appAlert('Contraseña incorrecta', 'Eliminar');
+          }
+        }
+        const name = label || f?.name || 'este cómic';
+        const ok = await appConfirm(
+          '¿Eliminar permanentemente «' + name + '» de Telegram?\n\nEsta acción no se puede deshacer.',
+          'Eliminar cómic'
+        );
+        if (!ok) return;
+        const readyP = getReady?.();
+        if (readyP && typeof readyP.then === 'function') await readyP;
+        const client = getClient?.();
+        if (!client) {
+          return appAlert('Cliente Telegram no disponible (sin sesión)');
+        }
+        let peer;
+        try { peer = peerOfFn(ch); } catch (e) {
+          return appAlert('Cliente Telegram no disponible (peerOf)');
+        }
+        if (!peer) return appAlert('Cliente Telegram no disponible (peerOf)');
+        const ids = [];
+        const pushId = (x) => { if (x?.id != null) ids.push(Number(x.id)); };
+        pushId(f);
+        if (f?.variants && typeof f.variants === 'object') {
+          for (const v of Object.values(f.variants)) pushId(v);
+        }
+        if (Array.isArray(f?.ai)) for (const v of f.ai) pushId(v);
+        try {
+          let all = (await kv.get('f:' + ch.id)) || [];
+          const { stripQualityTags, sourceNameOf, flattenVersions } = await import('./quality.js');
+          const base = stripQualityTags(sourceNameOf(f) || f.name || '').toLowerCase().replace(/\s+/g, ' ').trim();
+          for (const x of flattenVersions(all)) {
+            const b = stripQualityTags(sourceNameOf(x) || x.name || '').toLowerCase().replace(/\s+/g, ' ').trim();
+            if (b && b === base) pushId(x);
+          }
+        } catch (_) {}
+        const uniq = [...new Set(ids.filter((n) => Number.isFinite(n)))];
+        if (!uniq.length) return appAlert('No hay mensaje que eliminar');
+        await client.deleteMessages(peer, uniq, { revoke: true });
+        try {
+          let all = (await kv.get('f:' + ch.id)) || [];
+          const drop = new Set(uniq.map(String));
+          all = all.filter((x) => !drop.has(String(x.id)));
+          all = all.map((x) => {
+            if (!x?.variants) return x;
+            const nv = { ...x.variants };
+            for (const k of Object.keys(nv)) {
+              if (drop.has(String(nv[k]?.id))) delete nv[k];
+            }
+            return { ...x, variants: nv };
+          });
+          await kv.set('f:' + ch.id, all);
+        } catch (_) {}
+        try { window.dispatchEvent(new CustomEvent('tgcomic:changed', { detail: { chId: ch.id, kind: 'delete' } })); } catch (_) {}
+        try { redraw?.(); } catch (_) {}
+        await appAlert('Eliminado.', 'Eliminar');
+      } catch (e) {
+        await appAlert('No se pudo eliminar: ' + (e?.message || e), 'Eliminar');
+      }
+    };
+
+    // Macro sin sección: menú mínimo
+    if (noSec) {
+      return [
+        ['Información', () => showComicInfo(ch, f, label)],
+        ['Editar', () => {
+          const editOpts = [];
+          if (f?.forwarded) {
+            editOpts.push(['Añadir Sección/Canal Externo', () => showAssignSectionForm(ch, f, label, redraw, 'local')]);
+          } else {
+            // Misma familia de opciones; caption editable en Telegram
+            editOpts.push(['Añadir Sección/Canal Externo', () => showAssignSectionForm(ch, f, label, redraw, 'caption')]);
+          }
+          editOpts.push(['Recargar externo', () => showAssignSectionForm(ch, f, label, redraw, 'reload')]);
+          editOpts.push(['Eliminar', () => deleteThisComic()]);
+          sheet('Editar', editOpts, {
+            cancelLabel: 'Volver',
+            onCancel: openRoot,
+          });
+        }],
+        ['Descargar cómic', () => { downloadComicFile(ch, f); }],
+        ...lockToggleOpts('comic', { ch, f }, label, redraw),
+      ];
+    }
+
     const opts = [
       ['Información', () => {
         try {
@@ -1137,22 +1231,6 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
       }],
       ['Editar', () => {
         const openEditMenu = () => {
-          // Macro sin sección: menú reducido según origen (manual vs reenvío)
-          const noSec = isMacroLibEntry(ch) && !effectiveSection(ch, f, parseComicCaption);
-          if (noSec) {
-            const editOpts = [];
-            if (f?.forwarded) {
-              editOpts.push(['Añadir Sección/Canal Externo', () => showAssignSectionForm(ch, f, label, redraw, 'local')]);
-              editOpts.push(['Recargar externo', () => showAssignSectionForm(ch, f, label, redraw, 'reload')]);
-            } else {
-              editOpts.push(['Añadir Sección/Canal', () => showAssignSectionForm(ch, f, label, redraw, 'caption')]);
-            }
-            sheet('Editar', editOpts, {
-              cancelLabel: 'Volver',
-              onCancel: () => sheet(label, comicSheetOpts(ch, f, label, redraw, ctx).concat(lockToggleOpts('comic', { ch, f }, label, redraw))),
-            });
-            return;
-          }
           const editOpts = [
             ['Editar datos del cómic', () => showEditComicTitle(ch, f, label, redraw)],
           ];
