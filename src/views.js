@@ -1675,7 +1675,7 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
           });
         }],
         ['Descargar cómic', () => { downloadComicFile(ch, f); }],
-        ...lockToggleOpts('comic', { ch, f }, label, redraw),
+        // Bloquear lo añade el caller (.concat(lockToggleOpts)) — no duplicar aquí
       ];
     }
 
@@ -3233,9 +3233,15 @@ function filesView(ch, opts = {}) {
     const cached = await kv.get('f:' + ch.id);
     if (cached) draw(filterSec(cached)); else msg('Cargando…');
     try {
-      const force = !!e._forceFiles;
+      // force: caption puede cambiar sin cambiar topDocId/count (atajo de fetchFiles)
+      const force = !!e._forceFiles
+        || !!sectionFilter
+        || orphansOnly
+        || isMacroLibEntry(ch);
       e._forceFiles = false;
-      const fresh = await fetchFiles(ch);
+      const fresh = typeof fetchFiles === 'function'
+        ? await fetchFiles(ch, force ? { force: true } : {})
+        : await (d.fetchFiles?.(ch, force ? { force: true } : {}) || []);
       if (force || JSON.stringify(fresh) !== JSON.stringify(cached)) draw(filterSec(fresh));
     } catch (err) { if (!cached) msg('Error: ' + err.message); }
   });
