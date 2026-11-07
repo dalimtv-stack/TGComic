@@ -1251,6 +1251,76 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
 
     body.append(secLab, secSel, secInp, fnLab, fnInp);
 
+    // Serie (editable) en modos caption/local
+    const serLab = el('div', 'sync-label', 'Serie');
+    let seriesSel = el('select', 'edit-input series-select');
+    let seriesOther = el('input', 'edit-input');
+    seriesOther.type = 'text';
+    seriesOther.placeholder = 'Nombre de la serie';
+    seriesOther.autocomplete = 'off';
+    seriesOther.hidden = true;
+    if (mode !== 'reload') {
+      body.append(serLab, seriesSel, seriesOther);
+      (async () => {
+        try {
+          let filesAll = [];
+          try { filesAll = (await kv.get('f:' + ch.id)) || []; } catch (_) {}
+          const labels = new Set();
+          for (const x of filesAll) {
+            try {
+              const p = parseComicName?.(comicSourceName?.(x) || x?.name || '', ch?.name);
+              if (p?.series) labels.add(String(p.series).trim());
+            } catch (_) {}
+            try {
+              if (typeof getComicSeriesOverride === 'function') {
+                const o = getComicSeriesOverride(ch, x);
+                if (o) labels.add(String(o).trim());
+              }
+            } catch (_) {}
+          }
+          seriesSel.replaceChildren();
+          const o0 = el('option');
+          o0.value = '';
+          o0.textContent = '— Sin forzar serie —';
+          seriesSel.append(o0);
+          let cur = '';
+          try {
+            if (typeof getComicSeriesOverride === 'function') {
+              cur = String(getComicSeriesOverride(ch, f) || '').trim();
+            }
+          } catch (_) {}
+          if (!cur) {
+            try {
+              const p = parseComicName?.(comicSourceName?.(f) || f?.name || '', ch?.name);
+              if (p?.series) cur = String(p.series).trim();
+            } catch (_) {}
+          }
+          for (const lab of [...labels].filter(Boolean).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))) {
+            const o = el('option');
+            o.value = lab;
+            o.textContent = lab;
+            seriesSel.append(o);
+          }
+          const oNew = el('option');
+          oNew.value = '__other__';
+          oNew.textContent = 'Otra…';
+          seriesSel.append(oNew);
+          if (cur && [...labels].some((x) => x.toLowerCase() === cur.toLowerCase())) {
+            seriesSel.value = [...labels].find((x) => x.toLowerCase() === cur.toLowerCase());
+          } else if (cur) {
+            seriesSel.value = '__other__';
+            seriesOther.hidden = false;
+            seriesOther.value = cur;
+          }
+        } catch (_) {}
+      })();
+      seriesSel.onchange = () => {
+        seriesOther.hidden = seriesSel.value !== '__other__';
+        if (seriesSel.value !== '__other__') seriesOther.value = '';
+      };
+    }
+
+
     const actions = el('div', 'edit-actions');
     const cancel = el('button', 'btn', 'Cancelar');
     cancel.onclick = () => frame.remove();
@@ -1365,6 +1435,20 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
         frame.remove();
         try { redraw?.(); } catch (_) {}
         try { window.dispatchEvent(new CustomEvent('tgcomic:changed', { detail: { chId: ch.id, kind: 'section-caption' } })); } catch (_) {}
+
+        try {
+          const ser = seriesSel
+            ? (seriesSel.value === '__other__'
+              ? String(seriesOther.value || '').trim()
+              : String(seriesSel.value || '').trim())
+            : '';
+          if (ser && typeof setComicSeries === 'function') {
+            await new Promise((resolve) => {
+              try { setComicSeries(ch, f, ser, resolve); }
+              catch (_) { resolve(); }
+            });
+          }
+        } catch (_) {}
         await appAlert('Caption actualizado:\nSección: «' + chosen + '»\nNombre de archivo: «' + fileName + '»', 'Sección');
       } catch (e) {
         goBtn.disabled = false;
