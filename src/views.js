@@ -2869,7 +2869,23 @@ function channelsView(g) {
       // Secciones del canal macro (mismo aspecto que un canal)
       for (const mac of macros) {
         let mfiles = [];
-        try { mfiles = (await kv.get('f:' + mac.id)) || []; } catch (_) {}
+        try {
+          // Siempre frescos desde Telegram en macro (Sección vive en caption)
+          if (typeof fetchFiles === 'function') mfiles = await fetchFiles(mac, { force: true });
+          else mfiles = (await kv.get('f:' + mac.id)) || [];
+        } catch (_) {
+          try { mfiles = (await kv.get('f:' + mac.id)) || []; } catch (_) { mfiles = []; }
+        }
+        // Un id una sola vez
+        {
+          const seen = new Set();
+          mfiles = (mfiles || []).filter((f) => {
+            const id = String(f?.id ?? '');
+            if (!id || seen.has(id)) return false;
+            seen.add(id);
+            return true;
+          });
+        }
         const sections = collectSectionsFromFiles(mfiles, parseComicCaption, mac.id);
         for (const sec of sections) {
           const secFiles = filesInSection(mfiles, sec, parseComicCaption, mac.id);
@@ -2917,7 +2933,21 @@ function channelsView(g) {
 
       for (const mac of macros) {
         let mfiles = [];
-        try { mfiles = (await kv.get('f:' + mac.id)) || []; } catch (_) {}
+        try {
+          if (typeof fetchFiles === 'function') mfiles = await fetchFiles(mac, { force: true });
+          else mfiles = (await kv.get('f:' + mac.id)) || [];
+        } catch (_) {
+          try { mfiles = (await kv.get('f:' + mac.id)) || []; } catch (_) { mfiles = []; }
+        }
+        {
+          const seen = new Set();
+          mfiles = (mfiles || []).filter((f) => {
+            const id = String(f?.id ?? '');
+            if (!id || seen.has(id)) return false;
+            seen.add(id);
+            return true;
+          });
+        }
         const orphans = (mfiles || []).filter((f) => !effectiveSection(mac, f, parseComicCaption));
         if (!orphans.length) continue;
         const on = orphans.length;
@@ -3230,7 +3260,8 @@ function filesView(ch, opts = {}) {
       const arr = list || [];
       if (orphansOnly) return arr.filter((f) => !effectiveSection(ch, f, parseComicCaption));
       if (!sectionFilter) return arr;
-      return arr.filter((f) => effectiveSection(ch, f, parseComicCaption).trim().toLowerCase() === sectionFilter.trim().toLowerCase());
+      const want = normalizeSectionKey(sectionFilter);
+      return arr.filter((f) => normalizeSectionKey(effectiveSection(ch, f, parseComicCaption)) === want);
     };
     const cached = await kv.get('f:' + ch.id);
     if (cached) draw(filterSec(cached)); else msg('Cargando…');

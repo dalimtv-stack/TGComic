@@ -71,7 +71,7 @@ export function sectionFromCaption(caption, parseComicCaption) {
       if (p.section || p.seccion) return String(p.section || p.seccion).trim();
     } catch (_) {}
   }
-  const m = raw.match(/^\s*Secci[oó]n\s*:\s*(.+)$/imu);
+  const m = raw.match(/^\s*Secci[oó]n\s*[:：]\s*(.+)$/imu);
   return m ? String(m[1] || '').trim() : '';
 }
 

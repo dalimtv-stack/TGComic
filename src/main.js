@@ -53,6 +53,7 @@ import { openPdfFromBytes, isPdfMagic } from './pdfPages.js';
 import {
   isMacroTelegramTitle,
   editorialFromMacroTitle,
+  isMacroLibEntry,
 } from './macro.js';
 
 const apiId = Number(import.meta.env.VITE_API_ID);
@@ -454,8 +455,11 @@ async function fetchFiles(ch, opts = {}) {
   const prevFlat = flattenVersions(Array.isArray(prev) ? prev : []);
   const prevById = new Map(prevFlat.map((x) => [String(x.id), x]));
 
-  // Atajo: si el documento más reciente no ha cambiado, reutilizar caché
-  if (!force && prevFlat.length) {
+  // Atajo: si el documento más reciente no ha cambiado, reutilizar caché.
+  // NUNCA en canales macro: la Sección vive en el caption; un EditMessage
+  // no cambia topDocId ni count y dejaría el cómic en «(Sin sección)» y/o
+  // en su sección según una caché vieja (un solo mensaje en Telegram).
+  if (!force && prevFlat.length && !isMacroLibEntry(ch)) {
     try {
       const meta = await getFilesMeta(ch.id);
       const top = await peekTopDocumentId(ch);

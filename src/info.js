@@ -768,11 +768,13 @@ async function updateTelegramCaption(ch, f, caption) {
     }
     if (changed) await kv.set('f:' + ch.id, files);
   } catch (_) {}
+  
   f.caption = String(caption || '');
-  // Caption con Sección → limpia override local residual
+  // Caption editado → invalidar meta del listado (el atajo topDocId/count no ve cambios solo de texto)
+  try { await kv.del('fmeta:' + String(ch.id)); } catch (_) {}
   try {
     const { setLocalSection, sectionFromCaption } = await import('./macro.js');
-    const sec = sectionFromCaption(caption || '');
+    const sec = sectionFromCaption(String(caption || ''));
     if (sec && ch?.id != null && f?.id != null) setLocalSection(ch.id, f.id, '');
   } catch (_) {}
 }
