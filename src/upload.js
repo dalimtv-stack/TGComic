@@ -7,7 +7,7 @@
 import * as zip from '@zip.js/zip.js';
 import { createExtractorFromData } from 'node-unrar-js';
 import rarWasm from 'node-unrar-js/esm/js/unrar.wasm?url';
-import { buildComicCaption, parseComicCaption } from './parse.js';
+import { buildComicCaption, parseComicCaption, isJunkArchivePath } from './parse.js';
 import {
   macroChannelTitle,
   dedicatedChannelTitle,
@@ -430,6 +430,7 @@ export function createUploadTool(d) {
         for (const e of entries) {
           if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
           if (e.directory) continue;
+          if (isJunkArchivePath(e.filename)) continue;
           const base = (e.filename || '').split(/[/\\]/).pop() || e.filename;
           if (!/\.(jpe?g|png|webp|gif|avif)$/i.test(base)) continue;
           let pageBlob = await e.getData(new zip.BlobWriter());
@@ -488,6 +489,7 @@ export function createUploadTool(d) {
         if (!x || !x.fileHeader) continue;
         const n = x.fileHeader.name || '';
         if (x.fileHeader.flags?.directory || !x.extraction) continue;
+        if (isJunkArchivePath(n)) continue;
         const base = n.split(/[/\\]/).pop() || n;
         if (!/\.(jpe?g|png|webp|gif|avif)$/i.test(base)) continue;
         const raw = x.extraction;

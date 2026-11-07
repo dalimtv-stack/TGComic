@@ -9,6 +9,7 @@ import * as sync from './sync.js';
 import { buildSearchIndex, filterSearchIndex } from './search.js';
 import {
   stripExt, clean, parseComicName, comicSourceName, comicTitleSource, issueDisplay, comicDisplay,
+  isJunkArchivePath,
   seriesBase, groupSeries, issueLabel, parseComicCaption, buildComicCaption,
 } from './parse.js';
 import {
@@ -113,10 +114,9 @@ const pagesOf = (entries) => {
   const list = [];
   for (const e of entries || []) {
     if (!e || e.directory) continue;
-    const raw = String(e.filename || '').replace(/\\/g, '/');
-    // Basura típica de ZIP / macOS
-    if (raw.includes('__MACOSX/') || /(^|\/)\._/.test(raw)) continue;
-    const base = raw.split('/').pop() || raw;
+    const raw = String(e.filename || '');
+    if (isJunkArchivePath(raw)) continue;
+    const base = raw.replace(/\\/g, '/').split('/').pop() || raw;
     if (!/\.(jpe?g|png|webp|gif|avif)$/i.test(base)) continue;
     list.push(e);
   }

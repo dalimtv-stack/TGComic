@@ -7,6 +7,21 @@ export const stripExt = (n) => n.replace(/\.cb[zr]$/i, '');
 
 // Nombre limpio: sin extensión, guiones bajos, etiquetas [..] (..) ni marcas @sitio
 export const clean = (n) => stripExt(n).replace(/_/g, ' ').replace(/\s*\[[^\]]*\]/g, '').replace(/\s*@\S+/g, '').replace(/\s+/g, ' ').trim();
+
+/** Rutas/nombres basura de ZIP/CBR (macOS, Windows) que no deben ser páginas. */
+export function isJunkArchivePath(filename) {
+  const raw = String(filename || '').replace(/\\/g, '/');
+  if (!raw) return true;
+  if (/__macosx/i.test(raw)) return true;
+  if (/(^|\/)\._/.test(raw)) return true;
+  const base = raw.split('/').pop() || raw;
+  if (/^\.DS_Store$/i.test(base)) return true;
+  if (/^Thumbs\.db$/i.test(base)) return true;
+  if (/^desktop\.ini$/i.test(base)) return true;
+  if (/^\.Spotlight-V100$/i.test(base)) return true;
+  if (/^\.Trashes$/i.test(base)) return true;
+  return false;
+}
 // Número al final (legado); admite sufijo de letra (07b, 1a)
 const NUM = /[\s._-]*(?:#|n[º°]\.?|no\.|vol\.?|cap\.?|issue|núm\.?|parte|part|tomo)?\s*\d+(?:\.\d+)?[a-zA-Z]?(?:\s*(?:de|of)\s*\d+)?\s*$/i;
 const FIRST_ISSUE = /^(.+?)[\s._-]+(?:#|n[º°]\.?|no\.?|vol\.?|cap\.?|issue|núm\.?)?\s*\d+(?:\.\d+)?[a-zA-Z]?(?:\b|$)/i;

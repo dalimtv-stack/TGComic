@@ -736,13 +736,45 @@ async function updateTelegramCaption(ch, f, caption) {
   }));
   try {
     const files = (await kv.get('f:' + ch.id)) || [];
-    const i = files.findIndex((x) => String(x.id) === String(f.id));
-    if (i >= 0) {
-      files[i] = { ...files[i], caption: String(caption || '') };
-      await kv.set('f:' + ch.id, files);
+    const cap = String(caption || '');
+    let changed = false;
+    const patch = (obj) => {
+      if (!obj) return;
+      if (String(obj.id) === String(f.id)) {
+        obj.caption = cap;
+        changed = true;
+      }
+      if (obj.variants && typeof obj.variants === 'object') {
+        for (const k of Object.keys(obj.variants)) {
+          const v = obj.variants[k];
+          if (v && String(v.id) === String(f.id)) {
+            obj.variants[k] = { ...v, caption: cap };
+            changed = true;
+          }
+        }
+      }
+    };
+    for (let i = 0; i < files.length; i++) {
+      const x = files[i];
+      if (String(x?.id) === String(f.id)) {
+        files[i] = { ...x, caption: cap };
+        changed = true;
+        // también variantes bajo este primario
+        if (files[i].variants) patch(files[i]);
+      } else {
+        patch(x);
+        files[i] = x;
+      }
     }
+    if (changed) await kv.set('f:' + ch.id, files);
   } catch (_) {}
   f.caption = String(caption || '');
+  // Caption con Sección → limpia override local residual
+  try {
+    const { setLocalSection, sectionFromCaption } = await import('./macro.js');
+    const sec = sectionFromCaption(caption || '');
+    if (sec && ch?.id != null && f?.id != null) setLocalSection(ch.id, f.id, '');
+  } catch (_) {}
 }
 
 /** Base de calidad (sin [WebP]/[2400px]/…]) para agrupar versiones del mismo cómic. */

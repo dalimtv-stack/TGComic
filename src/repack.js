@@ -29,6 +29,20 @@ export function createRepackTool(d) {
   let running = false;
   let abort = false;
 
+  /** Basura ZIP/macOS/Windows — no incluir como página */
+  function isJunkArchivePath(filename) {
+    const raw = String(filename || '').replace(/\\/g, '/');
+    if (!raw) return true;
+    if (/__macosx/i.test(raw)) return true;
+    if (/(^|\/)\._/.test(raw)) return true;
+    const base = raw.split('/').pop() || raw;
+    if (/^\.DS_Store$/i.test(base)) return true;
+    if (/^Thumbs\.db$/i.test(base)) return true;
+    if (/^desktop\.ini$/i.test(base)) return true;
+    return false;
+  }
+
+
   const isCbrName = (name) => /\.cbr$/i.test(name || '');
   const toCbzName = (name) => String(name || 'comic.cbr').replace(/\.cbr$/i, '.cbz');
   const yieldTick = () => new Promise((r) => setTimeout(r, 0));
@@ -396,6 +410,7 @@ export function createRepackTool(d) {
         if (abort) throw Object.assign(new Error('cancelado'), { cancelled: true });
         const n = x.fileHeader.name || '';
         if (x.fileHeader.flags.directory || !x.extraction) continue;
+        if (isJunkArchivePath(n)) continue;
         const base = n.split(/[/\\]/).pop() || n;
         if (!/\.(jpe?g|png|webp|gif|avif)$/i.test(base)) continue;
         const raw = x.extraction;
@@ -471,6 +486,7 @@ export function createRepackTool(d) {
           throw Object.assign(new Error('cancelado'), { cancelled: true });
         }
         if (e.directory) continue;
+        if (isJunkArchivePath(e.filename)) continue;
         const base = (e.filename || '').split(/[/\\]/).pop() || e.filename;
         if (!/\.(jpe?g|png|webp|gif|avif)$/i.test(base)) continue;
         const pageBlob = await e.getData(new zip.BlobWriter());

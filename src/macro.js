@@ -76,9 +76,25 @@ export function sectionFromCaption(caption, parseComicCaption) {
 }
 
 /** Secciones únicas presentes en los archivos de un canal macro */
+/** Aplana entradas con variants (WebP/IA) para no perder caption/sección de hijos. */
+function iterFileEntries(files) {
+  const out = [];
+  for (const f of files || []) {
+    if (!f) continue;
+    out.push(f);
+    const v = f.variants;
+    if (v && typeof v === 'object') {
+      for (const k of Object.keys(v)) {
+        if (v[k] && typeof v[k] === 'object') out.push(v[k]);
+      }
+    }
+  }
+  return out;
+}
+
 export function collectSectionsFromFiles(files, parseComicCaption, chId) {
   const map = new Map(); // key -> display name
-  for (const f of files || []) {
+  for (const f of iterFileEntries(files)) {
     let sec = sectionFromCaption(f?.caption || '', parseComicCaption);
     if (!sec && chId != null && f?.id != null) sec = getLocalSection(chId, f.id);
     if (!sec) continue;
@@ -117,9 +133,16 @@ export function setLocalSection(chId, msgId, section) {
 }
 /** Sección efectiva: caption Telegram, si no override local. */
 export function effectiveSection(ch, f, parseComicCaption) {
-  const fromCap = sectionFromCaption(f?.caption || '', parseComicCaption);
-  if (fromCap) return fromCap;
-  if (ch?.id != null && f?.id != null) return getLocalSection(ch.id, f.id);
+  const entries = (f && f.variants) ? iterFileEntries([f]) : [f];
+  for (const x of entries) {
+    if (!x) continue;
+    const fromCap = sectionFromCaption(x?.caption || '', parseComicCaption);
+    if (fromCap) return fromCap;
+    if (ch?.id != null && x?.id != null) {
+      const loc = getLocalSection(ch.id, x.id);
+      if (loc) return loc;
+    }
+  }
   return '';
 }
 
@@ -127,9 +150,13 @@ export function filesInSection(files, sectionLabel, parseComicCaption, chId) {
   const want = normalizeSectionKey(sectionLabel);
   if (!want) return [];
   return (files || []).filter((f) => {
-    let s = sectionFromCaption(f?.caption || '', parseComicCaption);
-    if (!s && chId != null && f?.id != null) s = getLocalSection(chId, f.id);
-    return normalizeSectionKey(s) === want;
+    // Sección efectiva del primario o de cualquier variant
+    const entries = iterFileEntries([f]);
+    return entries.some((x) => {
+      let s = sectionFromCaption(x?.caption || '', parseComicCaption);
+      if (!s && chId != null && x?.id != null) s = getLocalSection(chId, x.id);
+      return normalizeSectionKey(s) === want;
+    });
   });
 }
 
@@ -210,7 +237,7 @@ export function countNavChannels(lib, groupName, filesByChId = {}) {
       });
       n += secs.length;
       // huérfanos sin sección: cuentan como 1 tarjeta especial
-      const orphan = (files || []).some((f) => !sectionFromCaption(f?.caption || ''));
+      const orphan = (files || []).some((f) => !effectiveSection(ch, f));
       if (orphan) n += 1;
     } else {
       n += 1;
