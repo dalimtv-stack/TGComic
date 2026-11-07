@@ -491,6 +491,31 @@ async function fetchFiles(ch, opts = {}) {
   }
   out.sort((a, b) => natural(a.name, b.name));
 
+  // Macro: asegurar caption real (iterMessages a veces trae message vacío
+  // y entonces el cómic cae en «(Sin sección)» aunque en Telegram sí tenga Sección:).
+  if (isMacroLibEntry(ch) && out.length) {
+    try {
+      const peer = peerOf(ch);
+      for (let i = 0; i < out.length; i += 80) {
+        const chunk = out.slice(i, i + 80);
+        const ids = chunk.map((f) => Number(f.id));
+        const msgs = await client.getMessages(peer, { ids });
+        const byId = new Map();
+        for (const m of msgs || []) {
+          if (m && m.id != null) byId.set(Number(m.id), m);
+        }
+        for (const f of chunk) {
+          const m = byId.get(Number(f.id));
+          if (!m) continue;
+          const cap = String(m.message || '').trim();
+          if (cap) f.caption = cap;
+        }
+      }
+    } catch (e) {
+      console.warn('[fetchFiles] caption reconcile macro', e);
+    }
+  }
+
   // Archivo editado en Telegram (mismo id, otro tamaño/nombre): invalidar cachés
   for (const f of out) {
     const old = prevById.get(String(f.id));

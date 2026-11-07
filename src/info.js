@@ -729,11 +729,17 @@ async function updateTelegramCaption(ch, f, caption) {
   const client = getClient();
   if (!client) throw new Error('Cliente Telegram no listo');
   const peer = peerOf(ch);
-  await client.invoke(new Api.messages.EditMessage({
-    peer,
-    id: Number(f.id),
-    message: String(caption || ''),
-  }));
+  try {
+    await client.invoke(new Api.messages.EditMessage({
+      peer,
+      id: Number(f.id),
+      message: String(caption || ''),
+    }));
+  } catch (e) {
+    // Mismo texto que ya tiene el mensaje → no es error (Telegram no modifica nada)
+    const em = String(e?.errorMessage || e?.message || e || '');
+    if (!/MESSAGE_NOT_MODIFIED/i.test(em)) throw e;
+  }
   try {
     const files = (await kv.get('f:' + ch.id)) || [];
     const cap = String(caption || '');

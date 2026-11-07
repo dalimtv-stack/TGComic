@@ -65,14 +65,23 @@ export function normalizeSectionKey(s) {
  */
 export function sectionFromCaption(caption, parseComicCaption) {
   const raw = String(caption || '');
+  if (!raw.trim()) return '';
+  // 1) Línea Sección / Seccion / Section (prioridad: enrutado macro)
+  const m = raw.match(/^\s*Secci(?:o|ó)n\s*[:：]\s*(.+?)\s*$/imu)
+    || raw.match(/^\s*Section\s*[:：]\s*(.+?)\s*$/imu);
+  if (m) {
+    const s = String(m[1] || '').trim();
+    if (s) return s;
+  }
+  // 2) parseComicCaption por si viene en otro formato
   if (typeof parseComicCaption === 'function') {
     try {
       const p = parseComicCaption(raw) || {};
-      if (p.section || p.seccion) return String(p.section || p.seccion).trim();
+      const s = String(p.section || p.seccion || '').trim();
+      if (s) return s;
     } catch (_) {}
   }
-  const m = raw.match(/^\s*Secci[oó]n\s*[:：]\s*(.+)$/imu);
-  return m ? String(m[1] || '').trim() : '';
+  return '';
 }
 
 /** Secciones únicas presentes en los archivos de un canal macro */

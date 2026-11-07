@@ -151,7 +151,20 @@ export function collapseVersions(files, nameOf = sourceNameOf) {
     let g = groups.get(key);
     if (!g) { g = { pos: order.length, slots: {}, ai: [] }; groups.set(key, g); order.push(g); }
     if (ai) { g.ai.push(f); continue; } // versiones [Mejora-IA]: no se listan, se eligen en el visor
-    if (g.slots[q]) { extra.push({ pos: g.pos, f }); continue; }
+    if (g.slots[q]) {
+      // Mismo cómic/calidad: quedarnos con el que tenga más caption (Sección:/ficha).
+      // No listar el otro como entrada suelta (evita el mismo título en dos sitios).
+      const prev = g.slots[q];
+      const score = (x) => {
+        const c = String(x?.caption || '');
+        if (!c) return 0;
+        let s = 1;
+        if (/Secci(?:o|ó)n\s*[:：]/i.test(c)) s += 3;
+        return s;
+      };
+      if (score(f) > score(prev)) g.slots[q] = f;
+      continue;
+    }
     g.slots[q] = f;
   }
   const out = [];

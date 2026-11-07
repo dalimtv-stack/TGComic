@@ -1546,19 +1546,16 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
         if (typeof updateTelegramCaption !== 'function') {
           throw new Error('No se puede editar el caption');
         }
-        let newCap = String(f.caption || '');
-        if (typeof parseComicCaption === 'function' && typeof buildComicCaption === 'function') {
-          try {
-            const fields = parseComicCaption(newCap) || {};
-            fields.section = chosen;
-            newCap = buildComicCaption(fields);
-          } catch (_) {
-            newCap = withSectionInCaption(newCap, chosen);
-          }
-        } else {
-          newCap = withSectionInCaption(newCap, chosen);
+        // Solo tocar la línea Sección: (no reconstruir todo el caption → evita
+        // MESSAGE_NOT_MODIFIED por reordenación y pérdida de campos).
+        let newCap = withSectionInCaption(String(f.caption || ''), chosen);
+        try {
+          await updateTelegramCaption(ch, f, newCap);
+        } catch (e) {
+          const em = String(e?.errorMessage || e?.message || e || '');
+          if (!/MESSAGE_NOT_MODIFIED/i.test(em)) throw e;
+          // Ya era el mismo caption en Telegram: éxito
         }
-        await updateTelegramCaption(ch, f, newCap);
         try {
           const all = (await kv.get('f:' + ch.id)) || [];
           const next = (all || []).map((x) => String(x.id) === String(f.id) ? { ...x, caption: newCap } : x);
