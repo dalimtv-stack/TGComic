@@ -702,25 +702,43 @@ if (!homeRefreshBtn) {
   else if (topEl) topEl.insertBefore(homeRefreshBtn, topEl.firstChild);
 }
 homeRefreshBtn.hidden = true;
-homeRefreshBtn.onclick = async () => {
+homeRefreshBtn.title = 'Actualizar canales y listados (Mayús+clic = forzar todo)';
+homeRefreshBtn.setAttribute('aria-label', 'Actualizar canales y listados de cómics');
+homeRefreshBtn.onclick = async (ev) => {
   if (homeRefreshBtn.dataset.busy === '1') return;
+  // PC: Mayús o Alt + clic = forzar relectura completa (sin atajo topDocId)
+  const force = !!(ev && (ev.shiftKey || ev.altKey));
   homeRefreshBtn.dataset.busy = '1';
   homeRefreshBtn.disabled = true;
   const prevTitle = titleEl.textContent;
   try {
-    titleEl.textContent = 'Actualizando…';
-    const lib = Array.isArray(LIB) ? LIB.slice() : [];
+    // 1) Redesubrir canales (macros/nuevos) — sin esto un canal Telegram nuevo no existe en LIB
+    titleEl.textContent = force ? 'Forzando… canales' : 'Actualizando… canales';
+    let lib = [];
+    try {
+      lib = await refreshLibrary();
+      LIB = Array.isArray(lib) ? lib : [];
+    } catch (e) {
+      console.warn('[refresh] library', e);
+      lib = Array.isArray(LIB) ? LIB.slice() : [];
+    }
+    if (!lib.length) {
+      titleEl.textContent = prevTitle || 'TGComics';
+      await appAlert('No se encontraron canales de biblioteca (::tgstorage).', 'Actualizar');
+      return;
+    }
+    // 2) Listados de documentos de cada canal
     let done = 0;
     let skipped = 0;
-    // Varios canales a la vez (Telegram tolera ~3–4 bien desde cliente web)
     const CONCURRENCY = 3;
     await mapLimit(lib, CONCURRENCY, async (ch) => {
       try {
-        const before = await getFilesMeta(ch.id);
-        const list = await fetchFiles(ch); // usa atajo por topDocId si no hay cambios
+        const before = force ? null : await getFilesMeta(ch.id);
+        await fetchFiles(ch, { force: !!force });
         const after = await getFilesMeta(ch.id);
         if (
-          before
+          !force
+          && before
           && after
           && Number(before.topDocId) === Number(after.topDocId)
           && Number(before.count) === Number(after.count)
@@ -735,9 +753,10 @@ homeRefreshBtn.onclick = async () => {
       } finally {
         done++;
         try {
+          const tag = force ? 'Forzando' : 'Actualizando';
           titleEl.textContent = skipped
-            ? `Actualizando… ${done}/${lib.length} (${skipped} sin cambios)`
-            : `Actualizando… ${done}/${lib.length}`;
+            ? `${tag}… ${done}/${lib.length} (${skipped} sin cambios)`
+            : `${tag}… ${done}/${lib.length}`;
         } catch (_) {}
       }
     });
@@ -750,39 +769,13 @@ homeRefreshBtn.onclick = async () => {
   try { refreshView(); } catch (_) { try { groupsView(); } catch (_) {} }
 };
 
-// Pulsación larga en actualizar = forzar relectura completa de todos los canales
+// Móvil: pulsación larga = forzar (equivalente a Mayús+clic en PC)
 try {
   if (typeof bindLongPress === 'function') {
     bindLongPress(homeRefreshBtn, async () => {
       if (homeRefreshBtn.dataset.busy === '1') return;
-      const ok = await appConfirm(
-        '¿Forzar actualización completa de todos los canales?\n\nIgnora la detección de “sin cambios” (más lento, útil si editaste captions).',
-        'Actualización forzada'
-      );
-      if (!ok) return;
-      homeRefreshBtn.dataset.busy = '1';
-      homeRefreshBtn.disabled = true;
-      const prevTitle = titleEl.textContent;
-      try {
-        const lib = Array.isArray(LIB) ? LIB.slice() : [];
-        let done = 0;
-        await mapLimit(lib, 3, async (ch) => {
-          try {
-            await fetchFiles(ch, { force: true });
-          } catch (e) {
-            console.warn('[refresh-force]', ch?.name, e);
-          } finally {
-            done++;
-            try { titleEl.textContent = `Forzando… ${done}/${lib.length}`; } catch (_) {}
-          }
-        });
-        try { searchIndex = null; } catch (_) {}
-      } finally {
-        homeRefreshBtn.dataset.busy = '0';
-        homeRefreshBtn.disabled = false;
-        titleEl.textContent = prevTitle || 'TGComics';
-      }
-      try { refreshView(); } catch (_) { try { groupsView(); } catch (_) {} }
+      // Simular clic forzado
+      homeRefreshBtn.onclick({ shiftKey: true });
     });
   }
 } catch (_) {}
