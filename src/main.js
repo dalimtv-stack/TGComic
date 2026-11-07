@@ -2414,9 +2414,13 @@ const repackTool = createRepackTool({
       const title = String(top?.title || '').toLowerCase();
       const chName = String(ch?.name || '').toLowerCase();
       const group = String(ch?.group || '').toLowerCase();
+      const sec = String(meta?.section || '').trim().toLowerCase();
       const affects =
         (chName && title && (title === chName || title.includes(chName) || chName.includes(title)))
-        || (group && title && (title === group || title.includes(group)));
+        || (group && title && (title === group || title.includes(group)))
+        // Vista de sección (título = nombre de sección, canal Telegram = macro)
+        || (sec && title && (title === sec || title.includes(sec) || sec.includes(title)))
+        || (title === '(sin sección)');
       if (!affects) return;
       top.scrollY = window.scrollY || 0;
       refreshView();

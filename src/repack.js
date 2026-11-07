@@ -2,7 +2,7 @@
  * Herramienta: convertir CBR → CBZ y re-subir (también mensajes reenviados).
  * Móvil: poca RAM, un archivo a la vez, liberar buffers.
  */
-import { isMacroLibEntry, sectionFromCaption, withSectionInCaption, withFileNameInCaption } from './macro.js';
+import { isMacroLibEntry, sectionFromCaption, withSectionInCaption, withFileNameInCaption, collectSectionsFromFiles, normalizeSectionKey } from './macro.js';
 import * as zip from '@zip.js/zip.js';
 import { fitTelegramCaption } from './caption.js';
 import { withQualityTags, existingCopy, flattenVersions, sourceNameOf, parseQuality, QUALITY_LABEL } from './quality.js';
@@ -991,7 +991,13 @@ export function createRepackTool(d) {
       try { await fetchFiles(ch); } catch (_) {}
       try {
         if (typeof onUploadDone === 'function') {
-          await onUploadDone(ch, { outName: uploaded[0] || outName, outNames: uploaded.slice() });
+          const secMeta = sectionFromCaption(String(caption || item.f?.caption || ''), parseComicCaption) || '';
+          await onUploadDone(ch, {
+            outName: uploaded[0] || outName,
+            outNames: uploaded.slice(),
+            section: secMeta || undefined,
+            replaced: true,
+          });
         }
       } catch (e) {
         console.warn('[repack] onUploadDone', e);
@@ -1512,7 +1518,7 @@ export function createRepackTool(d) {
     const NO_SERIES = '\u0000none';
     const rebuildSeries = () => {
       const g = edSel.value;
-      const cid = chSel.value;
+      const { chId: cid, section: secFilter } = parseChSel();
       seSel.replaceChildren();
       const oAll = el('option');
       oAll.value = '';
@@ -1527,6 +1533,12 @@ export function createRepackTool(d) {
       let none = false;
       for (const x of allCandidates) {
         if ((x.ch.group || 'Sin editorial') !== g || String(x.ch.id) !== cid) continue;
+        if (secFilter !== null) {
+          const sec = sectionFromCaption(String(x.f?.caption || ''), parseComicCaption) || '';
+          const k = normalizeSectionKey(sec);
+          if (secFilter === '') { if (k) continue; }
+          else if (k !== secFilter) continue;
+        }
         if (x.series) set.add(x.series); else none = true;
       }
       for (const sName of [...set].sort((a, b) => String(a).localeCompare(String(b)))) {
@@ -1559,15 +1571,65 @@ export function createRepackTool(d) {
         chLab.hidden = true;
         return;
       }
-      const chs = [...new Map(
-        allCandidates
-          .filter((x) => (x.ch.group || 'Sin editorial') === g)
-          .map((x) => [String(x.ch.id), x.ch])
-      ).values()].sort((a, b) => String(a.name).localeCompare(String(b.name)));
-      for (const c of chs) {
+      const inGroup = allCandidates.filter((x) => (x.ch.group || 'Sin editorial') === g);
+      const byId = new Map();
+      for (const x of inGroup) {
+        const id = String(x.ch.id);
+        if (!byId.has(id)) byId.set(id, x.ch);
+      }
+      const options = [];
+      for (const c of byId.values()) {
+        if (isMacroLibEntry(c)) {
+          // Secciones vistas en candidatos de este macro (canal virtual)
+          const secMap = new Map();
+          for (const x of inGroup) {
+            if (String(x.ch.id) !== String(c.id)) continue;
+            const sec = sectionFromCaption(String(x.f?.caption || ''), parseComicCaption)
+              || sectionFromCaption(String(x.caption || ''), parseComicCaption)
+              || '';
+            const label = String(sec || '').trim();
+            if (!label) continue;
+            const k = normalizeSectionKey(label);
+            if (!secMap.has(k)) secMap.set(k, label);
+          }
+          for (const label of [...secMap.values()].sort((a, b) => String(a).localeCompare(String(b)))) {
+            options.push({
+              value: 'sec:' + c.id + ':' + normalizeSectionKey(label),
+              text: label,
+              chId: String(c.id),
+              section: label,
+            });
+          }
+          // Candidatos del macro sin Sección
+          const hasOrphan = inGroup.some((x) => {
+            if (String(x.ch.id) !== String(c.id)) return false;
+            const sec = sectionFromCaption(String(x.f?.caption || ''), parseComicCaption);
+            return !String(sec || '').trim();
+          });
+          if (hasOrphan) {
+            options.push({
+              value: 'sec:' + c.id + ':',
+              text: '(Sin sección)',
+              chId: String(c.id),
+              section: '',
+            });
+          }
+        } else {
+          options.push({
+            value: String(c.id),
+            text: c.name,
+            chId: String(c.id),
+            section: null,
+          });
+        }
+      }
+      options.sort((a, b) => String(a.text).localeCompare(String(b.text)));
+      for (const opt of options) {
         const o = el('option');
-        o.value = String(c.id);
-        o.textContent = c.name;
+        o.value = opt.value;
+        o.textContent = opt.text;
+        o._chId = opt.chId;
+        o._section = opt.section;
         chSel.append(o);
       }
       chSel.value = '';
@@ -1575,12 +1637,34 @@ export function createRepackTool(d) {
       chLab.hidden = false;
     };
 
+    /** Parsea valor del select de canal: id real o sec:id:sectionKey */
+    const parseChSel = () => {
+      const v = chSel.value || '';
+      if (!v) return { chId: '', section: null };
+      if (v.startsWith('sec:')) {
+        const rest = v.slice(4);
+        const i = rest.indexOf(':');
+        if (i < 0) return { chId: rest, section: '' };
+        return { chId: rest.slice(0, i), section: rest.slice(i + 1) };
+      }
+      return { chId: v, section: null };
+    };
+
     const applyFilter = () => {
       const g = edSel.value;
-      const cid = chSel.value;
+      const { chId: cid, section: secFilter } = parseChSel();
       candidates = allCandidates.filter((x) => {
         if (g && (x.ch.group || 'Sin editorial') !== g) return false;
         if (cid && String(x.ch.id) !== cid) return false;
+        if (secFilter !== null) {
+          const sec = sectionFromCaption(String(x.f?.caption || ''), parseComicCaption)
+            || sectionFromCaption(String(x.caption || ''), parseComicCaption)
+            || '';
+          const k = normalizeSectionKey(sec);
+          if (secFilter === '') {
+            if (k) return false;
+          } else if (k !== secFilter) return false;
+        }
         const sv = seSel.value;
         if (sv === NO_SERIES) { if (x.series) return false; }
         else if (sv && x.series !== sv) return false;
