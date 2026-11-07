@@ -2276,7 +2276,7 @@ const viewsApi = createViews({
   showCoverFitEditor, showPickCoverFromComic, getCoverFit,
   getContinueList, readProgress, isComicRead, markComicRead, markComicUnread,
   markSeriesRead, markSeriesUnread, getPageIndex, getPagesTotal,
-  ungroupMap, setUngroupMode, getComicSeriesOverride,
+  ungroupMap, setUngroupMode, getComicSeriesOverride, setComicSeries,
   firstAvailableCover, kv, natural,
   pref, setPref,
   appAlert, appConfirm, appPrompt,

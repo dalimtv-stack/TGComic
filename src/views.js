@@ -41,7 +41,7 @@ export function createViews(d) {
     showGroupInfo, showEditGroup, showChannelInfo, showEditChannel,
     showSeriesInfo, showEditSeries, showEditSeriesName, showSeriesCoverPicker, showSeriesBulkCaptionEditor, showSeriesCvFillForm, comicNeedsCvFill, showComicInfo, showEditComicTitle,
     showCoverFitEditor, showPickCoverFromComic, getCoverFit,
-    ungroupMap, setUngroupMode, getComicSeriesOverride,
+    ungroupMap, setUngroupMode, getComicSeriesOverride, setComicSeries,
     firstAvailableCover, kv, natural,
     pref, setPref,
     appAlert, appConfirm, appPrompt,
@@ -1021,6 +1021,138 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
   }
 
 
+
+  /** Tras fallar caption: guardar sección en local e indicar serie (opcional). */
+  function showLocalSectionWithSeries(ch, f, sectionName, fileName, label, redraw) {
+    document.querySelector('.info-frame.local-section-series')?.remove();
+    const frame = el('div', 'info-frame local-section-series');
+    const box = el('div', 'info-box');
+    const head = el('div', 'info-head');
+    head.append(el('span', '', 'Guardar sección en local'));
+    const close = el('button', 'btn info-close', '×');
+    close.onclick = () => frame.remove();
+    head.append(close);
+    const body = el('div', 'info-body');
+    body.append(el('p', 'cover-pick-hint',
+      'La sección se guarda solo en este dispositivo. El caption de Telegram no cambia. '
+      + 'Opcionalmente indica a qué serie pertenece este cómic.'
+    ));
+    body.append(el('div', 'sync-label', 'Sección'));
+    const secInp = el('input', 'edit-input');
+    secInp.type = 'text';
+    secInp.value = String(sectionName || '').trim();
+    secInp.autocomplete = 'off';
+    body.append(secInp);
+
+    body.append(el('div', 'sync-label', 'Serie (opcional)'));
+    const seriesSel = el('select', 'edit-input series-select');
+    const seriesOther = el('input', 'edit-input');
+    seriesOther.type = 'text';
+    seriesOther.placeholder = 'Nombre de la serie';
+    seriesOther.autocomplete = 'off';
+    seriesOther.hidden = true;
+    body.append(seriesSel, seriesOther);
+
+    (async () => {
+      try {
+        let files = [];
+        try { files = (await kv.get('f:' + ch.id)) || []; } catch (_) {}
+        const labels = new Set();
+        try {
+          const groups = groupSeries(files, ch.name, seriesOverrideFor?.(ch));
+          for (const g of groups || []) {
+            if (g?.label) labels.add(String(g.label));
+          }
+        } catch (_) {}
+        seriesSel.replaceChildren();
+        const o0 = el('option');
+        o0.value = '';
+        o0.textContent = '— Sin forzar serie —';
+        seriesSel.append(o0);
+        let cur = '';
+        try {
+          if (typeof getComicSeriesOverride === 'function') {
+            cur = String(getComicSeriesOverride(ch, f) || '').trim();
+          }
+        } catch (_) {}
+        if (!cur) {
+          try {
+            const p = parseComicName?.(comicSourceName?.(f) || f?.name || '', ch?.name);
+            if (p?.series) cur = String(p.series).trim();
+          } catch (_) {}
+        }
+        for (const lab of [...labels].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))) {
+          const o = el('option');
+          o.value = lab;
+          o.textContent = lab;
+          seriesSel.append(o);
+        }
+        const oNew = el('option');
+        oNew.value = '__other__';
+        oNew.textContent = 'Otra…';
+        seriesSel.append(oNew);
+        if (cur && [...labels].some((x) => x.toLowerCase() === cur.toLowerCase())) {
+          seriesSel.value = [...labels].find((x) => x.toLowerCase() === cur.toLowerCase());
+        } else if (cur) {
+          seriesSel.value = '__other__';
+          seriesOther.hidden = false;
+          seriesOther.value = cur;
+        }
+      } catch (_) {}
+    })();
+    seriesSel.onchange = () => {
+      seriesOther.hidden = seriesSel.value !== '__other__';
+      if (seriesSel.value !== '__other__') seriesOther.value = '';
+    };
+
+    if (fileName) {
+      body.append(el('div', 'sync-label', 'Nombre de archivo (anotación local)'));
+      const fnHint = el('p', 'cover-pick-hint upload-preview', String(fileName));
+      body.append(fnHint);
+    }
+
+    const actions = el('div', 'edit-actions');
+    const cancel = el('button', 'btn', 'Cancelar');
+    cancel.onclick = () => frame.remove();
+    const save = el('button', 'btn edit-save', 'Guardar en local');
+    save.onclick = async () => {
+      const sec = String(secInp.value || '').trim();
+      if (!sec) {
+        await appAlert('Indica el nombre de la sección');
+        return;
+      }
+      try {
+        setLocalSection(ch.id, f.id, sec);
+        const ser = seriesSel.value === '__other__'
+          ? String(seriesOther.value || '').trim()
+          : String(seriesSel.value || '').trim();
+        if (ser && typeof setComicSeries === 'function') {
+          await new Promise((resolve) => {
+            try { setComicSeries(ch, f, ser, resolve); }
+            catch (_) { resolve(); }
+          });
+        }
+        frame.remove();
+        try { redraw?.(); } catch (_) {}
+        try { window.dispatchEvent(new CustomEvent('tgcomic:changed', { detail: { chId: ch.id, kind: 'section-local' } })); } catch (_) {}
+        await appAlert(
+          'Guardado en este dispositivo:\\nSección: «' + sec + '»'
+          + (ser ? ('\\nSerie: «' + ser + '»') : '')
+          + '\\n\\nEl caption de Telegram no se ha modificado.',
+          'Sección'
+        );
+      } catch (err) {
+        await appAlert('Error: ' + (err?.message || err));
+      }
+    };
+    actions.append(cancel, save);
+    body.append(actions);
+    box.append(head, body);
+    frame.append(box);
+    document.body.append(frame);
+    setTimeout(() => { secInp.focus(); }, 50);
+  }
+
   /** Asignar sección + confirmar Nombre de archivo (caption / local / recarga). */
   function showAssignSectionForm(ch, f, label, redraw, mode = 'caption') {
     // mode: 'caption' | 'local' | 'reload'
@@ -1236,21 +1368,46 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
         await appAlert('Caption actualizado:\nSección: «' + chosen + '»\nNombre de archivo: «' + fileName + '»', 'Sección');
       } catch (e) {
         goBtn.disabled = false;
-        // Fallback: guardar sección en local y avisar
-        try {
-          setLocalSection(ch.id, f.id, chosen);
-          frame.remove();
-          try { redraw?.(); } catch (_) {}
-          await appAlert(
-            'Telegram no permitió editar el caption (' + (e?.message || e) + ').\n'
-            + 'Sección «' + chosen + '» guardada solo en este dispositivo.\n\n'
-            + 'Usa «Recargar externo» para subir una copia con Sección: en el caption.',
-            'Sección'
+        // Telegram no deja editar (reenvío, etc.): no guardar aún; ofrecer 3 caminos
+        const errMsg = String(e?.message || e || 'error');
+        frame.remove();
+        const openChoice = () => {
+          sheet(
+            'No se pudo editar el caption',
+            [
+              ['Guardar sección en local', () => showLocalSectionWithSeries(ch, f, chosen, fileName, label, redraw)],
+              ['Recarga externo', () => {
+                try {
+                  const rt = typeof d.repackTool === 'function' ? d.repackTool() : d.repackTool;
+                  if (rt && typeof rt.offerReloadExternal === 'function') {
+                    rt.offerReloadExternal(ch, f, { section: chosen, deleteOriginal: true });
+                  } else {
+                    showAssignSectionForm(ch, f, label, redraw, 'reload');
+                  }
+                } catch (err) {
+                  appAlert(err?.message || err);
+                }
+              }],
+            ],
+            {
+              cancelLabel: 'Cancelar',
+              onCancel: () => {
+                // No guarda nada → sigue en (Sin sección)
+              },
+            }
           );
-        } catch (e2) {
-          goBtn.disabled = false;
-          await appAlert('No se pudo guardar: ' + (e?.message || e));
-        }
+        };
+        await appAlert(
+          'Telegram no permitió editar el caption de este mensaje'
+          + (f?.forwarded ? ' (suele pasar con reenvíos)' : '')
+          + '.\n\n'
+          + 'Detalle: ' + errMsg + '\n\n'
+          + '• Cancelar — no se guarda nada; el cómic sigue en (Sin sección).\n'
+          + '• Guardar sección en local — solo en este dispositivo; podrás indicar la serie.\n'
+          + '• Recarga externo — sube una copia nueva ya con Sección: «' + chosen + '» en el caption.',
+          'Sección'
+        );
+        openChoice();
       }
     };
     actions.append(cancel, goBtn);
