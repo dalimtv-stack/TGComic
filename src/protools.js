@@ -1592,7 +1592,7 @@ export function createProTools(d) {
     body.append(resetReadBtn);
 
     const actions = el('div', 'edit-actions');
-    const cancel = el('button', 'btn', 'Cerrar');
+    const cancel = el('button', 'btn', 'Volver');
     cancel.onclick = () => frame.remove();
     actions.append(cancel);
     body.append(actions);
