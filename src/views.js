@@ -1966,18 +1966,20 @@ function cardNode(i) {
     return c;
   }
   const name = el('div', 'name');
-  // Series con ":": <br> real. -webkit-line-clamp ignora saltos de texto (Vol.7: Rebirth no partía).
+  // Series con ":": dos líneas fijas (antes/después de ":").
+  // No usar solo <br>+line-clamp: "Supergirl Vol.7:" se partía en "Supergirl" / "Vol.7:".
   const t = el('b', '');
-  const rawLab = String(i.label || '').replace(/\n/g, ' ').replace(/\u200B/g, '');
+  const rawLab = String(i.label || '').replace(/\n/g, ' ').replace(/\u200B/g, '').trim();
   if (i.kind === 'series') {
     const ci = rawLab.indexOf(':');
     if (ci >= 0) {
       const left = rawLab.slice(0, ci + 1).replace(/\s+$/, '');
       const right = rawLab.slice(ci + 1).replace(/^\s+/, '');
       if (right) {
-        t.append(document.createTextNode(left));
-        t.append(el('br'));
-        t.append(document.createTextNode(right));
+        t.classList.add('series-title-split');
+        const l1 = el('span', 'series-title-l1', left);
+        const l2 = el('span', 'series-title-l2', right);
+        t.append(l1, l2);
       } else {
         t.textContent = rawLab;
       }
