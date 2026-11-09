@@ -55,8 +55,43 @@ export function createViews(d) {
 
   /** Un mensaje Telegram = una entrada (evita el mismo cómic dos veces en series). */
   /** Fuerza oportunidad de salto de línea justo después de ":" en títulos. */
+  
+  /** Dentro de una serie: etiqueta corta (#n - info), sin repetir el nombre de la serie. */
+  function comicLabelInSeries(ch, f, seriesKey) {
+    const s = String(seriesKey || '').trim();
+    const sDisp = (typeof seriesDisplayName === 'function' ? seriesDisplayName(ch, s) : s) || s;
+    const src = comicSourceName(f);
+    let base = '';
+    try {
+      const p = parseComicName(src, ch.name);
+      if (p) base = issueDisplay(p) || '';
+    } catch (_) {}
+    if (!base) {
+      try { base = issueLabel(s, f, ch.name) || ''; } catch (_) {}
+    }
+    if (!base) {
+      try { base = comicDisplay(src, ch.name) || clean(src); } catch (_) { base = String(f?.name || ''); }
+    }
+    // Quitar prefijo de serie si aún viene delante (override de nombre de serie, etc.)
+    const stripPref = (label, pref) => {
+      const L = String(label || '');
+      const P = String(pref || '').trim();
+      if (!P || !L) return L;
+      if (L.toLowerCase().startsWith(P.toLowerCase())) {
+        let r = L.slice(P.length).replace(/^[\s._:\-–—]+/, '');
+        if (/^\d/.test(r)) r = '#' + r;
+        return r || L;
+      }
+      return L;
+    };
+    base = stripPref(base, sDisp);
+    base = stripPref(base, s);
+    return base || String(f?.name || '');
+  }
+
   function softBreakAfterColon(s) {
-    return String(s || '').replace(/:\s*/g, ':​');
+    // Oportunidad de salto JUSTO DESPUÉS de ":" (p. ej. "Serie: subtítulo").
+    return String(s || '').replace(/\s*:\s*/g, ':' + String.fromCharCode(0x200B) + ' ');
   }
 
   function dedupeFilesById(files) {
@@ -254,10 +289,7 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
     const items = (fs || []).map((f) => {
       let label = '';
       try {
-        const p = parseComicName(comicSourceName(f), ch.name);
-        const baseLabel = (p && String(p.series || '').toLowerCase() === String(s).toLowerCase())
-          ? issueDisplay(p)
-          : issueLabel(s, f, ch.name);
+        const baseLabel = comicLabelInSeries(ch, f, s);
         label = comicDisplayName(ch, f, baseLabel);
       } catch (_) { label = String(f?.name || ''); }
       return { _f: f, _sortId: String(f.id), _sortDate: captionDateOf(f), label };
@@ -3184,7 +3216,9 @@ function filesView(ch, opts = {}) {
           const hasSeriesName = !!(ov || p?.series);
           items.push(makeComicItem(
             f,
-            comicDisplay(comicSourceName(f), ch.name),
+            hasSeriesName
+              ? comicLabelInSeries(ch, f, soloSeries)
+              : comicDisplay(comicSourceName(f), ch.name),
             hasSeriesName ? soloSeries : null,
             hasSeriesName ? 'grouped' : null
           ));
@@ -3404,10 +3438,7 @@ function seriesView(ch, s0, files, scope = {}) {
       const seriesUnread = fs.some((x) => !isComicRead(ch.id, x.id));
       let seriesQueue = fs;
       const items = fs.map((f) => {
-        const p = parseComicName(comicSourceName(f), ch.name);
-        const baseLabel = (p && String(p.series || '').toLowerCase() === String(s).toLowerCase())
-          ? issueDisplay(p)
-          : issueLabel(s, f, ch.name);
+        const baseLabel = comicLabelInSeries(ch, f, s);
         const displayLabel = comicDisplayName(ch, f, baseLabel);
         const unread = !isComicRead(ch.id, f.id);
         const seriesRedraw = () => {
