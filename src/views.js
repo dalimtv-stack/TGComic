@@ -54,6 +54,11 @@ export function createViews(d) {
   } = d;
 
   /** Un mensaje Telegram = una entrada (evita el mismo cómic dos veces en series). */
+  /** Fuerza oportunidad de salto de línea justo después de ":" en títulos. */
+  function softBreakAfterColon(s) {
+    return String(s || '').replace(/:\s*/g, ':​');
+  }
+
   function dedupeFilesById(files) {
     const seen = new Set();
     return (files || []).filter((f) => {
@@ -3215,7 +3220,7 @@ function filesView(ch, opts = {}) {
             kind: 'series',
             _sortId: 'series:' + String(seriesLabel),
             _sortDate: seriesDate,
-            label: seriesRestricted ? '' : seriesShown,
+            label: seriesRestricted ? '' : softBreakAfterColon(seriesShown),
             sub: `${fs.length} números`,
             searchText: seriesSearch,
             isUnread: seriesUnread,
