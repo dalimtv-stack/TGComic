@@ -1647,16 +1647,3 @@ html:has(.sf-root){
 .rd-auto-cfg-box .rd-era-row input {
   accent-color: #2563eb;
 }
-
-
-/* Tras ":" preferir salto de línea (títulos de serie largos) */
-.card b.title-break-colon,
-.name.title-break-colon,
-.card .name.title-break-colon {
-  white-space: normal;
-  overflow: visible;
-  text-overflow: unset;
-  overflow-wrap: anywhere;
-  word-break: normal;
-  line-height: 1.2;
-}
