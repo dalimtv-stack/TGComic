@@ -118,19 +118,26 @@ const pagesOf = (entries) => {
     if (!e || e.directory) continue;
     const raw = String(e.filename || '');
     if (isJunkArchivePath(raw)) continue;
-    const base = raw.replace(/\\/g, '/').split('/').pop() || raw;
+    const norm = raw.replace(/\\/g, '/');
+    const base = norm.split('/').pop() || norm;
     if (!/\.(jpe?g|png|webp|gif|avif)$/i.test(base)) continue;
     list.push(e);
   }
-  // Misma página dos veces (ruta distinta o entrada duplicada en el ZIP) → una sola
+  // Misma página duplicada (p.ej. 001.jpg + 001.png en LA MISMA carpeta) → la de más bytes.
+  // NO usar solo el nombre de archivo: muchos CBZ tienen 001.jpg en carpetas distintas
+  // (o el mismo leaf en varias rutas) y se quedaban en 1 página / pantalla negra.
   const best = new Map();
   for (const e of list) {
-    const base = String(e.filename || '').replace(/\\/g, '/').split('/').pop().toLowerCase();
+    const norm = String(e.filename || '').replace(/\\/g, '/');
+    const base = norm.split('/').pop() || norm;
+    const stem = base.replace(/\.[^.]+$/i, '').toLowerCase();
+    const dir = norm.includes('/') ? norm.slice(0, norm.lastIndexOf('/') + 1).toLowerCase() : '';
+    const key = dir + stem;
     const sz = Number(e.uncompressedSize || e.compressedSize || 0);
-    const prev = best.get(base);
-    if (!prev) { best.set(base, e); continue; }
+    const prev = best.get(key);
+    if (!prev) { best.set(key, e); continue; }
     const prevSz = Number(prev.uncompressedSize || prev.compressedSize || 0);
-    if (sz >= prevSz) best.set(base, e);
+    if (sz >= prevSz) best.set(key, e);
   }
   return [...best.values()].sort((a, b) => natural(a.filename, b.filename));
 };
