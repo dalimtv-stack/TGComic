@@ -1651,11 +1651,21 @@ html:has(.sf-root){
 
 
 
-/* Series: el <br> tras ":" fuerza 2 líneas aunque el subtítulo sea corto (Rebirth) */
-.card:has(.cover-series) b{
-  white-space:normal;
-}
-.card:has(.cover-series) b br{
+
+/* Series con ":" en dos líneas fijas (no partir "Supergirl Vol.7:" a mitad) */
+.card:has(.cover-series) b.series-title-split{
   display:block;
-  content:"";
+  -webkit-line-clamp:unset;
+  -webkit-box-orient:unset;
+  overflow:hidden;
+  line-height:1.2;
+  max-height:calc(1.2em * 2);
+}
+.card:has(.cover-series) b.series-title-split .series-title-l1,
+.card:has(.cover-series) b.series-title-split .series-title-l2{
+  display:block;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  line-height:1.2;
 }
