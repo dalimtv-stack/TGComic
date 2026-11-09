@@ -52,6 +52,50 @@ export function createViews(d) {
     updateTelegramCaption,
     flattenVersions,
   } = d;
+
+  /** Un mensaje Telegram = una entrada (evita el mismo cómic dos veces en series). */
+  function dedupeFilesById(files) {
+    const seen = new Set();
+    return (files || []).filter((f) => {
+      const id = String(f?.id ?? '');
+      if (!id || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+  }
+
+  /**
+   * Huérfano de macro: sin Sección propia y sin otra versión del mismo cómic
+   * (misma clave de calidad) que sí tenga Sección. Evita original en
+   * «(Sin sección)» + misma serie/título en la sección por otra calidad.
+   */
+  function isOrphanMacroFile(ch, f, allFiles) {
+    if (effectiveSection(ch, f, parseComicCaption)) return false;
+    try {
+      const { parseQuality, sourceNameOf, flattenVersions } = requireQuality();
+      const key = parseQuality(sourceNameOf(f) || f?.name || '').key || '';
+      if (!key) return true;
+      const flat = flattenVersions(allFiles || [f]);
+      for (const x of flat) {
+        if (!x || String(x.id) === String(f?.id)) continue;
+        if ((parseQuality(sourceNameOf(x) || x?.name || '').key || '') !== key) continue;
+        if (effectiveSection(ch, x, parseComicCaption)) return false;
+      }
+    } catch (_) {}
+    return true;
+  }
+
+  let _qualityMod = null;
+  function requireQuality() {
+    if (_qualityMod) return _qualityMod;
+    // sync import already at module level if available
+    return {
+      parseQuality: d.parseQuality,
+      sourceNameOf: d.sourceNameOf || comicSourceName,
+      flattenVersions: d.flattenVersions || ((x) => x || []),
+    };
+  }
+
   const openComic = (...a) => d.openComic(...a);
   const getClient = () => (typeof d.client === 'function' ? d.client() : d.client);
   const getReady = () => (typeof d.ready === 'function' ? d.ready() : d.ready);
@@ -2866,23 +2910,12 @@ function channelsView(g) {
       // Secciones del canal macro (mismo aspecto que un canal)
       for (const mac of macros) {
         let mfiles = [];
-        try {
-          // Siempre frescos desde Telegram en macro (Sección vive en caption)
-          if (typeof fetchFiles === 'function') mfiles = await fetchFiles(mac, { force: true });
-          else mfiles = (await kv.get('f:' + mac.id)) || [];
-        } catch (_) {
-          try { mfiles = (await kv.get('f:' + mac.id)) || []; } catch (_) { mfiles = []; }
+        try { mfiles = (await kv.get('f:' + mac.id)) || []; } catch (_) { mfiles = []; }
+        // Caché vacía: una sola lectura normal (sin force agresivo)
+        if (!mfiles.length && typeof fetchFiles === 'function') {
+          try { mfiles = await fetchFiles(mac); } catch (_) {}
         }
-        // Un id una sola vez
-        {
-          const seen = new Set();
-          mfiles = (mfiles || []).filter((f) => {
-            const id = String(f?.id ?? '');
-            if (!id || seen.has(id)) return false;
-            seen.add(id);
-            return true;
-          });
-        }
+        mfiles = dedupeFilesById(mfiles);
         const sections = collectSectionsFromFiles(mfiles, parseComicCaption, mac.id);
         for (const sec of sections) {
           const secFiles = filesInSection(mfiles, sec, parseComicCaption, mac.id);
@@ -2930,22 +2963,13 @@ function channelsView(g) {
 
       for (const mac of macros) {
         let mfiles = [];
-        try {
-          if (typeof fetchFiles === 'function') mfiles = await fetchFiles(mac, { force: true });
-          else mfiles = (await kv.get('f:' + mac.id)) || [];
-        } catch (_) {
-          try { mfiles = (await kv.get('f:' + mac.id)) || []; } catch (_) { mfiles = []; }
+        try { mfiles = (await kv.get('f:' + mac.id)) || []; } catch (_) { mfiles = []; }
+        // Caché vacía: una sola lectura normal (sin force agresivo)
+        if (!mfiles.length && typeof fetchFiles === 'function') {
+          try { mfiles = await fetchFiles(mac); } catch (_) {}
         }
-        {
-          const seen = new Set();
-          mfiles = (mfiles || []).filter((f) => {
-            const id = String(f?.id ?? '');
-            if (!id || seen.has(id)) return false;
-            seen.add(id);
-            return true;
-          });
-        }
-        const orphans = (mfiles || []).filter((f) => !effectiveSection(mac, f, parseComicCaption));
+        mfiles = dedupeFilesById(mfiles);
+        const orphans = (mfiles || []).filter((f) => isOrphanMacroFile(mac, f, mfiles));
         if (!orphans.length) continue;
         const on = orphans.length;
         gridItems.push({
@@ -3102,6 +3126,7 @@ function filesView(ch, opts = {}) {
     let channelQueue = []; // cómics en el orden visible del canal
     const draw = (files) => {
       if (!alive(e)) return;
+      files = dedupeFilesById(files);
       cur = files;
       if (!files.length) return msg('No hay archivos CBZ/CBR en este canal.');
       const un = ungroupMap(ch), items = [], redraw = () => draw(cur);
@@ -3255,7 +3280,7 @@ function filesView(ch, opts = {}) {
     };
     const filterSec = (list) => {
       const arr = list || [];
-      if (orphansOnly) return arr.filter((f) => !effectiveSection(ch, f, parseComicCaption));
+      if (orphansOnly) return arr.filter((f) => isOrphanMacroFile(ch, f, arr));
       if (!sectionFilter) return arr;
       const want = normalizeSectionKey(sectionFilter);
       return arr.filter((f) => normalizeSectionKey(effectiveSection(ch, f, parseComicCaption)) === want);
@@ -3264,10 +3289,9 @@ function filesView(ch, opts = {}) {
     if (cached) draw(filterSec(cached)); else msg('Cargando…');
     try {
       // force: caption puede cambiar sin cambiar topDocId/count (atajo de fetchFiles)
-      const force = !!e._forceFiles
-        || !!sectionFilter
-        || orphansOnly
-        || isMacroLibEntry(ch);
+      // No forzar siempre en macro: la editorial ya usa caché; al entrar en
+      // sección/huérfanos basta el listado cacheado salvo _forceFiles.
+      const force = !!e._forceFiles;
       e._forceFiles = false;
       const fresh = typeof fetchFiles === 'function'
         ? await fetchFiles(ch, force ? { force: true } : {})
