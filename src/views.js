@@ -3225,7 +3225,7 @@ function filesView(ch, opts = {}) {
             hiddenMeta: seriesRestricted,
             go: () => {
               if (!locks.guardRestricted('series', { ch, seriesLabel }, seriesDisplayName(ch, seriesLabel))) return;
-              seriesView(ch, seriesLabel, fs);
+              seriesView(ch, seriesLabel, fs, { section: sectionFilter || undefined, orphansOnly });
             },
             // Serie bloqueada: solo opciones de bloqueo (sin Información/Editar); si no, menú completo + bloqueo
             longPress: () => seriesRestricted
@@ -3300,8 +3300,13 @@ function filesView(ch, opts = {}) {
     } catch (err) { if (!cached) msg('Error: ' + err.message); }
   });
 }
-function seriesView(ch, s0, files) {
+function seriesView(ch, s0, files, scope = {}) {
   const LIB = libNow();
+  // Alcance del listado padre: sección virtual o «(Sin sección)».
+  // Sin esto, al abrir una serie desde (Sin sección) se recargaba TODO el
+  // canal y reaparecían cómics que sí tienen Sección: (mismo archivo en dos sitios).
+  const sectionFilter = String(scope.section || '').trim();
+  const orphansOnly = !!scope.orphansOnly;
 
   if (!locks.guardRestricted('series', { ch, seriesLabel: s0 }, seriesDisplayName(ch, s0))) return;
 
@@ -3311,13 +3316,32 @@ function seriesView(ch, s0, files) {
     let s = e._seriesKey || s0;
     e._uploadCtx = {
       editorial: ch.group || 'Sin editorial',
-      channel: ch,
+      channel: isMacroLibEntry(ch) ? undefined : ch,
+      seccion: sectionFilter || undefined,
+      macroChannel: isMacroLibEntry(ch) ? ch : undefined,
       // Nombre visible de la serie (renombres locales) para el formulario de subida
       series: (seriesDisplayName(ch, s) || s || '').trim(),
       seriesKey: s,
     };
     e._chId = ch.id;
     e._seriesKey = s;
+    e._sectionFilter = sectionFilter || '';
+    e._orphansOnly = orphansOnly;
+
+    /** Limita el listado al mismo ámbito que el padre (sección / huérfanos). */
+    const applyScope = (list) => {
+      const arr = dedupeFilesById(list || []);
+      if (orphansOnly) return arr.filter((f) => isOrphanMacroFile(ch, f, arr));
+      if (sectionFilter) {
+        try {
+          return filesInSection(arr, sectionFilter, parseComicCaption, ch.id);
+        } catch (_) {
+          const want = normalizeSectionKey(sectionFilter);
+          return arr.filter((f) => normalizeSectionKey(effectiveSection(ch, f, parseComicCaption)) === want);
+        }
+      }
+      return arr;
+    };
 
     const loadSeriesFiles = async (opts = {}) => {
       let all = [];
@@ -3332,6 +3356,8 @@ function seriesView(ch, s0, files) {
         try { all = await fetchFiles(ch); } catch (_) {}
       }
       if (!all.length && Array.isArray(files) && files.length) all = files;
+      // CRÍTICO: filtrar ANTES de groupSeries (si no, la serie mezcla sección + sin sección)
+      all = applyScope(all);
       const groups = groupSeries(all, ch.name, seriesOverrideFor(ch));
       const key = String(s || '').toLowerCase();
       let match = groups.find((g) => String(g.label || '').toLowerCase() === key);
@@ -3353,7 +3379,8 @@ function seriesView(ch, s0, files) {
           }
         }
       }
-      const out = match ? match.files : (Array.isArray(files) ? files : []);
+      // Preferir el listado del padre si aún no hay match (p. ej. serie de 1 cómic)
+      const out = match ? match.files : (Array.isArray(files) ? applyScope(files) : []);
       e._lastIds = out.map((f) => String(f.id));
       return out;
     };
