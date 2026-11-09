@@ -2,7 +2,7 @@
  * Herramienta: convertir CBR → CBZ y re-subir (también mensajes reenviados).
  * Móvil: poca RAM, un archivo a la vez, liberar buffers.
  */
-import { isMacroLibEntry, sectionFromCaption, withSectionInCaption, withFileNameInCaption, collectSectionsFromFiles, normalizeSectionKey } from './macro.js';
+import { isMacroLibEntry, sectionFromCaption, withSectionInCaption, withFileNameInCaption, collectSectionsFromFiles, normalizeSectionKey, getLocalSection as getLocalSectionMacro } from './macro.js';
 import * as zip from '@zip.js/zip.js';
 import { fitTelegramCaption } from './caption.js';
 import { withQualityTags, existingCopy, flattenVersions, sourceNameOf, parseQuality, QUALITY_LABEL } from './quality.js';
@@ -25,6 +25,30 @@ export function createRepackTool(d) {
   const getLIB = () => d.LIB;
   // Importante: si no se declara, `jobQueue` lanza ReferenceError y la recarga "no hace nada"
   const jobQueue = d.jobQueue || null;
+  const getLocalSection = (chId, msgId) => {
+    try {
+      if (typeof d.getLocalSection === 'function') return String(d.getLocalSection(chId, msgId) || '').trim();
+    } catch (_) {}
+    try { return String(getLocalSectionMacro(chId, msgId) || '').trim(); } catch (_) {}
+    return '';
+  };
+  /** Sección efectiva: forzada → caption → override local (reenvíos). */
+  function resolveSectionForItem(item) {
+    const forced = String(item?._forceSection || '').trim();
+    if (forced) return forced;
+    try {
+      const fromCap = sectionFromCaption(String(item?.f?.caption || item?.caption || ''), parseComicCaption);
+      if (fromCap) return fromCap;
+    } catch (_) {}
+    try {
+      if (item?.ch?.id != null && item?.f?.id != null) {
+        const loc = getLocalSection(item.ch.id, item.f.id);
+        if (loc) return loc;
+      }
+    } catch (_) {}
+    return '';
+  }
+
 
   let running = false;
   let abort = false;
@@ -988,17 +1012,20 @@ export function createRepackTool(d) {
           }
           caption = fitted;
         }
-        // Macro: Sección obligatoria; conservar / forzar sección
+        // Macro / sección: forzada en el formulario, caption, o override local (reenvíos)
         try {
           const forced = String(item._forceSection || '').trim();
-          if (forced) caption = withSectionInCaption(caption, forced);
-          else {
-            const secKeep = sectionFromCaption(String(item.f?.caption || item.caption || caption || ''));
-            if (secKeep) caption = withSectionInCaption(caption, secKeep);
-            else if (isMacroLibEntry(ch)) {
-              const sec2 = sectionFromCaption(String(caption || ''));
-              if (sec2) caption = withSectionInCaption(caption, sec2);
+          if (forced) {
+            caption = withSectionInCaption(caption, forced);
+          } else {
+            let secKeep = sectionFromCaption(String(item.f?.caption || item.caption || caption || ''), parseComicCaption);
+            if (!secKeep) {
+              try { secKeep = getLocalSection(ch?.id, f?.id); } catch (_) {}
             }
+            if (!secKeep) {
+              try { secKeep = sectionFromCaption(String(caption || ''), parseComicCaption); } catch (_) {}
+            }
+            if (secKeep) caption = withSectionInCaption(caption, secKeep);
           }
         } catch (_) {}
 
@@ -1217,14 +1244,8 @@ export function createRepackTool(d) {
 
     const inputs = [];
     const channelLabelOf = (item) => {
-      const force = String(item?._forceSection || '').trim();
-      if (force) return force;
-      try {
-        if (isMacroLibEntry(item?.ch)) {
-          const s = sectionFromCaption(String(item?.f?.caption || item?.caption || ''), parseComicCaption);
-          if (s) return s;
-        }
-      } catch (_) {}
+      const sec = resolveSectionForItem(item);
+      if (sec) return sec;
       try {
         if (typeof channelDisplayName === 'function' && item?.ch && !isMacroLibEntry(item.ch)) {
           return String(channelDisplayName(item.ch) || '').trim();
@@ -1314,10 +1335,27 @@ export function createRepackTool(d) {
       inp._item = item;
       inp._manual = false;
 
+      let secInp = null;
+      const isMac = isMacroLibEntry(item.ch);
+      const curSec = resolveSectionForItem(item);
+      if (isMac || curSec) {
+        const secLab = el('div', 'sync-label', 'Sección');
+        secInp = el('input', 'edit-input');
+        secInp.type = 'text';
+        secInp.placeholder = isMac ? 'Sección (macro) — obligatoria al resubir' : 'Sección';
+        secInp.value = curSec || '';
+        secInp.autocomplete = 'off';
+        secInp.oninput = () => {
+          item._forceSection = String(secInp.value || '').trim();
+          try { applyNames(); } catch (_) {}
+        };
+        if (curSec) item._forceSection = curSec;
+        row.append(secLab, secInp);
+      }
       row.append(nLab, numberInp, iLab, infoInp, nameLab, inp);
       row.append(el('small', '', item.ch.name || ''));
       body.append(row);
-      inputs.push({ nameInp: inp, numberInp, infoInp, _item: item });
+      inputs.push({ nameInp: inp, numberInp, infoInp, secInp, _item: item });
     }
     includeChChk.onchange = applyNames;
     fmtChk.onchange = applyNames;
@@ -1354,7 +1392,17 @@ export function createRepackTool(d) {
         if (!/\.cbz$/i.test(name)) name = name.replace(/\.cb[zr]$/i, '') + '.cbz';
         if (!/\.cbz$/i.test(name)) name += '.cbz';
         if (asWebp) name = withQualityTags(name, { webp: true, resize: rz });
-        return { ...item, outName: name, asWebp, webpOpts };
+        const secFromForm = row.secInp ? String(row.secInp.value || '').trim() : '';
+        const forceSec = secFromForm || resolveSectionForItem(item) || '';
+        return {
+          ...item,
+          outName: name,
+          asWebp,
+          webpOpts,
+          _forceSection: forceSec || undefined,
+          // Caption base: si solo había sección local, se escribirá en Telegram al subir
+          caption: item.caption || item.f?.caption || '',
+        };
       });
       const dups = await findDuplicates(ready.map((x) => ({
         f: x.f,
