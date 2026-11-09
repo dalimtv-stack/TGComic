@@ -100,14 +100,8 @@ export function createViews(d) {
 
 
   function softBreakAfterColon(s) {
-    const str = String(s || '');
-    const i = str.indexOf(':');
-    if (i < 0) return str;
-    const left = str.slice(0, i + 1).replace(/\s+$/, '');
-    const right = str.slice(i + 1).replace(/^\s+/, '');
-    if (!right) return left;
-    // Salto de línea real tras ":" (series: white-space pre-line)
-    return left + '\n' + right;
+    // Legacy no-op: el salto real tras ":" se hace en cardNode con <br>
+    return String(s || '');
   }
 
   function dedupeFilesById(files) {
@@ -1972,7 +1966,27 @@ function cardNode(i) {
     return c;
   }
   const name = el('div', 'name');
-  const t = el('b', '', i.label);
+  // Series con ":": <br> real. -webkit-line-clamp ignora saltos de texto (Vol.7: Rebirth no partía).
+  const t = el('b', '');
+  const rawLab = String(i.label || '').replace(/\n/g, ' ').replace(/\u200B/g, '');
+  if (i.kind === 'series') {
+    const ci = rawLab.indexOf(':');
+    if (ci >= 0) {
+      const left = rawLab.slice(0, ci + 1).replace(/\s+$/, '');
+      const right = rawLab.slice(ci + 1).replace(/^\s+/, '');
+      if (right) {
+        t.append(document.createTextNode(left));
+        t.append(el('br'));
+        t.append(document.createTextNode(right));
+      } else {
+        t.textContent = rawLab;
+      }
+    } else {
+      t.textContent = rawLab;
+    }
+  } else {
+    t.textContent = rawLab;
+  }
   if (i.menu) {
     t.classList.add('has-menu');
     t.onclick = (ev) => { ev.stopPropagation(); i.menu(); };
@@ -3268,7 +3282,7 @@ function filesView(ch, opts = {}) {
             kind: 'series',
             _sortId: 'series:' + String(seriesLabel),
             _sortDate: seriesDate,
-            label: seriesRestricted ? '' : softBreakAfterColon(seriesShown),
+            label: seriesRestricted ? '' : seriesShown,
             sub: `${fs.length} números`,
             searchText: seriesSearch,
             isUnread: seriesUnread,
