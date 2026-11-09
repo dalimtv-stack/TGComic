@@ -1647,3 +1647,12 @@ html:has(.sf-root){
 .rd-auto-cfg-box .rd-era-row input {
   accent-color: #2563eb;
 }
+
+
+
+/* Series: 2 líneas; el texto puede traer \n justo después de ":" */
+.card:has(.cover-series) b{
+  white-space:pre-line;
+  overflow-wrap:break-word;
+  word-break:normal;
+}
