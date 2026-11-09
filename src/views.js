@@ -56,42 +56,58 @@ export function createViews(d) {
   /** Un mensaje Telegram = una entrada (evita el mismo cómic dos veces en series). */
   /** Fuerza oportunidad de salto de línea justo después de ":" en títulos. */
   
-  /** Dentro de una serie: etiqueta corta (#n - info), sin repetir el nombre de la serie. */
+  
+  /**
+   * Etiqueta de un cómic DENTRO de la vista de una serie.
+   * Solo número/info (#01 - …). Si la serie se renombró, parseComicName
+   * puede devolver el nombre antiguo: igual usamos issueDisplay.
+   * NO usar en el listado del canal cuando el cómic va suelto (ahí sí va el nombre de serie).
+   */
   function comicLabelInSeries(ch, f, seriesKey) {
     const s = String(seriesKey || '').trim();
-    const sDisp = (typeof seriesDisplayName === 'function' ? seriesDisplayName(ch, s) : s) || s;
     const src = comicSourceName(f);
-    let base = '';
     try {
       const p = parseComicName(src, ch.name);
-      if (p) base = issueDisplay(p) || '';
-    } catch (_) {}
-    if (!base) {
-      try { base = issueLabel(s, f, ch.name) || ''; } catch (_) {}
-    }
-    if (!base) {
-      try { base = comicDisplay(src, ch.name) || clean(src); } catch (_) { base = String(f?.name || ''); }
-    }
-    // Quitar prefijo de serie si aún viene delante (override de nombre de serie, etc.)
-    const stripPref = (label, pref) => {
-      const L = String(label || '');
-      const P = String(pref || '').trim();
-      if (!P || !L) return L;
-      if (L.toLowerCase().startsWith(P.toLowerCase())) {
-        let r = L.slice(P.length).replace(/^[\s._:\-–—]+/, '');
-        if (/^\d/.test(r)) r = '#' + r;
-        return r || L;
+      if (p) {
+        const iss = issueDisplay(p);
+        if (iss) return iss;
       }
-      return L;
-    };
-    base = stripPref(base, sDisp);
-    base = stripPref(base, s);
-    return base || String(f?.name || '');
+    } catch (_) {}
+    try {
+      const via = issueLabel(s, f, ch.name);
+      if (via) return via;
+    } catch (_) {}
+    // Último recurso: quitar prefijo de serie (clave o nombre mostrado) del título completo
+    let full = '';
+    try { full = comicDisplay(src, ch.name) || ''; } catch (_) {}
+    if (!full) full = String(f?.name || '');
+    const prefs = [s];
+    try {
+      const d = seriesDisplayName(ch, s);
+      if (d && d !== s) prefs.push(d);
+    } catch (_) {}
+    for (const pref of prefs) {
+      const P = String(pref || '').trim();
+      if (!P) continue;
+      if (full.toLowerCase().startsWith(P.toLowerCase())) {
+        let r = full.slice(P.length).replace(/^[\s._:\-–—]+/, '');
+        if (/^\d/.test(r)) r = '#' + r;
+        if (r) return r;
+      }
+    }
+    return full;
   }
 
+
   function softBreakAfterColon(s) {
-    // Oportunidad de salto JUSTO DESPUÉS de ":" (p. ej. "Serie: subtítulo").
-    return String(s || '').replace(/\s*:\s*/g, ':' + String.fromCharCode(0x200B) + ' ');
+    const str = String(s || '');
+    const i = str.indexOf(':');
+    if (i < 0) return str;
+    const left = str.slice(0, i + 1).replace(/\s+$/, '');
+    const right = str.slice(i + 1).replace(/^\s+/, '');
+    if (!right) return left;
+    // Salto de línea real tras ":" (series: white-space pre-line)
+    return left + '\n' + right;
   }
 
   function dedupeFilesById(files) {
@@ -3216,9 +3232,7 @@ function filesView(ch, opts = {}) {
           const hasSeriesName = !!(ov || p?.series);
           items.push(makeComicItem(
             f,
-            hasSeriesName
-              ? comicLabelInSeries(ch, f, soloSeries)
-              : comicDisplay(comicSourceName(f), ch.name),
+            comicDisplay(comicSourceName(f), ch.name),
             hasSeriesName ? soloSeries : null,
             hasSeriesName ? 'grouped' : null
           ));
