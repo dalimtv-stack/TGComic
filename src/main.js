@@ -54,6 +54,7 @@ import {
   isMacroTelegramTitle,
   editorialFromMacroTitle,
   isMacroLibEntry,
+  getLocalSection,
 } from './macro.js';
 
 const apiId = Number(import.meta.env.VITE_API_ID);
@@ -908,7 +909,8 @@ const paintLockMenu = () => {
 paintLockMenu();
 const menuRepackBtn = el('button', 'app-menu-item', 'Recargar CBR / externos');
 const menuUploadBtn = el('button', 'app-menu-item', 'Subir cómic');
-menuPanel.append(menuInfoBtn, menuCfgBtn, menuAdvBtn, menuSyncBtn, menuUploadBtn, menuRepackBtn, menuUnreadBtn, menuLockBtn);
+const menuQueueBtn = el('button', 'app-menu-item', 'Cola de tareas');
+menuPanel.append(menuInfoBtn, menuCfgBtn, menuAdvBtn, menuSyncBtn, menuUploadBtn, menuRepackBtn, menuUnreadBtn, menuQueueBtn, menuLockBtn);
 actions.append(menuBtn);
 document.body.append(menuPanel);
 
@@ -937,7 +939,7 @@ function showInfoFrame() {
   const head = el('div', 'info-head');
   head.append(el('span', '', 'Información'));
   const close = el('button', 'btn info-close', '×');
-  close.setAttribute('aria-label', 'Cerrar');
+  close.setAttribute('aria-label', 'Volver');
   close.onclick = () => frame.remove();
   head.append(close);
   const body = el('div', 'info-body');
@@ -1077,11 +1079,14 @@ function showInfoFrame() {
       await pageCache.clearAll();
       await appAlert('Caché de páginas vaciada', 'Caché');
     };
-    const btnQueue = el('button', 'btn', 'Ver cola');
-    btnQueue.type = 'button';
-    btnQueue.onclick = () => { try { jobQueue?.show?.(); } catch (_) {} };
-    expRow.append(btnExp, btnImp, impInput, btnClrPc, btnQueue);
+    expRow.append(btnExp, btnImp, impInput, btnClrPc);
     body.append(expRow);
+    const backRow = el('div', 'edit-actions');
+    const backBtn = el('button', 'btn', 'Volver');
+    backBtn.type = 'button';
+    backBtn.onclick = () => frame.remove();
+    backRow.append(backBtn);
+    body.append(backRow);
   }).catch((err) => {
     body.replaceChildren(el('div', 'info-loading', 'No se pudo calcular: ' + (err?.message || err)));
   });
@@ -1109,7 +1114,7 @@ function showViewerConfig() {
   const head = el('div', 'info-head');
   head.append(el('span', '', 'Configuración Visor'));
   const close = el('button', 'btn info-close', '×');
-  close.setAttribute('aria-label', 'Cerrar');
+  close.setAttribute('aria-label', 'Volver');
   close.onclick = () => frame.remove();
   head.append(close);
   const body = el('div', 'info-body');
@@ -1554,6 +1559,13 @@ const modeGrp = toggleGroup(
   pcWrap.append(pcLab, pcInp);
   body.append(pcWrap);
 
+  const cfgBack = el('div', 'edit-actions');
+  const cfgBackBtn = el('button', 'btn', 'Volver');
+  cfgBackBtn.type = 'button';
+  cfgBackBtn.onclick = () => frame.remove();
+  cfgBack.append(cfgBackBtn);
+  body.append(cfgBack);
+
   box.append(head, body);
   frame.append(box);
   document.body.append(frame);
@@ -1631,6 +1643,11 @@ menuSyncBtn.onclick = (ev) => {
       } catch (_) {}
     },
   });
+};
+menuQueueBtn.onclick = (ev) => {
+  ev.stopPropagation();
+  closeAppMenu();
+  try { jobQueue?.show?.(); } catch (e) { try { appAlert(e?.message || e); } catch (_) {} }
 };
 menuUnreadBtn.onclick = (ev) => {
   ev.stopPropagation();
@@ -2423,6 +2440,7 @@ try {
 
 // ---------- Recarga CBR / externos ----------
 const repackTool = createRepackTool({
+  getLocalSection: (chId, msgId) => { try { return (typeof getLocalSection === 'function' ? getLocalSection(chId, msgId) : ''); } catch (_) { return ''; } },
   el,
   jobQueue,
   get client() { return client; },
