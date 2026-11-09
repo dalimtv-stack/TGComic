@@ -1650,9 +1650,12 @@ html:has(.sf-root){
 
 
 
-/* Series: 2 líneas; el texto puede traer \n justo después de ":" */
+
+/* Series: el <br> tras ":" fuerza 2 líneas aunque el subtítulo sea corto (Rebirth) */
 .card:has(.cover-series) b{
-  white-space:pre-line;
-  overflow-wrap:break-word;
-  word-break:normal;
+  white-space:normal;
+}
+.card:has(.cover-series) b br{
+  display:block;
+  content:"";
 }
