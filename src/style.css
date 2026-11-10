@@ -898,7 +898,53 @@ textarea.meta-desc-lg.edit-input{
 }
 #rd .play-fab svg{display:block;pointer-events:none}
 #rd .play-fab.on{background:var(--acc);color:#111}
+
 #rd.ui-off .play-fab{opacity:0;pointer-events:none}
+
+/* Recorte (abajo derecha) y RTL (encima del recorte) */
+#rd .crop-fab,
+#rd .rtl-fab{
+  position:fixed!important;
+  z-index:14!important;
+  right:calc(12px + env(safe-area-inset-right, 0px))!important;
+  left:auto!important;
+  margin-left:0!important;
+  transform:none!important;
+  width:40px!important;
+  height:40px!important;
+  min-width:40px!important;
+  min-height:40px!important;
+  max-width:40px!important;
+  max-height:40px!important;
+  padding:0!important;
+  border-radius:12px!important;
+  background:#1c1d22e6!important;
+  color:var(--fg)!important;
+  -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+  box-shadow:0 4px 18px #0008!important;
+  display:inline-flex!important;
+  align-items:center!important;
+  justify-content:center!important;
+  border:0!important;
+  cursor:pointer;
+  transition:opacity .2s,background .15s;
+}
+#rd .crop-fab svg,
+#rd .rtl-fab svg{display:block;pointer-events:none;width:22px;height:22px}
+#rd .crop-fab.on,
+#rd .rtl-fab.on{background:var(--acc)!important;color:#111!important}
+#rd.ui-off .crop-fab,
+#rd.ui-off .rtl-fab{opacity:0;pointer-events:none}
+/* Misma altura que la fila play/spread/calidad */
+#rd .crop-fab{
+  bottom:calc(env(safe-area-inset-bottom,0px) + 58px)!important;
+}
+/* Justo encima del de recortar */
+#rd .rtl-fab{
+  bottom:calc(env(safe-area-inset-bottom,0px) + 58px + 40px + 6px)!important;
+}
+/* q-group empieza en 50%+32; ~3 botones (48+6)*3 ≈ 162 → margen derecho */
+
 #rd .q-group .q-btn{
   width:48px;height:48px;min-width:48px;padding:0;border:0;border-radius:14px;
   background:#1c1d22e6;color:var(--fg);opacity:.55;cursor:pointer;
@@ -1076,6 +1122,8 @@ textarea.meta-desc-lg.edit-input{
 #rd .spread-fab,
 #rd .play-fab,
 #rd .auto-cfg-fab,
+#rd .crop-fab,
+#rd .rtl-fab,
 #rd .q-group .btn,
 #rd .q-group button{
   width:48px!important;
@@ -1095,7 +1143,9 @@ textarea.meta-desc-lg.edit-input{
 }
 #rd .spread-fab,
 #rd .play-fab,
-#rd .auto-cfg-fab{
+#rd .auto-cfg-fab,
+#rd .crop-fab,
+#rd .rtl-fab{
   position:fixed!important;
   bottom:calc(env(safe-area-inset-bottom,0px) + 58px)!important;
   z-index:14!important;
@@ -1181,6 +1231,8 @@ textarea.meta-desc-lg.edit-input{
    La distancia al botón de doble página (8px) no cambia; entre sí quedan a 4px. */
 #rd .play-fab,
 #rd .auto-cfg-fab,
+#rd .crop-fab,
+#rd .rtl-fab,
 #rd .q-group .btn,
 #rd .q-group button{
   width:40px!important;
@@ -1646,32 +1698,4 @@ html:has(.sf-root){
 }
 .rd-auto-cfg-box .rd-era-row input {
   accent-color: #2563eb;
-}
-
-
-
-
-
-
-
-
-/* Botones recorte / RTL del visor (misma familia que spread-fab) */
-#rd .crop-fab,
-#rd .rtl-fab{
-  position:absolute;
-  z-index:6;
-  width:44px;height:44px;padding:0;
-  border-radius:12px;
-  background:rgba(0,0,0,.45);
-  color:#fff;
-}
-#rd .crop-fab.on,
-#rd .rtl-fab.on{
-  background:rgba(242,182,50,.85);
-  color:#111;
-}
-#rd .crop-fab{ right: calc(12px + env(safe-area-inset-right, 0px)); bottom: calc(64px + env(safe-area-inset-bottom, 0px)); }
-#rd .rtl-fab{ right: calc(12px + env(safe-area-inset-right, 0px)); bottom: calc(116px + env(safe-area-inset-bottom, 0px)); }
-#rd img.auto-cropped{
-  /* object-view-box / clip-path aplicados en JS */
 }
