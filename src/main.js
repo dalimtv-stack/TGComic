@@ -1205,68 +1205,68 @@ function showViewerConfig() {
   const PANEL_ERA_DEFAULTS = {
     // Golden Age: marcos gruesos, layouts regulares, pocas viñetas
     '1900-1950': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4,
+      panelShadow: 55, panelMargin: 3, panelCrop: 4,
       panelGutterRow: 18, panelGutterCol: 18, panelBandMin: 6, panelMinArea: 6,
       panelDetectW: 420, panelMerge: 0, panelMax: 8,
       panelPaperLum: 165, panelPaperFrac: 35, panelBorderLum: 100,
     },
     // Silver + Bronze: marco negro claro, páginas limpias
     '1950-1980': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4,
+      panelShadow: 55, panelMargin: 3, panelCrop: 4,
       panelGutterRow: 16, panelGutterCol: 16, panelBandMin: 5, panelMinArea: 4,
       panelDetectW: 480, panelMerge: 0, panelMax: 10,
       panelPaperLum: 170, panelPaperFrac: 38, panelBorderLum: 90,
     },
     // 80s (default): Crisis, Watchmen, Marvel ochentera…
     '1980-1990': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4,
+      panelShadow: 55, panelMargin: 3, panelCrop: 4,
       panelGutterRow: 15, panelGutterCol: 15, panelBandMin: 4, panelMinArea: 3,
       panelDetectW: 520, panelMerge: 0, panelMax: 12,
       panelPaperLum: 175, panelPaperFrac: 40, panelBorderLum: 85,
     },
     // 90s: Image, WildStorm, layouts agresivos
     '1990-2000': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4,
+      panelShadow: 55, panelMargin: 3, panelCrop: 4,
       panelGutterRow: 14, panelGutterCol: 14, panelBandMin: 3, panelMinArea: 2,
       panelDetectW: 560, panelMerge: 0, panelMax: 16,
       panelPaperLum: 180, panelPaperFrac: 36, panelBorderLum: 80,
     },
     // 2000–: bleed, páginas cinematográficas
     '2000-': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4,
+      panelShadow: 55, panelMargin: 3, panelCrop: 4,
       panelGutterRow: 13, panelGutterCol: 13, panelBandMin: 3, panelMinArea: 2,
       panelDetectW: 640, panelMerge: 0, panelMax: 20,
       panelPaperLum: 185, panelPaperFrac: 34, panelBorderLum: 75,
     },
     'Manga': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4,
+      panelShadow: 55, panelMargin: 3, panelCrop: 4,
       panelGutterRow: 14, panelGutterCol: 14, panelBandMin: 3, panelMinArea: 2,
       panelDetectW: 640, panelMerge: 0, panelMax: 20,
       panelPaperLum: 180, panelPaperFrac: 35, panelBorderLum: 85,
     },
     'Noir': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4,
+      panelShadow: 55, panelMargin: 3, panelCrop: 4,
       panelGutterRow: 14, panelGutterCol: 14, panelBandMin: 3, panelMinArea: 2,
       panelDetectW: 600, panelMerge: 0, panelMax: 20,
       panelPaperLum: 80, panelPaperFrac: 35, panelBorderLum: 100,
     },
     // Primer preset Grok (1980-1990 original antes del retune)
     'Grok': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4,
+      panelShadow: 55, panelMargin: 3, panelCrop: 4,
       panelGutterRow: 18, panelGutterCol: 22, panelBandMin: 4, panelMinArea: 4,
       panelDetectW: 360, panelMerge: 0, panelMax: 0,
       panelPaperLum: 175, panelPaperFrac: 40, panelBorderLum: 80,
     },
     // Fumiko: pipeline estilo Kumiko (contornos / CC sobre gradiente)
     'Fumiko': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4,
+      panelShadow: 55, panelMargin: 3, panelCrop: 4,
       panelGutterRow: 15, panelGutterCol: 15, panelBandMin: 4, panelMinArea: 3,
       panelDetectW: 640, panelMerge: 0, panelMax: 0,
       panelPaperLum: 175, panelPaperFrac: 40, panelBorderLum: 100,
     },
     // Kumiko-Grok: Kumiko + flood de papel (híbrido)
     'Kumiko-Grok': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4,
+      panelShadow: 55, panelMargin: 3, panelCrop: 4,
       panelGutterRow: 15, panelGutterCol: 15, panelBandMin: 4, panelMinArea: 3,
       panelDetectW: 560, panelMerge: 0, panelMax: 0,
       panelPaperLum: 170, panelPaperFrac: 38, panelBorderLum: 90,
