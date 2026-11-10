@@ -205,6 +205,28 @@ export function createReader(state, d) {
     } catch (_) {}
   }
 
+
+  /** Carga StPageFlip (page-flip) una sola vez desde /vendor. */
+  let _PageFlipCtor = null;
+  async function ensurePageFlip() {
+    if (_PageFlipCtor) return _PageFlipCtor;
+    if (typeof window !== 'undefined' && window.St?.PageFlip) {
+      _PageFlipCtor = window.St.PageFlip;
+      return _PageFlipCtor;
+    }
+    await new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = '/vendor/page-flip.browser.js';
+      s.async = true;
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error('No se pudo cargar page-flip'));
+      document.head.appendChild(s);
+    });
+    _PageFlipCtor = window.St?.PageFlip;
+    if (!_PageFlipCtor) throw new Error('St.PageFlip no disponible');
+    return _PageFlipCtor;
+  }
+
   function networkPreloadRadius() {
     try {
       const c = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
@@ -383,26 +405,55 @@ export function createReader(state, d) {
         return Math.max(min, Math.min(max, n));
       };
 
-      // Motores estilo Kumiko (módulo aparte)
+      // Todos los presets usan el motor 2D Kumiko (contornos / CC).
+      // El legacy de bandas 1D solo queda como último fallback si el 2D no encuentra nada.
       const eraNow = String(pref('panelEra', '1980-1990') || '1980-1990');
-      if (eraNow === 'Fumiko' || eraNow === 'Kumiko-Grok') {
-        const opts = {
-          detectW: numP('panelDetectW', eraNow === 'Fumiko' ? 640 : 560, 160, 960),
-          edgeThresh: numP('panelBorderLum', eraNow === 'Fumiko' ? 100 : 90, 20, 200),
-          minAreaPct: numP('panelMinArea', 3, 1, 30),
-          bandMinPct: numP('panelBandMin', 4, 1, 20),
-          maxPanels: numP('panelMax', 0, 0, 60),
-          paperLum: numP('panelPaperLum', 175, 120, 250),
-          paperFrac: numP('panelPaperFrac', 40, 10, 80),
-        };
-        try {
-          const panels = eraNow === 'Fumiko'
-            ? detectPanelsFumiko(im, opts)
-            : detectPanelsKumikoGrok(im, opts);
-          return Array.isArray(panels) ? panels : [];
-        } catch (e) {
-          console.warn('[panel] Fumiko/Kumiko-Grok falló, legacy:', e);
+      // Fumiko (contornos estrictos) para rejillas clásicas; Kumiko-Grok (híbrido) para layouts rotos / modernos.
+      const FUMIKO_ERAS = new Set(['1900-1950', '1950-1980', '1980-1990', 'Fumiko']);
+      const useFumiko = FUMIKO_ERAS.has(eraNow);
+      // Muestreo de esquinas: si el "papel" es oscuro, bajar paperLum (medianiles negros / noir)
+      let autoPaperLum = numP('panelPaperLum', 175, 120, 250);
+      try {
+        const cw = 48, ch = 48;
+        const c = document.createElement('canvas');
+        c.width = cw; c.height = ch;
+        const cx = c.getContext('2d', { willReadFrequently: true });
+        if (cx) {
+          cx.drawImage(im, 0, 0, cw, ch);
+          const d = cx.getImageData(0, 0, cw, ch).data;
+          const corner = (x0, y0, s = 8) => {
+            let sum = 0, n = 0;
+            for (let y = y0; y < y0 + s; y++) for (let x = x0; x < x0 + s; x++) {
+              const i = (y * cw + x) * 4;
+              sum += (d[i] + d[i + 1] + d[i + 2]) / 3;
+              n++;
+            }
+            return n ? sum / n : 128;
+          };
+          const avg =
+            (corner(0, 0) + corner(cw - 8, 0) + corner(0, ch - 8) + corner(cw - 8, ch - 8)) / 4;
+          if (avg < 90) autoPaperLum = Math.min(autoPaperLum, 110);      // fondo oscuro
+          else if (avg < 130) autoPaperLum = Math.min(autoPaperLum, 145);
+          else if (avg > 200) autoPaperLum = Math.max(autoPaperLum, 175); // papel claro
         }
+      } catch (_) {}
+      const opts = {
+        detectW: numP('panelDetectW', useFumiko ? 520 : 600, 160, 960),
+        edgeThresh: numP('panelBorderLum', useFumiko ? 90 : 85, 20, 200),
+        minAreaPct: numP('panelMinArea', 3, 1, 30),
+        bandMinPct: numP('panelBandMin', 4, 1, 20),
+        maxPanels: numP('panelMax', 0, 0, 60),
+        paperLum: autoPaperLum,
+        paperFrac: numP('panelPaperFrac', 40, 10, 80),
+      };
+      try {
+        const panels = useFumiko
+          ? detectPanelsFumiko(im, opts)
+          : detectPanelsKumikoGrok(im, opts);
+        if (Array.isArray(panels) && panels.length) return panels;
+        console.warn('[panel] motor 2D sin viñetas, prueba legacy. era=', eraNow);
+      } catch (e) {
+        console.warn('[panel] motor 2D falló, legacy:', e);
       }
 
       const maxW = numP('panelDetectW', 480, 160, 960);
@@ -1352,10 +1403,11 @@ export function createReader(state, d) {
     const mount = () => {
       n = Math.min(chId != null ? getPageIndex(chId, f.id) : (n || 0), pages.length - 1);
       let mode = pref('mode', 'page');
-      if (mode !== 'page' && mode !== 'vertical' && mode !== 'horizontal' && mode !== 'panel') mode = 'page';
+      if (mode !== 'page' && mode !== 'vertical' && mode !== 'horizontal' && mode !== 'panel' && mode !== 'flip') mode = 'page';
       const vert = mode === 'vertical';
       const horiz = mode === 'horizontal';
       const panelMode = mode === 'panel';
+      const flipMode = mode === 'flip';
       const continuous = vert || horiz;
       let token = 0, observers = [], footObs = null;
       const rd = el('div'); rd.id = 'rd';
@@ -1930,7 +1982,114 @@ export function createReader(state, d) {
 
       let goToPage = (i) => {}; // se asigna en cada modo
 
-      if (panelMode) {
+      if (flipMode) {
+        // --- Modo Page-Flip 3D (StPageFlip) ---
+        (async () => {
+        try {
+          setRdClass('page flip-mode fit-screen');
+          const flipHost = el('div', 'flip-host');
+          const bookEl = el('div', 'flip-book');
+          flipHost.append(bookEl);
+          rd.append(flipHost);
+          // Barras ya creadas arriba; asegurar z-index
+          const placeholder = (i) =>
+            'data:image/svg+xml,' + encodeURIComponent(
+              `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="900"><rect fill="#1a1b1f" width="100%" height="100%"/><text x="50%" y="50%" fill="#555" font-size="28" text-anchor="middle" dominant-baseline="middle">${i + 1}</text></svg>`
+            );
+          const urls = pages.map((_, i) => placeholder(i));
+          let pf = null;
+          let flipReady = false;
+          const PageFlip = await ensurePageFlip();
+          const w = Math.max(280, Math.min(rd.clientWidth || 400, 900));
+          const h = Math.max(360, Math.min(rd.clientHeight || 600, 1400));
+          pf = new PageFlip(bookEl, {
+            width: w,
+            height: h,
+            size: 'stretch',
+            minWidth: 200,
+            maxWidth: 2400,
+            minHeight: 280,
+            maxHeight: 2400,
+            drawShadow: true,
+            maxShadowOpacity: 0.45,
+            showCover: true,
+            mobileScrollSupport: false,
+            swipeDistance: 30,
+            usePortrait: true,
+            startZIndex: 1,
+            autoSize: true,
+            startPage: Math.max(0, Math.min(pages.length - 1, n)),
+          });
+          pf.loadFromImages(urls);
+          flipReady = true;
+          const paintCount = () => {
+            try {
+              const cur = pf?.getCurrentPageIndex?.() ?? n;
+              n = cur;
+              cnt.textContent = (cur + 1) + ' / ' + pages.length;
+              savePage(cur);
+            } catch (_) {}
+          };
+          pf.on('flip', () => { paintCount(); softLoadAround(pf.getCurrentPageIndex()); });
+          pf.on('changeState', () => { try { pokeUI(); } catch (_) {} });
+          const softLoadAround = async (center) => {
+            const rad = 3;
+            const jobs = [];
+            for (let i = Math.max(0, center - rad); i <= Math.min(pages.length - 1, center + rad); i++) {
+              if (urls[i] && !urls[i].startsWith('data:')) continue;
+              jobs.push((async (idx) => {
+                try {
+                  const u = await load(idx);
+                  if (u) urls[idx] = u;
+                } catch (_) {}
+              })(i));
+            }
+            await Promise.all(jobs);
+            try {
+              if (flipReady && pf) pf.updateFromImages(urls);
+            } catch (e) { console.warn('[flip] updateFromImages', e); }
+          };
+          await softLoadAround(n);
+          paintCount();
+          goToPage = (i) => {
+            try { pf?.turnToPage?.(Math.max(0, Math.min(pages.length - 1, i))); } catch (_) {}
+          };
+          autoStep = async () => {
+            try {
+              if ((pf?.getCurrentPageIndex?.() ?? n) >= pages.length - 1) return false;
+              pf.flipNext();
+              return true;
+            } catch (_) { return false; }
+          };
+          document.onkeydown = (e) => {
+            if (e.target?.closest?.('input, textarea, [contenteditable]')) return;
+            const k = e.key;
+            if (k === 'ArrowRight' || k === 'PageDown' || (k === ' ' && !e.shiftKey)) {
+              e.preventDefault();
+              try { if (isRtl()) pf.flipPrev(); else pf.flipNext(); } catch (_) {}
+            } else if (k === 'ArrowLeft' || k === 'PageUp' || (k === ' ' && e.shiftKey)) {
+              e.preventDefault();
+              try { if (isRtl()) pf.flipNext(); else pf.flipPrev(); } catch (_) {}
+            } else if (k === 'Home') { e.preventDefault(); try { pf.turnToPage(0); } catch (_) {} }
+            else if (k === 'End') { e.preventDefault(); try { pf.turnToPage(pages.length - 1); } catch (_) {} }
+          };
+          // Laterales
+          const eL = el('div', 'edge l'), eR = el('div', 'edge r');
+          rd.append(eL, eR);
+          eL.onclick = () => { try { if (isRtl()) pf.flipNext(); else pf.flipPrev(); } catch (_) {} };
+          eR.onclick = () => { try { if (isRtl()) pf.flipPrev(); else pf.flipNext(); } catch (_) {} };
+          state.cleanup = () => {
+            try { pf?.destroy?.(); } catch (_) {}
+            try { document.onkeydown = null; } catch (_) {}
+          };
+          try { pokeUI(); armUiHide(); } catch (_) {}
+        } catch (err) {
+          console.error('[flip mode failed, fallback page]', err);
+          try { setPref('mode', 'page'); } catch (_) {}
+          try { console.warn('Page-Flip no disponible:', err?.message || err); } catch (_) {}
+        }
+        })();
+      } else if (panelMode) {
         try {
         migratePanelDetectPrefs();
         setRdClass('page panel-mode fit-screen');
