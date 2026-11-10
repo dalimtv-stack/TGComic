@@ -1652,20 +1652,22 @@ html:has(.sf-root){
 
 
 
-/* Series con ":" en dos líneas fijas (no partir "Supergirl Vol.7:" a mitad) */
-.card:has(.cover-series) b.series-title-split{
-  display:block;
-  -webkit-line-clamp:unset;
-  -webkit-box-orient:unset;
+
+/* Series con ":": dos líneas fijas — sin :has() (mejor soporte móvil) */
+.card.card-series-split .name > b.series-title-split{
+  display:block !important;
+  -webkit-line-clamp:unset !important;
+  -webkit-box-orient:unset !important;
   overflow:hidden;
   line-height:1.2;
   max-height:calc(1.2em * 2);
 }
-.card:has(.cover-series) b.series-title-split .series-title-l1,
-.card:has(.cover-series) b.series-title-split .series-title-l2{
+.card.card-series-split .name > b.series-title-split .series-title-l1,
+.card.card-series-split .name > b.series-title-split .series-title-l2{
   display:block;
   overflow:hidden;
   text-overflow:ellipsis;
   white-space:nowrap;
   line-height:1.2;
+  max-width:100%;
 }
