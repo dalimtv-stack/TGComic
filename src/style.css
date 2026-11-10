@@ -901,48 +901,6 @@ textarea.meta-desc-lg.edit-input{
 
 #rd.ui-off .play-fab{opacity:0;pointer-events:none}
 
-/* Recorte (abajo derecha) y RTL (encima del recorte) */
-#rd .crop-fab,
-#rd .rtl-fab{
-  position:fixed!important;
-  z-index:14!important;
-  right:calc(12px + env(safe-area-inset-right, 0px))!important;
-  left:auto!important;
-  margin-left:0!important;
-  transform:none!important;
-  width:40px!important;
-  height:40px!important;
-  min-width:40px!important;
-  min-height:40px!important;
-  max-width:40px!important;
-  max-height:40px!important;
-  padding:0!important;
-  border-radius:12px!important;
-  background:#1c1d22e6!important;
-  color:var(--fg)!important;
-  -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
-  box-shadow:0 4px 18px #0008!important;
-  display:inline-flex!important;
-  align-items:center!important;
-  justify-content:center!important;
-  border:0!important;
-  cursor:pointer;
-  transition:opacity .2s,background .15s;
-}
-#rd .crop-fab svg,
-#rd .rtl-fab svg{display:block;pointer-events:none;width:22px;height:22px}
-#rd .crop-fab.on,
-#rd .rtl-fab.on{background:var(--acc)!important;color:#111!important}
-#rd.ui-off .crop-fab,
-#rd.ui-off .rtl-fab{opacity:0;pointer-events:none}
-/* Misma altura que la fila play/spread/calidad */
-#rd .crop-fab{
-  bottom:calc(env(safe-area-inset-bottom,0px) + 58px)!important;
-}
-/* Justo encima del de recortar */
-#rd .rtl-fab{
-  bottom:calc(env(safe-area-inset-bottom,0px) + 58px + 40px + 6px)!important;
-}
 /* q-group empieza en 50%+32; ~3 botones (48+6)*3 ≈ 162 → margen derecho */
 
 #rd .q-group .q-btn{
@@ -1143,9 +1101,7 @@ textarea.meta-desc-lg.edit-input{
 }
 #rd .spread-fab,
 #rd .play-fab,
-#rd .auto-cfg-fab,
-#rd .crop-fab,
-#rd .rtl-fab{
+#rd .auto-cfg-fab{
   position:fixed!important;
   bottom:calc(env(safe-area-inset-bottom,0px) + 58px)!important;
   z-index:14!important;
@@ -1698,4 +1654,70 @@ html:has(.sf-root){
 }
 .rd-auto-cfg-box .rd-era-row input {
   accent-color: #2563eb;
+}
+
+/* ===== Recorte + RTL: posición fija (no compartir bottom con spread/play) ===== */
+#rd > .crop-fab,
+#rd > .rtl-fab,
+#rd .crop-fab,
+#rd .rtl-fab{
+  position:fixed!important;
+  z-index:14!important;
+  right:calc(10px + env(safe-area-inset-right, 0px))!important;
+  left:auto!important;
+  margin:0!important;
+  transform:none!important;
+  width:40px!important;
+  height:40px!important;
+  min-width:40px!important;
+  min-height:40px!important;
+  max-width:40px!important;
+  max-height:40px!important;
+  padding:0!important;
+  border-radius:12px!important;
+  background:#1c1d22e6!important;
+  color:var(--fg)!important;
+  border:0!important;
+  box-shadow:0 4px 18px #0008!important;
+  -webkit-backdrop-filter:blur(12px);
+  backdrop-filter:blur(12px);
+  display:inline-flex!important;
+  align-items:center!important;
+  justify-content:center!important;
+  cursor:pointer;
+  transition:opacity .2s ease, background .15s ease!important;
+  opacity:1;
+  pointer-events:auto;
+}
+#rd .crop-fab svg,
+#rd .rtl-fab svg{
+  display:block!important;
+  pointer-events:none!important;
+  width:20px!important;
+  height:20px!important;
+}
+#rd .crop-fab.on,
+#rd .rtl-fab.on{
+  background:var(--acc)!important;
+  color:#111!important;
+}
+/* Fila inferior (misma altura que spread/play) */
+#rd > .crop-fab,
+#rd .crop-fab{
+  bottom:calc(env(safe-area-inset-bottom, 0px) + 58px)!important;
+  top:auto!important;
+}
+/* Encima del de recortar */
+#rd > .rtl-fab,
+#rd .rtl-fab{
+  bottom:calc(env(safe-area-inset-bottom, 0px) + 58px + 46px)!important;
+  top:auto!important;
+}
+/* Ocultar con el resto de la UI del visor */
+#rd.ui-off > .crop-fab,
+#rd.ui-off > .rtl-fab,
+#rd.ui-off .crop-fab,
+#rd.ui-off .rtl-fab{
+  opacity:0!important;
+  pointer-events:none!important;
 }
