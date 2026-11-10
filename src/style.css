@@ -876,27 +876,53 @@ textarea.meta-desc-lg.edit-input{
 #rd.ui-off .spread-fab{opacity:0;pointer-events:none;transition:opacity .2s}
 #rd .spread-fab{transition:opacity .2s}
 
-/* Estados base de botones flotantes (Play, Calidad, Fabs) */
-#rd .play-fab svg,
-#rd .auto-cfg-fab svg,
-#rd .rd-info-btn svg,
-#rd .crop-fab svg,
-#rd .rtl-fab svg,
+/* Calidad Alta / Media / Baja: a la derecha del botón de doble página */
+/* Posición ESTÁTICA en todos los modos: siempre a la derecha del hueco del botón de doble página */
+#rd .q-group{
+  position:fixed;z-index:14;display:flex;gap:6px; /* fixed: en modo vertical/horizontal #rd hace scroll y absolute se iría con el contenido */
+  bottom:calc(env(safe-area-inset-bottom,0px) + 58px);
+  left:calc(50% + 32px);transform:none;
+  transition:opacity .2s;
+}
+
+/* Play / Pausa de reproducción automática: a la izquierda del botón de doble página */
+#rd .play-fab{
+  position:fixed;z-index:14;
+  bottom:calc(env(safe-area-inset-bottom,0px) + 58px);
+  left:calc(50% - 32px);transform:translateX(-100%);
+  width:48px;height:48px;min-width:48px;padding:0;
+  border-radius:14px;background:#1c1d22e6;color:var(--fg);
+  -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+  box-shadow:0 4px 18px #0008;display:inline-flex;align-items:center;justify-content:center;
+  border:0;cursor:pointer;transition:opacity .2s,background .15s;
+}
+#rd .play-fab svg{display:block;pointer-events:none}
+#rd .play-fab.on{background:var(--acc);color:#111}
+
+#rd.ui-off .play-fab{opacity:0;pointer-events:none}
+
+/* q-group empieza en 50%+32; ~3 botones (48+6)*3 ≈ 162 → margen derecho */
+
+#rd .q-group .q-btn{
+  width:48px;height:48px;min-width:48px;padding:0;border:0;border-radius:14px;
+  background:#1c1d22e6;color:var(--fg);opacity:.55;cursor:pointer;
+  -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+  box-shadow:0 4px 18px #0008;display:inline-flex;align-items:center;justify-content:center;
+  transition:opacity .15s,background .15s,box-shadow .15s;
+}
 #rd .q-group .q-btn svg{display:block;pointer-events:none}
-
-#rd .play-fab.on,
-#rd .q-group .q-btn.on{background:var(--acc);color:#111}
-
+#rd .q-group .q-btn.on{
+  opacity:1;background:var(--acc);color:#111;
+  box-shadow:0 0 0 2px #ffffffb0,0 4px 18px #000a;
+}
 #rd .q-group .q-btn:disabled{opacity:.22;cursor:default}
-
-#rd.ui-off .play-fab,
-#rd.ui-off .auto-cfg-fab,
-#rd.ui-off .rd-info-btn,
-#rd.ui-off .crop-fab,
-#rd.ui-off .rtl-fab,
-#rd.ui-off .q-group,
-#rd.ui-off .spread-fab{opacity:0!important;pointer-events:none!important}
-
+#rd.ui-off .q-group{opacity:0;pointer-events:none}
+@media (max-width: 420px){
+  #rd .q-group{gap:4px}
+  #rd .q-group .q-btn{width:42px;height:42px;min-width:42px}
+  #rd .q-group{left:calc(50% + 28px)}
+  #rd .play-fab{left:calc(50% - 28px)}
+}
 .cfg-hint{margin:.1rem .85rem .75rem;font-size:.78rem;opacity:.7;line-height:1.35}
 
 #rd .bot-cluster .fit-ico{font-size:1rem;line-height:1;margin-right:.2rem}
@@ -1050,7 +1076,74 @@ textarea.meta-desc-lg.edit-input{
 .sort-move:disabled{opacity:.3}
 
 
-/* Controles inferiores del visor unificados en bloque espejo final */
+/* ---- Controles inferiores del visor (tamaños y gaps unificados) ---- */
+#rd .spread-fab,
+#rd .play-fab,
+#rd .auto-cfg-fab,
+#rd .crop-fab,
+#rd .rtl-fab,
+#rd .q-group .btn,
+#rd .q-group button{
+  width:48px!important;
+  height:48px!important;
+  min-width:48px!important;
+  min-height:48px!important;
+  max-width:48px!important;
+  max-height:48px!important;
+  padding:0!important;
+  border-radius:14px!important;
+  box-sizing:border-box!important;
+  display:inline-flex!important;
+  align-items:center!important;
+  justify-content:center!important;
+  font-size:0.85rem!important;
+  line-height:1!important;
+}
+#rd .spread-fab,
+#rd .play-fab,
+#rd .auto-cfg-fab{
+  position:fixed!important;
+  bottom:calc(env(safe-area-inset-bottom,0px) + 58px)!important;
+  z-index:14!important;
+  background:#1c1d22e6!important;
+  color:var(--fg)!important;
+  border:0!important;
+  box-shadow:0 4px 18px #0008!important;
+  -webkit-backdrop-filter:blur(12px);
+  backdrop-filter:blur(12px);
+  transform:none!important;
+}
+/* Centro: doble página */
+#rd .spread-fab{
+  left:50%!important;
+  margin-left:-24px!important; /* 48/2 */
+}
+/* Play: 8px a la izquierda del spread */
+#rd .play-fab{
+  left:calc(50% - 24px - 8px - 48px)!important;
+  margin-left:0!important;
+}
+/* Engranaje autoplay: 8px a la izquierda del play */
+#rd .auto-cfg-fab{
+  left:calc(50% - 24px - 8px - 48px - 8px - 48px)!important;
+  margin-left:0!important;
+}
+#rd .auto-cfg-fab svg{
+  width:22px!important;
+  height:22px!important;
+  display:block;
+}
+/* Calidad: 8px a la derecha del spread */
+#rd .q-group{
+  position:fixed!important;
+  bottom:calc(env(safe-area-inset-bottom,0px) + 58px)!important;
+  left:calc(50% + 24px + 8px)!important;
+  transform:none!important;
+  display:flex!important;
+  gap:8px!important;
+  z-index:14!important;
+  margin:0!important;
+}
 
 
 /* ---- Modo Página + Ancho: hoja alta alineada ARRIBA; scroll solo en .page-host ---- */
@@ -1090,7 +1183,33 @@ textarea.meta-desc-lg.edit-input{
 /* ---- Menú principal ☰: por encima de la cola de tareas (panel z 80, chip z 81) ---- */
 .app-menu{z-index:95!important}
 
-
+/* ---- Visor: Play / ajustes (izquierda) y calidad (derecha) algo más pequeños y más juntos ----
+   La distancia al botón de doble página (8px) no cambia; entre sí quedan a 4px. */
+#rd .play-fab,
+#rd .auto-cfg-fab,
+#rd .crop-fab,
+#rd .rtl-fab,
+#rd .q-group .btn,
+#rd .q-group button{
+  width:40px!important;
+  height:40px!important;
+  min-width:40px!important;
+  min-height:40px!important;
+  max-width:40px!important;
+  max-height:40px!important;
+  border-radius:12px!important;
+}
+#rd .play-fab,
+#rd .auto-cfg-fab,
+#rd .q-group{
+  bottom:calc(env(safe-area-inset-bottom,0px) + 62px)!important; /* centrados en vertical con el de doble página (48px) */
+}
+#rd .play-fab{ left:calc(50% - 24px - 8px - 40px)!important; }
+#rd .auto-cfg-fab{ left:calc(50% - 24px - 8px - 40px - 4px - 40px)!important; }
+#rd .q-group{ gap:4px!important; left:calc(50% + 24px + 8px)!important; }
+#rd .play-fab svg,
+#rd .auto-cfg-fab svg,
+#rd .q-group .q-btn svg{ width:20px!important; height:20px!important; }
 
 /* Pantalla final: siguiente cómic */
 .next-card{position:absolute;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.82);padding:1.5rem;line-height:normal;animation:nextCardIn .25s ease}
