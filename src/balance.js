@@ -43,9 +43,28 @@ export function tokenize(text) {
 }
 
 /** Devuelve [texto] si cabe en una línea, [a, b] equilibradas, o null si no hay corte válido. */
+/** Devuelve [texto] si cabe en una línea, [a, b] equilibradas, o null si no hay corte válido. */
 export function layout(tokens, avail, measure) {
   const full = tokens.join(' ');
   if (measure(full) <= avail * ONE_LINE_FIT) return [full];
+
+  // 1. Si hay una palabra con ":", prioridad de corte justo tras ":"
+  const colonIdx = tokens.findIndex((t) => String(t).includes(':'));
+  if (colonIdx >= 0) {
+    const k = colonIdx + 1;
+    if (k < tokens.length) {
+      const a = tokens.slice(0, k).join(' ');
+      const b = tokens.slice(k).join(' ');
+      const wa = measure(a);
+      const wb = measure(b);
+      // Parte hasta ":" en L1 y cola en L2 (si la cola no cabe, no forzar; equilibrado abajo)
+      if (wa <= avail * LINE_FIT && wb <= avail * LINE_FIT) {
+        return [a, b];
+      }
+    }
+  }
+
+  // 2. Equilibrado natural estándar
   let best = null;
   for (let k = 1; k < tokens.length; k++) {
     const a = tokens.slice(0, k).join(' '), b = tokens.slice(k).join(' ');
