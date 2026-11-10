@@ -2085,10 +2085,11 @@ export function createReader(state, d) {
               const u = await load(right);
               if (mine !== token) return;
               const im = el('img'); im.draggable = false; im.src = u;
+              await im.decode().catch(() => {});
+              if (mine !== token) return;
               pageHost.replaceChildren(im);
               img = im;
               try { applyImgCrop(im); } catch (_) {}
-              im.decode().catch(() => {});
             }
             rd.scrollTo(0, 0);
             try {
@@ -2463,13 +2464,6 @@ export function createReader(state, d) {
           rd.style.width = w + 'px';
           rd.style.height = h + 'px';
           setRdClass('page fit-' + pref('fit', 'screen') + (pref('spread', '0') === '1' ? ' spread' : ''));
-          if (img) {
-            img.style.width = '';
-            img.style.height = '';
-            img.style.maxWidth = '';
-            img.style.maxHeight = '';
-            const s = img.src; img.src = ''; img.src = s;
-          }
         };
         let rt = 0;
         const onOrientPageD = () => {
