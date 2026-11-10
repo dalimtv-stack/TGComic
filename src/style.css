@@ -1700,3 +1700,35 @@ html:has(.sf-root){
 }
 #rd.ui-off .crop-fab,
 #rd.ui-off .rtl-fab{opacity:0!important;pointer-events:none!important;}
+
+/* ===== v10: crop/RTL transparentes, iconos mayores, calidad sin marco ===== */
+#rd .crop-fab,
+#rd .rtl-fab{
+  background:transparent!important;box-shadow:none!important;
+  -webkit-backdrop-filter:none!important;backdrop-filter:none!important;
+}
+#rd .crop-fab.on,
+#rd .rtl-fab.on{background:transparent!important;color:var(--acc)!important;}
+#rd .crop-fab svg,
+#rd .q-group .q-btn:not(.ai-btn) svg{width:27px!important;height:27px!important;}
+#rd .q-group .q-btn.on{box-shadow:0 4px 18px #000a!important;}
+
+/* Pantallas grandes (no móvil apaisado): botones mayores y más separados */
+@media (min-width:1024px) and (min-height:700px){
+  #rd .spread-fab{width:56px!important;height:56px!important;min-width:56px!important;min-height:56px!important;max-width:56px!important;max-height:56px!important;}
+  #rd .play-fab,#rd .auto-cfg-fab,#rd .rd-info-btn,#rd .crop-fab,#rd .rtl-fab,
+  #rd .q-group .btn,#rd .q-group button{
+    width:48px!important;height:48px!important;min-width:48px!important;min-height:48px!important;
+    max-width:48px!important;max-height:48px!important;border-radius:14px!important;
+  }
+  #rd .play-fab{left:calc(50% - 28px - 12px - 48px)!important;}
+  #rd .auto-cfg-fab{left:calc(50% - 28px - 12px - 48px - 8px - 48px)!important;}
+  #rd .rd-info-btn{left:calc(50% - 28px - 12px - 48px - 8px - 48px - 8px - 48px)!important;}
+  #rd .q-group .ai-btn{left:calc(50% - 28px - 12px - 48px - 8px - 48px - 8px - 48px - 8px - 48px)!important;}
+  #rd .q-group{left:calc(50% + 28px + 12px)!important;gap:8px!important;}
+  #rd .crop-fab,#rd .rtl-fab{left:calc(50% + 28px + 12px + 3 * (48px + 8px))!important;}
+  #rd .rtl-fab{bottom:calc(env(safe-area-inset-bottom,0px) + 62px + 48px + 8px)!important;}
+  #rd .play-fab svg,#rd .auto-cfg-fab svg,#rd .rd-info-btn svg,#rd .rtl-fab svg{width:24px!important;height:24px!important;}
+  #rd .crop-fab svg,#rd .q-group .q-btn:not(.ai-btn) svg{width:32px!important;height:32px!important;}
+  #rd .q-group .ai-btn .ai-ico{width:74px;height:74px;margin:-13px;}
+}
