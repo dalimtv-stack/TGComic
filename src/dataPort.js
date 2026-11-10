@@ -45,7 +45,7 @@ export async function exportLibraryData({ kv, includeCovers = true }) {
       for (const [k, v] of entries) {
         if (typeof k !== 'string') continue;
         // custom covers / comic covers / art overrides
-        if (!(k.startsWith('c:') || k.startsWith('art:') || k.startsWith('gcov:') || k.startsWith('ccov:'))) continue;
+        if (!(k.startsWith('c:') || k.startsWith('art:') || k.startsWith('cc:') || k.startsWith('sc:') || k.startsWith('gc:') || k.startsWith('gcov:') || k.startsWith('ccov:'))) continue;
         if (!(v instanceof Blob)) continue;
         if (v.size > 800 * 1024) continue; // skip very large
         const buf = await v.arrayBuffer();
