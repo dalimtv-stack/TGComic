@@ -1788,7 +1788,7 @@ export function createReader(state, d) {
         const scr = () => (typeof opts.scroller === 'function' ? (opts.scroller() || rd) : rd);
         const onDown = (e) => {
           if (e.button !== 0) return;
-          if (e.target.closest?.('.bar, .edge, .mosaic, .btn, .spread-fab, .play-fab, .auto-cfg-fab, .q-group, input, textarea')) return;
+          if (e.target.closest?.('.bar, .edge, .mosaic, .btn, .spread-fab, .play-fab, .auto-cfg-fab, .crop-fab, .rtl-fab, .q-group, input, textarea')) return;
           start = {
             x: e.clientX,
             y: e.clientY,
@@ -2127,7 +2127,7 @@ export function createReader(state, d) {
 
         let ptrStart = null, dragging = false, dragOrigin = null;
         pageHost.addEventListener('pointerdown', (ev) => {
-          if (ev.target.closest && ev.target.closest('.bar, .btn, .mosaic, .play-fab, .auto-cfg-fab, .q-group, .spread-fab, .rd-info-btn')) return;
+          if (ev.target.closest && ev.target.closest('.bar, .btn, .mosaic, .play-fab, .auto-cfg-fab, .crop-fab, .rtl-fab, .q-group, .spread-fab, .rd-info-btn')) return;
           ptrStart = { x: ev.clientX, y: ev.clientY, id: ev.pointerId, t: Date.now() };
           dragging = false;
           dragOrigin = { x: ev.clientX, y: ev.clientY, panX: panX, panY: panY };
@@ -2277,10 +2277,16 @@ export function createReader(state, d) {
           cropBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
         };
         cropBtn.onclick = (ev) => {
-          try { ev.stopPropagation(); } catch (_) {}
+          try { ev.stopPropagation(); ev.preventDefault(); } catch (_) {}
           setPref('autoCrop', isAutoCrop() ? '0' : '1');
           paintCropBtn();
-          try { applyCropToHost(pageHost); } catch (_) {}
+          try {
+            const host = rd.querySelector('.page-host') || rd;
+            host.querySelectorAll('img').forEach((im) => {
+              clearImgCrop(im);
+              if (isAutoCrop()) applyImgCrop(im);
+            });
+          } catch (_) {}
           try { pokeUI(); } catch (_) {}
         };
         paintCropBtn();
@@ -2295,10 +2301,13 @@ export function createReader(state, d) {
           rtlBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
         };
         rtlBtn.onclick = (ev) => {
-          try { ev.stopPropagation(); } catch (_) {}
+          try { ev.stopPropagation(); ev.preventDefault(); } catch (_) {}
           setPref('rtl', isRtl() ? '0' : '1');
           paintRtlBtn();
-          try { turn(n); } catch (_) {}
+          try {
+            if (typeof turn === 'function') turn(n);
+            else if (typeof goToPage === 'function') goToPage(n);
+          } catch (_) {}
           try { pokeUI(); } catch (_) {}
         };
         paintRtlBtn();
@@ -2584,7 +2593,7 @@ export function createReader(state, d) {
 
         rd.addEventListener('touchstart', (e) => {
           // Toque en laterales/barra: no iniciar gesto de página en #rd
-          if (e.target.closest?.('.edge, .bar, .mosaic, .spread-fab, .play-fab, .auto-cfg-fab, .q-group')) {
+          if (e.target.closest?.('.edge, .bar, .mosaic, .spread-fab, .play-fab, .auto-cfg-fab, .crop-fab, .rtl-fab, .q-group')) {
             sx = null;
             pinch = null;
             return;
@@ -2633,7 +2642,7 @@ export function createReader(state, d) {
         }, { passive: false });
 
         rd.addEventListener('touchend', (e) => {
-          if (e.target.closest?.('.edge, .bar, .mosaic, .spread-fab, .play-fab, .auto-cfg-fab, .q-group')) {
+          if (e.target.closest?.('.edge, .bar, .mosaic, .spread-fab, .play-fab, .auto-cfg-fab, .crop-fab, .rtl-fab, .q-group')) {
             sx = null;
             return;
           }
@@ -3363,7 +3372,7 @@ export function createReader(state, d) {
 
           // Laterales: click izq/der en modo horizontal continuo
           const onHorizEdgeClick = (ev) => {
-            if (ev.target.closest?.('.bar, .edge, .mosaic, .btn, .play-fab, .auto-cfg-fab, .q-group, .spread-fab')) return;
+            if (ev.target.closest?.('.bar, .edge, .mosaic, .btn, .play-fab, .auto-cfg-fab, .crop-fab, .rtl-fab, .q-group, .spread-fab')) return;
             if (rd.classList.contains('zoom')) return;
             const rect = rd.getBoundingClientRect();
             const x = ev.clientX - rect.left;
