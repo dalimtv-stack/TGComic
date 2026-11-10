@@ -197,12 +197,16 @@ function runPipeline(img, opts, mode) {
   panels = mergeContained(panels, 0.5);
   panels = deoverlap(panels);
 
-  // --- 5. Detección inteligente de páginas completas / Splash pages ---
-  if (panels.length === 1 && panels[0].w > 0.88 && panels[0].h > 0.88) return [];
-  if (panels.length === 0) return [];
+  // --- 5. Fallback 1D por proyección de perfiles si 2D falló o devolvió 0/1 viñeta gigante ---
+  const isRtl = Boolean(opts.rtl || opts.era === 'Manga');
+  if (panels.length === 0 || (panels.length === 1 && panels[0].w > 0.86 && panels[0].h > 0.86)) {
+    const p1D = detectPanels1DProjection(gray, w, h, isDarkGutter, thrPaper, isRtl);
+    if (p1D && p1D.length) {
+      panels = p1D;
+    }
+  }
 
   // Orden de lectura (RTL para Manga, LTR para Occidental)
-  const isRtl = Boolean(opts.rtl || opts.era === 'Manga');
   panels = sortReadingOrder(panels, isRtl);
 
   if (maxPanels > 0 && panels.length > maxPanels) panels = panels.slice(0, maxPanels);
@@ -424,4 +428,114 @@ function sortReadingOrder(panels, rtl = false) {
     out.push(...row);
   }
   return out;
+}
+
+
+function detectPanels1DProjection(gray, w, h, isDarkGutter, thrPaper, isRtl) {
+  const rowGutter = new Uint8Array(h);
+  const gutterRatioThr = 0.80;
+  for (let y = 0; y < h; y++) {
+    const yw = y * w;
+    let paperCount = 0;
+    for (let x = 0; x < w; x++) {
+      const g = gray[yw + x];
+      const isPaper = isDarkGutter ? (g <= thrPaper) : (g >= thrPaper);
+      if (isPaper) paperCount++;
+    }
+    if (paperCount / w >= gutterRatioThr) rowGutter[y] = 1;
+  }
+
+  const rowBands = [];
+  const minBandH = Math.max(10, Math.floor(h * 0.07));
+  let inBand = false, bStart = 0;
+  for (let y = 0; y < h; y++) {
+    if (!rowGutter[y]) {
+      if (!inBand) { inBand = true; bStart = y; }
+    } else {
+      if (inBand) {
+        inBand = false;
+        if (y - bStart >= minBandH) rowBands.push([bStart, y - 1]);
+      }
+    }
+  }
+  if (inBand && h - bStart >= minBandH) rowBands.push([bStart, h - 1]);
+
+  const effectiveBands = rowBands.length ? rowBands : [[Math.floor(h * 0.03), Math.floor(h * 0.97)]];
+  const panels = [];
+  const minPanelW = Math.max(10, Math.floor(w * 0.09));
+
+  for (const [y0, y1] of effectiveBands) {
+    const bandH = y1 - y0 + 1;
+    const colGutter = new Uint8Array(w);
+    for (let x = 0; x < w; x++) {
+      let paperCount = 0;
+      for (let y = y0; y <= y1; y++) {
+        const g = gray[y * w + x];
+        const isPaper = isDarkGutter ? (g <= thrPaper) : (g >= thrPaper);
+        if (isPaper) paperCount++;
+      }
+      if (paperCount / bandH >= gutterRatioThr) colGutter[x] = 1;
+    }
+
+    const colCells = [];
+    let inCol = false, cStart = 0;
+    for (let x = 0; x < w; x++) {
+      if (!colGutter[x]) {
+        if (!inCol) { inCol = true; cStart = x; }
+      } else {
+        if (inCol) {
+          inCol = false;
+          if (x - cStart >= minPanelW) colCells.push([cStart, x - 1]);
+        }
+      }
+    }
+    if (inCol && w - cStart >= minPanelW) colCells.push([cStart, w - 1]);
+
+    const effectiveCols = colCells.length ? colCells : [[Math.floor(w * 0.03), Math.floor(w * 0.97)]];
+
+    for (const [x0, x1] of effectiveCols) {
+      const pw = (x1 - x0 + 1) / w;
+      const ph = bandH / h;
+      if (pw >= 0.08 && ph >= 0.05) {
+        panels.push({
+          x: Math.max(0, Math.min(0.98, x0 / w)),
+          y: Math.max(0, Math.min(0.98, y0 / h)),
+          w: Math.max(0.04, Math.min(1, pw)),
+          h: Math.max(0.04, Math.min(1, ph)),
+        });
+      }
+    }
+  }
+
+  if (panels.length >= 2) {
+    return sortReadingOrder(panels, isRtl);
+  }
+
+  // Fallback final si la página es ilustración/portada única: recortar margen exterior
+  let minX = w - 1, maxX = 0, minY = h - 1, maxY = 0, hasContent = false;
+  for (let y = 0; y < h; y += 2) {
+    const yw = y * w;
+    for (let x = 0; x < w; x += 2) {
+      const g = gray[yw + x];
+      const isContent = isDarkGutter ? (g > thrPaper) : (g < thrPaper);
+      if (isContent) {
+        hasContent = true;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+
+  if (hasContent && maxX > minX + 20 && maxY > minY + 20) {
+    return [{
+      x: Math.max(0, minX / w),
+      y: Math.max(0, minY / h),
+      w: Math.max(0.2, (maxX - minX + 1) / w),
+      h: Math.max(0.2, (maxY - minY + 1) / h),
+    }];
+  }
+
+  return [{ x: 0.02, y: 0.02, w: 0.96, h: 0.96 }];
 }
