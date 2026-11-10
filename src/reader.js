@@ -59,17 +59,41 @@ export function createReader(state, d) {
       if (!ctx) return null;
       ctx.drawImage(img, 0, 0, w, h);
       const { data } = ctx.getImageData(0, 0, w, h);
+      // Muestrear esquinas para calibrar el color del margen real (papel blanco o vintage 1978)
+      let cornerSum = 0, cornerCount = 0;
+      const cw = Math.max(2, Math.floor(w * 0.04));
+      const ch = Math.max(2, Math.floor(h * 0.04));
+      for (let cy = 0; cy < ch; cy++) {
+        for (let cx = 0; cx < cw; cx++) {
+          const idxs = [
+            (cy * w + cx) * 4,
+            (cy * w + (w - 1 - cx)) * 4,
+            ((h - 1 - cy) * w + cx) * 4,
+            ((h - 1 - cy) * w + (w - 1 - cx)) * 4,
+          ];
+          for (const p of idxs) {
+            cornerSum += (data[p] * 0.299 + data[p + 1] * 0.587 + data[p + 2] * 0.114);
+            cornerCount++;
+          }
+        }
+      }
+      const cLum = cornerCount ? (cornerSum / cornerCount) : 220;
+      const isDarkMargin = cLum < 65;
       const emptyPx = (x, y) => {
         const i = (y * w + x) * 4;
-        const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
+        const a = data[i + 3];
         if (a < 12) return true;
-        const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
-        if (mx < 28) return true;   // casi negro (margen)
-        if (mn > 230) return true;  // casi blanco (margen)
-        return false;
+        const r = data[i], g = data[i + 1], b = data[i + 2];
+        const lum = r * 0.299 + g * 0.587 + b * 0.114;
+        if (isDarkMargin) {
+          return lum < Math.max(35, cLum + 18);
+        } else {
+          // Margen claro: papel moderno (>220) o cómic vintage/newsprint de 1978 (cLum ~140..190)
+          return lum >= Math.min(215, Math.max(115, cLum - 25));
+        }
       };
-      // Tolerancia: ≥97% de la fila/columna vacía (ruido de escaneo)
-      const EMPTY_RATIO = 0.97;
+      // Tolerancia 93%: ignora polvo y manchas de escáner en bordes de cómics clásicos
+      const EMPTY_RATIO = 0.93;
       const rowEmpty = (y) => {
         let n = 0;
         for (let x = 0; x < w; x++) if (emptyPx(x, y)) n++;
@@ -215,12 +239,25 @@ export function createReader(state, d) {
     }
     if (!_PageFlipPromise) {
       _PageFlipPromise = new Promise((resolve, reject) => {
-        const script = document.createElement('script');
-        script.src = 'https://cdn.jsdelivr.net/npm/page-flip@2.0.7/dist/js/page-flip.browser.js';
-        script.async = true;
-        script.onload = () => window.St?.PageFlip ? resolve(window.St.PageFlip) : reject(new Error('St.PageFlip no está disponible'));
-        script.onerror = () => reject(new Error('No se pudo cargar page-flip desde jsDelivr'));
-        document.head.appendChild(script);
+        const loadScript = (src, onFail) => {
+          const s = document.createElement('script');
+          s.src = src;
+          s.async = true;
+          s.onload = () => {
+            if (window.St?.PageFlip) resolve(window.St.PageFlip);
+            else if (onFail) onFail();
+            else reject(new Error('St.PageFlip no está disponible tras cargar ' + src));
+          };
+          s.onerror = () => {
+            if (onFail) onFail();
+            else reject(new Error('Error de red al cargar ' + src));
+          };
+          document.head.appendChild(s);
+        };
+        // Intentar primero el script local en public/vendor/ y luego CDN de respaldo
+        loadScript('/vendor/page-flip.browser.js', () => {
+          loadScript('https://cdn.jsdelivr.net/npm/page-flip@2.0.7/dist/js/page-flip.browser.js', null);
+        });
       }).catch((error) => { _PageFlipPromise = null; throw error; });
     }
     _PageFlipCtor = await _PageFlipPromise;
@@ -281,64 +318,64 @@ export function createReader(state, d) {
   ];
   const PANEL_ERA_DEFAULTS = {
     '1900-1950': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4,
+      panelShadow: 55, panelMargin: 3, panelCrop: 4,
       panelGutterRow: 18, panelGutterCol: 18, panelBandMin: 6, panelMinArea: 6,
       panelDetectW: 420, panelMerge: 0, panelMax: 8,
       panelPaperLum: 165, panelPaperFrac: 35, panelBorderLum: 100,
     },
     '1950-1980': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4,
+      panelShadow: 55, panelMargin: 3, panelCrop: 4,
       panelGutterRow: 16, panelGutterCol: 16, panelBandMin: 5, panelMinArea: 4,
       panelDetectW: 480, panelMerge: 0, panelMax: 10,
       panelPaperLum: 170, panelPaperFrac: 38, panelBorderLum: 90,
     },
     '1980-1990': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4,
+      panelShadow: 55, panelMargin: 3, panelCrop: 4,
       panelGutterRow: 15, panelGutterCol: 15, panelBandMin: 4, panelMinArea: 3,
       panelDetectW: 520, panelMerge: 0, panelMax: 12,
       panelPaperLum: 175, panelPaperFrac: 40, panelBorderLum: 85,
     },
     '1990-2000': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4,
+      panelShadow: 55, panelMargin: 3, panelCrop: 4,
       panelGutterRow: 14, panelGutterCol: 14, panelBandMin: 3, panelMinArea: 2,
       panelDetectW: 560, panelMerge: 0, panelMax: 16,
       panelPaperLum: 180, panelPaperFrac: 36, panelBorderLum: 80,
     },
     '2000-': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4,
+      panelShadow: 55, panelMargin: 3, panelCrop: 4,
       panelGutterRow: 13, panelGutterCol: 13, panelBandMin: 3, panelMinArea: 2,
       panelDetectW: 640, panelMerge: 0, panelMax: 20,
       panelPaperLum: 185, panelPaperFrac: 34, panelBorderLum: 75,
     },
     'Manga': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4,
+      panelShadow: 55, panelMargin: 3, panelCrop: 4,
       panelGutterRow: 14, panelGutterCol: 14, panelBandMin: 3, panelMinArea: 2,
       panelDetectW: 640, panelMerge: 0, panelMax: 20,
       panelPaperLum: 180, panelPaperFrac: 35, panelBorderLum: 85,
     },
     'Noir': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4,
+      panelShadow: 55, panelMargin: 3, panelCrop: 4,
       panelGutterRow: 14, panelGutterCol: 14, panelBandMin: 3, panelMinArea: 2,
       panelDetectW: 600, panelMerge: 0, panelMax: 20,
       panelPaperLum: 80, panelPaperFrac: 35, panelBorderLum: 100,
     },
     // Primer preset Grok (1980-1990 original antes del retune)
     'Grok': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4,
+      panelShadow: 55, panelMargin: 3, panelCrop: 4,
       panelGutterRow: 18, panelGutterCol: 22, panelBandMin: 4, panelMinArea: 4,
       panelDetectW: 360, panelMerge: 0, panelMax: 0,
       panelPaperLum: 175, panelPaperFrac: 40, panelBorderLum: 80,
     },
     // Fumiko: pipeline estilo Kumiko (contornos / CC sobre gradiente)
     'Fumiko': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4,
+      panelShadow: 55, panelMargin: 3, panelCrop: 4,
       panelGutterRow: 15, panelGutterCol: 15, panelBandMin: 4, panelMinArea: 3,
       panelDetectW: 640, panelMerge: 0, panelMax: 0,
       panelPaperLum: 175, panelPaperFrac: 40, panelBorderLum: 100,
     },
     // Kumiko-Grok: Kumiko + flood de papel (híbrido)
     'Kumiko-Grok': {
-      panelShadow: 55, panelMargin: 8, panelCrop: 4,
+      panelShadow: 55, panelMargin: 3, panelCrop: 4,
       panelGutterRow: 15, panelGutterCol: 15, panelBandMin: 4, panelMinArea: 3,
       panelDetectW: 560, panelMerge: 0, panelMax: 0,
       panelPaperLum: 170, panelPaperFrac: 38, panelBorderLum: 90,
@@ -434,9 +471,15 @@ export function createReader(state, d) {
         paperLum: numP('panelPaperLum', eraNow === 'Noir' ? 80 : 175, 40, 250),
         paperFrac: numP('panelPaperFrac', 40, 10, 80),
       };
-      const panels = useFumiko
+      let panels = useFumiko
         ? detectPanelsFumiko(im, opts)
         : detectPanelsKumikoGrok(im, opts);
+      if (!panels || panels.length === 0) {
+        // Fallback al motor hermano antes de desistir
+        panels = useFumiko
+          ? detectPanelsKumikoGrok(im, opts)
+          : detectPanelsFumiko(im, opts);
+      }
       return Array.isArray(panels) ? panels : [];
     } catch (e) {
       console.warn('[panel-detect]', e);
@@ -1333,111 +1376,174 @@ export function createReader(state, d) {
       let goToPage = (i) => {}; // se asigna en cada modo
 
       if (flipMode) {
-        // --- Modo Page-Flip 3D (StPageFlip) ---
-        (async () => {
-        try {
-          setRdClass('page flip-mode fit-screen');
-          const flipHost = el('div', 'flip-host');
-          const bookEl = el('div', 'flip-book');
-          flipHost.append(bookEl);
-          rd.append(flipHost);
-          // Barras ya creadas arriba; asegurar z-index
-          const placeholder = (i) =>
-            'data:image/svg+xml,' + encodeURIComponent(
-              `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="900"><rect fill="#1a1b1f" width="100%" height="100%"/><text x="50%" y="50%" fill="#555" font-size="28" text-anchor="middle" dominant-baseline="middle">${i + 1}</text></svg>`
-            );
-          const urls = pages.map((_, i) => placeholder(i));
-          let pf = null;
-          let flipReady = false;
-          const PageFlip = await ensurePageFlip();
-          const w = Math.max(280, Math.min(rd.clientWidth || 400, 900));
-          const h = Math.max(360, Math.min(rd.clientHeight || 600, 1400));
-          pf = new PageFlip(bookEl, {
-            width: w,
-            height: h,
-            size: 'stretch',
-            minWidth: 200,
-            maxWidth: 2400,
-            minHeight: 280,
-            maxHeight: 2400,
-            drawShadow: true,
-            maxShadowOpacity: 0.45,
-            showCover: true,
-            mobileScrollSupport: false,
-            swipeDistance: 30,
-            usePortrait: true,
-            startZIndex: 1,
-            autoSize: true,
-            startPage: Math.max(0, Math.min(pages.length - 1, n)),
-          });
-          pf.loadFromImages(urls);
-          flipReady = true;
-          const paintCount = () => {
-            try {
-              const cur = pf?.getCurrentPageIndex?.() ?? n;
-              n = cur;
-              cnt.textContent = (cur + 1) + ' / ' + pages.length;
-              savePage(cur);
-            } catch (_) {}
-          };
-          pf.on('flip', () => { paintCount(); softLoadAround(pf.getCurrentPageIndex()); });
-          pf.on('changeState', () => { try { pokeUI(); } catch (_) {} });
-          const softLoadAround = async (center) => {
-            const rad = 3;
-            const jobs = [];
-            for (let i = Math.max(0, center - rad); i <= Math.min(pages.length - 1, center + rad); i++) {
-              if (urls[i] && !urls[i].startsWith('data:')) continue;
-              jobs.push((async (idx) => {
-                try {
-                  const u = await load(idx);
-                  if (u) urls[idx] = u;
-                } catch (_) {}
-              })(i));
-            }
-            await Promise.all(jobs);
-            try {
-              if (flipReady && pf) pf.updateFromImages(urls);
-            } catch (e) { console.warn('[flip] updateFromImages', e); }
-          };
-          await softLoadAround(n);
-          paintCount();
-          goToPage = (i) => {
-            try { pf?.turnToPage?.(Math.max(0, Math.min(pages.length - 1, i))); } catch (_) {}
-          };
-          autoStep = async () => {
-            try {
-              if ((pf?.getCurrentPageIndex?.() ?? n) >= pages.length - 1) return false;
-              pf.flipNext();
-              return true;
-            } catch (_) { return false; }
-          };
-          document.onkeydown = (e) => {
-            if (e.target?.closest?.('input, textarea, [contenteditable]')) return;
-            const k = e.key;
-            if (k === 'ArrowRight' || k === 'PageDown' || (k === ' ' && !e.shiftKey)) {
-              e.preventDefault();
-              try { if (isRtl()) pf.flipPrev(); else pf.flipNext(); } catch (_) {}
-            } else if (k === 'ArrowLeft' || k === 'PageUp' || (k === ' ' && e.shiftKey)) {
-              e.preventDefault();
-              try { if (isRtl()) pf.flipNext(); else pf.flipPrev(); } catch (_) {}
-            } else if (k === 'Home') { e.preventDefault(); try { pf.turnToPage(0); } catch (_) {} }
-            else if (k === 'End') { e.preventDefault(); try { pf.turnToPage(pages.length - 1); } catch (_) {} }
-          };
-          // Laterales
-          const eL = el('div', 'edge l'), eR = el('div', 'edge r');
-          rd.append(eL, eR);
-          eL.onclick = () => { try { if (isRtl()) pf.flipNext(); else pf.flipPrev(); } catch (_) {} };
-          eR.onclick = () => { try { if (isRtl()) pf.flipPrev(); else pf.flipNext(); } catch (_) {} };
-          state.cleanup = () => {
-            try { pf?.destroy?.(); } catch (_) {}
-            try { document.onkeydown = null; } catch (_) {}
-          };
-          try { pokeUI(); armUiHide(); } catch (_) {}
-        } catch (err) {
-          console.error('[flip mode failed, fallback page]', err);
-          try { setPref('mode', 'page'); } catch (_) {}
-          try { console.warn('Page-Flip no disponible:', err?.message || err); } catch (_) {}
+        // --- Modo Page-Flip 3D (StPageFlip con páginas HTML aceleradas) ---
+        setRdClass('page flip-mode fit-screen');
+        const flipHost = el('div', 'flip-host');
+        const bookEl = el('div', 'flip-book');
+        flipHost.append(bookEl);
+
+        // Crear elementos DOM para cada página
+        for (let i = 0; i < pages.length; i++) {
+          const isHard = (i === 0 || i === pages.length - 1);
+          const pEl = el('div', 'flip-page' + (isHard ? ' --hard' : ''));
+          pEl.dataset.density = isHard ? 'hard' : 'soft';
+          const inner = el('div', 'flip-page-inner');
+          const im = el('img', 'flip-page-img');
+          im.draggable = false;
+          im.alt = 'Página ' + (i + 1);
+          const num = el('span', 'flip-page-num', String(i + 1));
+          inner.append(im, num);
+          pEl.append(inner);
+          bookEl.append(pEl);
         }
+
+        // Importante: añadir flipHost Y barras de control superior e inferior a rd
+        rd.append(flipHost, top, bot);
+
+        let pf = null;
+        let isMountingFlip = true;
+
+        const loadedPageImages = new Set();
+        const loadFlipPage = async (idx) => {
+          if (idx < 0 || idx >= pages.length || loadedPageImages.has(idx)) return;
+          loadedPageImages.add(idx);
+          try {
+            const u = await load(idx);
+            if (!u) return;
+            const pEl = bookEl.children[idx];
+            if (pEl) {
+              const im = pEl.querySelector('img');
+              if (im) {
+                im.src = u;
+                try { applyImgCrop(im); } catch (_) {}
+              }
+            }
+          } catch (_) {}
+        };
+
+        const preloadAroundFlip = async (center) => {
+          const rad = Math.min(5, Math.max(2, networkPreloadRadius() + 1));
+          for (let d = 0; d <= rad; d++) {
+            if (center - d >= 0) loadFlipPage(center - d);
+            if (center + d < pages.length) loadFlipPage(center + d);
+          }
+        };
+
+        (async () => {
+          try {
+            const PageFlip = await ensurePageFlip();
+            if (!isMountingFlip) return;
+
+            const isLandscape = window.innerWidth >= 900 && window.innerWidth > window.innerHeight;
+            const availW = Math.max(280, rd.clientWidth || window.innerWidth || 800);
+            const availH = Math.max(360, rd.clientHeight || window.innerHeight || 1000);
+
+            // Relación de aspecto estándar de cómic (~0.68)
+            let pageW, pageH;
+            if (isLandscape) {
+              pageH = Math.min(availH - 96, 1300);
+              pageW = Math.min(Math.floor((availW - 50) / 2), Math.floor(pageH * 0.72));
+            } else {
+              pageH = Math.min(availH - 96, 1300);
+              pageW = Math.min(availW - 24, Math.floor(pageH * 0.72));
+            }
+
+            pf = new PageFlip(bookEl, {
+              width: Math.max(260, pageW),
+              height: Math.max(380, pageH),
+              size: 'fixed',
+              minWidth: 200,
+              maxWidth: 2000,
+              minHeight: 280,
+              maxHeight: 2000,
+              drawShadow: true,
+              maxShadowOpacity: 0.5,
+              showCover: true,
+              mobileScrollSupport: false,
+              swipeDistance: 25,
+              usePortrait: !isLandscape,
+              startPage: Math.max(0, Math.min(pages.length - 1, n)),
+              clickEventForward: true,
+            });
+
+            pf.loadFromHTML(bookEl.querySelectorAll('.flip-page'));
+
+            const updateCount = () => {
+              try {
+                const cur = pf?.getCurrentPageIndex?.() ?? n;
+                n = cur;
+                cnt.textContent = (cur + 1) + ' / ' + pages.length;
+                savePage(cur);
+              } catch (_) {}
+            };
+
+            pf.on('flip', (e) => {
+              updateCount();
+              preloadAroundFlip(e.data ?? (pf?.getCurrentPageIndex?.() ?? n));
+            });
+
+            pf.on('changeState', () => {
+              try { pokeUI(); } catch (_) {}
+            });
+
+            await preloadAroundFlip(n);
+            updateCount();
+
+            goToPage = (i) => {
+              try {
+                const target = Math.max(0, Math.min(pages.length - 1, i));
+                pf?.turnToPage?.(target);
+              } catch (_) {}
+            };
+
+            autoStep = async () => {
+              try {
+                const cur = pf?.getCurrentPageIndex?.() ?? n;
+                if (cur >= pages.length - 1) return false;
+                pf?.flipNext?.();
+                return true;
+              } catch (_) { return false; }
+            };
+
+            document.onkeydown = (e) => {
+              if (e.target?.closest?.('input, textarea, [contenteditable]')) return;
+              const k = e.key;
+              if (k === 'ArrowRight' || k === 'PageDown' || (k === ' ' && !e.shiftKey)) {
+                e.preventDefault();
+                try { if (isRtl()) pf.flipPrev(); else pf.flipNext(); } catch (_) {}
+              } else if (k === 'ArrowLeft' || k === 'PageUp' || (k === ' ' && e.shiftKey)) {
+                e.preventDefault();
+                try { if (isRtl()) pf.flipNext(); else pf.flipPrev(); } catch (_) {}
+              } else if (k === 'Home') {
+                e.preventDefault();
+                try { pf.turnToPage(0); } catch (_) {}
+              } else if (k === 'End') {
+                e.preventDefault();
+                try { pf.turnToPage(pages.length - 1); } catch (_) {}
+              }
+            };
+
+            // Laterales de clic
+            const eL = el('div', 'edge l'), eR = el('div', 'edge r');
+            rd.append(eL, eR);
+            eL.onclick = () => { try { if (isRtl()) pf.flipNext(); else pf.flipPrev(); } catch (_) {} };
+            eR.onclick = () => { try { if (isRtl()) pf.flipPrev(); else pf.flipNext(); } catch (_) {} };
+
+            observers._flipDestroy = () => {
+              isMountingFlip = false;
+              try { pf?.destroy?.(); } catch (_) {}
+              pf = null;
+            };
+
+            try { pokeUI(); armUiHide(); } catch (_) {}
+          } catch (err) {
+            console.error('[flip mode failed, fallback page]', err);
+            try { setPref('mode', 'page'); } catch (_) {}
+            try {
+              unmount();
+              unmount = mount();
+            } catch (_) {}
+          }
         })();
       } else if (panelMode) {
         try {
@@ -1546,12 +1652,14 @@ export function createReader(state, d) {
           let cropN = Number(pref('panelCrop', '4'));
           if (!Number.isFinite(cropN)) cropN = 4;
           cropN = Math.max(-30, Math.min(40, cropN)) / 100;
-          const expandX = panel.w * cropN;
-          const expandY = panel.h * cropN;
-          const px = Math.max(0, Math.min(0.98, panel.x - expandX / 2));
-          const py = Math.max(0, Math.min(0.98, panel.y - expandY / 2));
-          const pwN = Math.max(0.04, Math.min(1 - px, panel.w + expandX));
-          const phN = Math.max(0.04, Math.min(1 - py, panel.h + expandY));
+          // cropN > 0: recorta hacia adentro (elimina márgenes blancos exteriores y medianiles)
+          // cropN < 0: abre el encuadre (añade margen exterior)
+          const insetX = (panel.w * cropN) / 2;
+          const insetY = (panel.h * cropN) / 2;
+          const px = Math.max(0, Math.min(0.98, panel.x + insetX));
+          const py = Math.max(0, Math.min(0.98, panel.y + insetY));
+          const pwN = Math.max(0.04, Math.min(1 - px, panel.w - 2 * insetX));
+          const phN = Math.max(0.04, Math.min(1 - py, panel.h - 2 * insetY));
           let marginPct = Number(pref('panelMargin', '8'));
           if (!Number.isFinite(marginPct)) marginPct = 8;
           marginPct = Math.max(0, Math.min(25, marginPct));
@@ -2948,6 +3056,7 @@ export function createReader(state, d) {
       setCount();
       return () => {
         closeNextCard();
+        try { if (observers._flipDestroy) observers._flipDestroy(); } catch (_) {}
         clearTimeout(uiTimer);
         clearTimeout(autoT);
         try { autoCancelAnim(); } catch (_) {}
