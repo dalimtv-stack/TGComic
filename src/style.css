@@ -1647,3 +1647,31 @@ html:has(.sf-root){
 .rd-auto-cfg-box .rd-era-row input {
   accent-color: #2563eb;
 }
+
+
+
+
+
+
+
+
+/* Botones recorte / RTL del visor (misma familia que spread-fab) */
+#rd .crop-fab,
+#rd .rtl-fab{
+  position:absolute;
+  z-index:6;
+  width:44px;height:44px;padding:0;
+  border-radius:12px;
+  background:rgba(0,0,0,.45);
+  color:#fff;
+}
+#rd .crop-fab.on,
+#rd .rtl-fab.on{
+  background:rgba(242,182,50,.85);
+  color:#111;
+}
+#rd .crop-fab{ right: calc(12px + env(safe-area-inset-right, 0px)); bottom: calc(64px + env(safe-area-inset-bottom, 0px)); }
+#rd .rtl-fab{ right: calc(12px + env(safe-area-inset-right, 0px)); bottom: calc(116px + env(safe-area-inset-bottom, 0px)); }
+#rd img.auto-cropped{
+  /* object-view-box / clip-path aplicados en JS */
+}
