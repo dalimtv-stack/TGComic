@@ -1193,6 +1193,8 @@ function showViewerConfig() {
     { id: '1980-1990', label: '1980-1990' },
     { id: '1990-2000', label: '1990-2000' },
     { id: '2000-', label: '2000-' },
+    { id: 'Manga', label: 'Manga (RTL)' },
+    { id: 'Noir', label: 'Noir (Calles Negras)' },
     { id: 'Grok', label: 'Grok' },
     { id: 'Fumiko', label: 'Fumiko' },
     { id: 'Kumiko-Grok', label: 'Kumiko-Grok' },
@@ -1235,6 +1237,18 @@ function showViewerConfig() {
       panelGutterRow: 13, panelGutterCol: 13, panelBandMin: 3, panelMinArea: 2,
       panelDetectW: 640, panelMerge: 0, panelMax: 20,
       panelPaperLum: 185, panelPaperFrac: 34, panelBorderLum: 75,
+    },
+    'Manga': {
+      panelShadow: 55, panelMargin: 8, panelCrop: 4,
+      panelGutterRow: 14, panelGutterCol: 14, panelBandMin: 3, panelMinArea: 2,
+      panelDetectW: 640, panelMerge: 0, panelMax: 20,
+      panelPaperLum: 180, panelPaperFrac: 35, panelBorderLum: 85,
+    },
+    'Noir': {
+      panelShadow: 55, panelMargin: 8, panelCrop: 4,
+      panelGutterRow: 14, panelGutterCol: 14, panelBandMin: 3, panelMinArea: 2,
+      panelDetectW: 600, panelMerge: 0, panelMax: 20,
+      panelPaperLum: 80, panelPaperFrac: 35, panelBorderLum: 100,
     },
     // Primer preset Grok (1980-1990 original antes del retune)
     'Grok': {
@@ -1477,23 +1491,24 @@ function showViewerConfig() {
   const syncSpreadVis = (mode) => {
     const m = mode || (() => {
       const x = pref('mode', 'page');
-      return (x === 'vertical' || x === 'horizontal' || x === 'panel') ? x : 'page';
+      return (x === 'vertical' || x === 'horizontal' || x === 'panel' || x === 'flip') ? x : 'page';
     })();
-    spreadWrap.hidden = m !== 'page';
+    spreadWrap.hidden = (m !== 'page' && m !== 'flip');
     try { panelWrap.hidden = m !== 'panel'; } catch (_) {}
   };
   try { panelWrap.hidden = pref('mode', 'page') !== 'panel'; } catch (_) {}
 
-const modeGrp = toggleGroup(
+  const modeGrp = toggleGroup(
     [
       ['page', 'Modo Página'],
+      ['flip', 'Modo Libro (3D)'],
       ['vertical', 'Modo Vertical'],
       ['horizontal', 'Modo Horizontal'],
       ['panel', 'Modo Viñeta'],
     ],
     () => {
       const m = pref('mode', 'page');
-      return (m === 'vertical' || m === 'horizontal' || m === 'panel') ? m : 'page';
+      return (m === 'vertical' || m === 'horizontal' || m === 'panel' || m === 'flip') ? m : 'page';
     },
     (v) => setPref('mode', v),
     (v) => { syncSpreadVis(v); }
