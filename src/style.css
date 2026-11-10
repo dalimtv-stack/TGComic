@@ -1656,70 +1656,113 @@ html:has(.sf-root){
   accent-color: #2563eb;
 }
 
-/* ===== Crop + RTL: espejo del botón IA (IA a la izquierda → crop a la derecha) =====
-   IA:  left: 50% - 24 - 8 - 40 - 4 - 40 - 20 - 40  (izq. del engranaje/play)
-   Crop: left: 50% + 24 + 8 + 40 + 4 + 40 + 4 + 40 + 20  (dcha. del grupo calidad)
-   RTL:  misma X, encima del crop
-*/
-#rd > .crop-fab,
-#rd > .rtl-fab,
+/* ===== Distribución simétrica de controles del visor =====
+   IA · Información · Ajustes · Play | Simple/Doble | Alta · Media · Baja · Crop
+   RTL/LTR encima de Crop. Los huecos se conservan si no hay versiones.
+   Una sola geometría para escritorio y móvil; no depende del contenido. */
+#rd{
+  --rd-control-size:40px;
+  --rd-center-size:48px;
+  --rd-control-gap:4px;
+  --rd-center-gap:8px;
+  --rd-control-bottom:calc(env(safe-area-inset-bottom,0px) + 62px);
+  --rd-control-step:calc(var(--rd-control-size) + var(--rd-control-gap));
+  --rd-side-start:calc(var(--rd-center-size)/2 + var(--rd-center-gap));
+}
+#rd .spread-fab,
+#rd .play-fab,
+#rd .auto-cfg-fab,
+#rd .rd-info-btn,
 #rd .crop-fab,
-#rd .rtl-fab{
+#rd .rtl-fab,
+#rd .q-group .q-btn{
+  width:var(--rd-control-size)!important;
+  height:var(--rd-control-size)!important;
+  min-width:var(--rd-control-size)!important;
+  min-height:var(--rd-control-size)!important;
+  max-width:var(--rd-control-size)!important;
+  max-height:var(--rd-control-size)!important;
+  padding:0!important;
+  box-sizing:border-box!important;
+}
+#rd .spread-fab,
+#rd .play-fab,
+#rd .auto-cfg-fab,
+#rd .rd-info-btn,
+#rd .crop-fab,
+#rd .rtl-fab,
+#rd .q-group,
+#rd .q-group .ai-btn{
   position:fixed!important;
-  z-index:15!important;
+  bottom:var(--rd-control-bottom)!important;
+  top:auto!important;
   right:auto!important;
   margin:0!important;
   transform:none!important;
-  width:40px!important;
-  height:40px!important;
-  min-width:40px!important;
-  min-height:40px!important;
-  max-width:40px!important;
-  max-height:40px!important;
-  padding:0!important;
-  border-radius:12px!important;
-  background:#1c1d22e6!important;
-  color:var(--fg)!important;
+  z-index:30!important;
+}
+#rd .spread-fab{
+  width:var(--rd-center-size)!important;
+  height:var(--rd-center-size)!important;
+  min-width:var(--rd-center-size)!important;
+  min-height:var(--rd-center-size)!important;
+  max-width:var(--rd-center-size)!important;
+  max-height:var(--rd-center-size)!important;
+  left:calc(50% - var(--rd-center-size)/2)!important;
+  bottom:calc(var(--rd-control-bottom) + (var(--rd-control-size) - var(--rd-center-size))/2)!important;
+}
+#rd .play-fab{
+  left:calc(50% - var(--rd-side-start) - var(--rd-control-size))!important;
+}
+#rd .auto-cfg-fab{
+  left:calc(50% - var(--rd-side-start) - var(--rd-control-size) - var(--rd-control-step))!important;
+}
+#rd .rd-info-btn{
+  left:calc(50% - var(--rd-side-start) - var(--rd-control-size) - 2*var(--rd-control-step))!important;
+}
+#rd .q-group .ai-btn{
+  left:calc(50% - var(--rd-side-start) - var(--rd-control-size) - 3*var(--rd-control-step))!important;
+}
+#rd .q-group{
+  left:calc(50% + var(--rd-side-start))!important;
+  gap:var(--rd-control-gap)!important;
+}
+#rd .q-group .ai-btn .ai-ico{
+  width:34px;height:34px;margin:0;
+}
+#rd .crop-fab,
+#rd .rtl-fab{
+  left:calc(50% + var(--rd-side-start) + 3*var(--rd-control-step))!important;
   border:0!important;
-  box-shadow:0 4px 18px #0008!important;
+  border-radius:12px!important;
+  background:var(--card)!important;
+  color:var(--fg)!important;
   display:inline-flex!important;
   align-items:center!important;
   justify-content:center!important;
   cursor:pointer;
-  transition:opacity .2s ease, background .15s ease!important;
-  opacity:1;
-  pointer-events:auto;
+  transition:opacity .2s ease,background .15s ease!important;
+}
+#rd .rtl-fab{
+  bottom:calc(var(--rd-control-bottom) + var(--rd-control-size) + 6px)!important;
 }
 #rd .crop-fab svg,
 #rd .rtl-fab svg{
-  display:block!important;
-  pointer-events:none!important;
-  width:20px!important;
-  height:20px!important;
+  display:block;pointer-events:none;width:20px;height:20px;
 }
 #rd .crop-fab.on,
 #rd .rtl-fab.on{
   background:var(--acc)!important;
-  color:#111!important;
+  color:var(--bg)!important;
 }
-
-/* Misma altura que IA / play / calidad */
-#rd > .crop-fab,
-#rd .crop-fab{
-  left:calc(50% + 24px + 8px + 40px + 4px + 40px + 4px + 40px + 20px)!important;
-  bottom:calc(env(safe-area-inset-bottom, 0px) + 62px)!important;
-  top:auto!important;
+/* Nueve posiciones: a partir de 440px caben los tamaños habituales. */
+@media(max-width:439px){
+  #rd{--rd-control-size:36px;--rd-center-size:44px;--rd-control-gap:2px;--rd-center-gap:4px;}
 }
-/* Encima del crop (mismo left) */
-#rd > .rtl-fab,
-#rd .rtl-fab{
-  left:calc(50% + 24px + 8px + 40px + 4px + 40px + 4px + 40px + 20px)!important;
-  bottom:calc(env(safe-area-inset-bottom, 0px) + 62px + 40px + 6px)!important;
-  top:auto!important;
+@media(max-width:374px){
+  #rd{--rd-control-size:30px;--rd-center-size:40px;--rd-control-gap:1px;--rd-center-gap:3px;}
+  #rd .q-group .ai-btn .ai-ico{width:28px;height:28px;}
 }
-
-#rd.ui-off > .crop-fab,
-#rd.ui-off > .rtl-fab,
 #rd.ui-off .crop-fab,
 #rd.ui-off .rtl-fab{
   opacity:0!important;
