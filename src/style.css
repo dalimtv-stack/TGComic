@@ -1647,38 +1647,3 @@ html:has(.sf-root){
 .rd-auto-cfg-box .rd-era-row input {
   accent-color: #2563eb;
 }
-
-
-
-
-
-
-
-/* Títulos con ":": si caben van en 1 línea; si no caben, saltan justo tras ":" */
-.card .name > b.title-wrap-colon {
-  display: flex !important;
-  flex-wrap: wrap !important;
-  justify-content: center;
-  align-items: baseline;
-  line-height: 1.25;
-  max-height: calc(1.25em * var(--name-lines, 2));
-  overflow: hidden;
-}
-
-/* La parte hasta el ":" se mantiene junta si entra en la línea */
-.card .name > b.title-wrap-colon .title-colon-head {
-  display: inline-block;
-  white-space: nowrap;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* El subtítulo posterior al ":" pasa a la siguiente línea si el total excede el ancho */
-.card .name > b.title-wrap-colon .title-colon-tail {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  text-align: center;
-}
