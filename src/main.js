@@ -862,12 +862,13 @@ const stack = [];
 function modeBtn(after) {
   const b = el('button', 'btn mode');
   // Muestra el modo ACTUAL (más claro para el usuario)
-  const nextOf = { page: 'vertical', vertical: 'horizontal', horizontal: 'panel', panel: 'page' };
+  const nextOf = { page: 'vertical', vertical: 'horizontal', horizontal: 'panel', panel: 'flip', flip: 'page' };
   const labelOf = {
     page: '▯ Página',
     vertical: '☰ Vertical',
     horizontal: '⇔ Horizontal',
     panel: '▤ Viñeta',
+    flip: '📜 Libro',
   };
   b._label = () => {
     let cur = pref('mode', 'page');
