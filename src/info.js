@@ -3141,10 +3141,8 @@ function showEditChannel(ch, files, after, onBack = null, opts = {}) {
       });
     }],
   ];
-  // Único añadido respecto a un canal normal: renombrar la sección (alias visible).
-  if (section) {
-    items.splice(1, 0, ['Editar nombre de la sección', () => showEditSectionName(ch, section, after)]);
-  }
+  // Dentro de una sección: misma UX de canal («Editar nombre del canal» renombra la sección vía showEditChannelName).
+  // No duplicar con «Editar nombre de la sección».
   sheet(title, items, { cancelLabel: 'Volver', onCancel: onBack || after });
 }
 /** Solo secciones: alias visible (misma lógica que el nombre de canal, etiqueta distinta). */
