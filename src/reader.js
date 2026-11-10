@@ -42,27 +42,29 @@ export function createReader(state, d) {
   const isAutoCrop = () => pref('autoCrop', '0') === '1';
 
   /**
-   * Detecta márgenes vacíos (blanco/negro) de una imagen.
-   * Devuelve fracciones { t, r, b, l } ∈ [0,1) o null.
+   * Detecta márgenes vacíos (blanco o negro uniforme) en el contorno de una imagen.
+   * Devuelve fracciones { t, r, b, l } ∈ [0, 0.14] o null si no hay margen claro o es una portada.
    */
   function detectContentInsets(img) {
     try {
       const nw = img.naturalWidth || 0, nh = img.naturalHeight || 0;
-      if (nw < 8 || nh < 8) return null;
+      if (nw < 16 || nh < 16) return null;
       const maxW = 320;
       const scale = Math.min(1, maxW / nw);
-      const w = Math.max(8, Math.round(nw * scale));
-      const h = Math.max(8, Math.round(nh * scale));
+      const w = Math.max(16, Math.round(nw * scale));
+      const h = Math.max(16, Math.round(nh * scale));
       const c = document.createElement('canvas');
       c.width = w; c.height = h;
       const ctx = c.getContext('2d', { willReadFrequently: true });
       if (!ctx) return null;
       ctx.drawImage(img, 0, 0, w, h);
       const { data } = ctx.getImageData(0, 0, w, h);
-      // Muestrear esquinas para calibrar el color del margen real (papel blanco o vintage 1978)
-      let cornerSum = 0, cornerCount = 0;
+
+      // Muestrear las 4 esquinas para determinar si el borde es papel claro o marco negro
       const cw = Math.max(2, Math.floor(w * 0.04));
       const ch = Math.max(2, Math.floor(h * 0.04));
+      let cornerSum = 0, cornerCount = 0;
+      const lums = [];
       for (let cy = 0; cy < ch; cy++) {
         for (let cx = 0; cx < cw; cx++) {
           const idxs = [
@@ -72,46 +74,87 @@ export function createReader(state, d) {
             ((h - 1 - cy) * w + (w - 1 - cx)) * 4,
           ];
           for (const p of idxs) {
-            cornerSum += (data[p] * 0.299 + data[p + 1] * 0.587 + data[p + 2] * 0.114);
+            const lum = data[p] * 0.299 + data[p + 1] * 0.587 + data[p + 2] * 0.114;
+            cornerSum += lum;
             cornerCount++;
+            lums.push(lum);
           }
         }
       }
       const cLum = cornerCount ? (cornerSum / cornerCount) : 220;
-      const isDarkMargin = cLum < 65;
+      // Varianza en esquinas: si varía mucho, es una portada con arte hasta el borde -> no recortar
+      let varSum = 0;
+      for (const lum of lums) varSum += (lum - cLum) * (lum - cLum);
+      const cStd = Math.sqrt(varSum / (cornerCount || 1));
+      if (cStd > 36) return null;
+
+      const isDark = cLum < 55;
+      const isLight = cLum > 165;
+      if (!isDark && !isLight) {
+        // Tono intermedio (portada coloreada, ilustración continua) -> no recortar
+        return null;
+      }
+
       const emptyPx = (x, y) => {
         const i = (y * w + x) * 4;
         const a = data[i + 3];
-        if (a < 12) return true;
+        if (a < 15) return true;
         const r = data[i], g = data[i + 1], b = data[i + 2];
         const lum = r * 0.299 + g * 0.587 + b * 0.114;
-        if (isDarkMargin) {
-          return lum < Math.max(35, cLum + 18);
+        const sat = Math.max(r, g, b) - Math.min(r, g, b);
+        if (isDark) {
+          return lum < Math.max(28, cLum + 16);
         } else {
-          // Margen claro: papel moderno (>220) o cómic vintage/newsprint de 1978 (cLum ~140..190)
-          return lum >= Math.min(215, Math.max(115, cLum - 25));
+          return lum >= Math.min(240, Math.max(140, cLum - 20)) && sat < 35;
         }
       };
-      // Tolerancia 93%: ignora polvo y manchas de escáner en bordes de cómics clásicos
-      const EMPTY_RATIO = 0.93;
-      const rowEmpty = (y) => {
+
+      const EMPTY_RATIO = 0.94;
+      // Un margen de cómic real no supera el 14% de la página
+      const maxScanY = Math.floor(h * 0.14);
+      const maxScanX = Math.floor(w * 0.14);
+
+      let top = 0;
+      while (top < maxScanY) {
         let n = 0;
-        for (let x = 0; x < w; x++) if (emptyPx(x, y)) n++;
-        return n / w >= EMPTY_RATIO;
-      };
-      const colEmpty = (x) => {
+        for (let x = 0; x < w; x++) if (emptyPx(x, top)) n++;
+        if (n / w >= EMPTY_RATIO) top++;
+        else break;
+      }
+
+      let bot = h - 1;
+      while (bot > h - 1 - maxScanY) {
         let n = 0;
-        for (let y = 0; y < h; y++) if (emptyPx(x, y)) n++;
-        return n / h >= EMPTY_RATIO;
-      };
-      let top = 0, bot = h - 1, left = 0, right = w - 1;
-      while (top < h && rowEmpty(top)) top++;
-      while (bot > top && rowEmpty(bot)) bot--;
-      while (left < w && colEmpty(left)) left++;
-      while (right > left && colEmpty(right)) right--;
-      const t = top / h, btm = (h - 1 - bot) / h, l = left / w, rgt = (w - 1 - right) / w;
-      if (t + btm + l + rgt < 0.012) return null;
-      const clamp = (v) => Math.min(0.42, Math.max(0, v));
+        for (let x = 0; x < w; x++) if (emptyPx(x, bot)) n++;
+        if (n / w >= EMPTY_RATIO) bot--;
+        else break;
+      }
+
+      let left = 0;
+      while (left < maxScanX) {
+        let n = 0;
+        for (let y = 0; y < h; y++) if (emptyPx(left, y)) n++;
+        if (n / h >= EMPTY_RATIO) left++;
+        else break;
+      }
+
+      let right = w - 1;
+      while (right > w - 1 - maxScanX) {
+        let n = 0;
+        for (let y = 0; y < h; y++) if (emptyPx(right, y)) n++;
+        if (n / h >= EMPTY_RATIO) right--;
+        else break;
+      }
+
+      const t = top / h;
+      const btm = (h - 1 - bot) / h;
+      const l = left / w;
+      const rgt = (w - 1 - right) / w;
+
+      // Margen insignificante (< 1.5%) -> ignorar
+      if (t + btm + l + rgt < 0.015) return null;
+
+      const clamp = (v) => Math.min(0.12, Math.max(0, v));
       return { t: clamp(t), r: clamp(rgt), b: clamp(btm), l: clamp(l) };
     } catch (_) {
       return null;
@@ -126,13 +169,6 @@ export function createReader(state, d) {
       im.style.removeProperty('transform');
       im.style.removeProperty('transform-origin');
       im.classList.remove('auto-cropped');
-      // Restaurar src original si el recorte generó un blob
-      if (im.dataset.cropSrc) {
-        const cur = im.src;
-        im.src = im.dataset.cropSrc;
-        delete im.dataset.cropSrc;
-        try { if (cur && cur.startsWith('blob:')) URL.revokeObjectURL(cur); } catch (_) {}
-      }
     } catch (_) {}
   }
 
@@ -145,37 +181,19 @@ export function createReader(state, d) {
         const box = detectContentInsets(im);
         if (!box) return;
         const { t, r, b, l } = box;
-        const nw = im.naturalWidth || 0, nh = im.naturalHeight || 0;
-        if (nw < 8 || nh < 8) return;
-        const sx = Math.floor(l * nw);
-        const sy = Math.floor(t * nh);
-        const sw = Math.max(1, Math.floor(nw * (1 - l - r)));
-        const sh = Math.max(1, Math.floor(nh * (1 - t - b)));
-        if (sw >= nw * 0.98 && sh >= nh * 0.98) return;
-        // Canvas: funciona en Safari/iOS (object-view-box no; clip-path no amplía)
-        const c = document.createElement('canvas');
-        c.width = sw;
-        c.height = sh;
-        const ctx = c.getContext('2d');
-        if (!ctx) return;
-        ctx.drawImage(im, sx, sy, sw, sh, 0, 0, sw, sh);
-        const finish = (url) => {
-          if (!url) return;
-          if (!im.dataset.cropSrc) im.dataset.cropSrc = im.currentSrc || im.src;
-          im.src = url;
-          im.classList.add('auto-cropped');
-        };
-        if (c.toBlob) {
-          c.toBlob((blob) => {
-            if (!blob) {
-              try { finish(c.toDataURL('image/jpeg', 0.92)); } catch (_) {}
-              return;
-            }
-            finish(URL.createObjectURL(blob));
-          }, 'image/jpeg', 0.92);
+        const inset = `${(t * 100).toFixed(2)}% ${(r * 100).toFixed(2)}% ${(b * 100).toFixed(2)}% ${(l * 100).toFixed(2)}%`;
+        if (typeof CSS !== 'undefined' && CSS.supports && CSS.supports('object-view-box', 'inset(0%)')) {
+          im.style.objectViewBox = `inset(${inset})`;
         } else {
-          try { finish(c.toDataURL('image/jpeg', 0.92)); } catch (_) {}
+          // Safari / Firefox / iOS: clip-path recorta los márgenes y transform escala para ajustar
+          im.style.clipPath = `inset(${inset})`;
+          const scaleX = 1 / Math.max(0.3, 1 - l - r);
+          const scaleY = 1 / Math.max(0.3, 1 - t - b);
+          const scale = Math.min(scaleX, scaleY);
+          im.style.transformOrigin = 'center center';
+          im.style.transform = `scale(${scale.toFixed(3)})`;
         }
+        im.classList.add('auto-cropped');
       } catch (_) {}
     };
     if (im.complete && im.naturalWidth) run();
