@@ -26,6 +26,7 @@ const SYNC_PREFIXES = [
   'ungroup:',
   'read:',
   'coverFit:',
+  'sort:',
 ];
 const KEY_TIMES = 'keyTimes';
 const SYNC_KEYS = ['channelNames', 'groupNames', 'lastRead', 'recentReads', 'contentLocks', KEY_TIMES];
