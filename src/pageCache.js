@@ -1,5 +1,5 @@
 /**
- * Caché de páginas de cómics en IndexedDB (kv) con caché caliente en memoria (LRU).
+ * Caché de páginas de cómics en IndexedDB (kv).
  * Clave: pc:{chId}:{msgId}:{pageIndex} → Blob
  * Índice: pc:index → [{ key, size, at, chId, msgId, page }]
  * Límite configurable (pref pageCacheMaxMB, default 500).
@@ -9,25 +9,11 @@ export function createPageCache({ kv, pref }) {
   const INDEX = 'pc:index';
   const PREFIX = 'pc:';
   const TOUCH_MS = 450;
-  const HOT_LIMIT = 30; // Páginas en memoria RAM para apertura instantánea (0ms)
-
-  /** @type {Map<string, Blob>} */
-  const memBlobs = new Map();
 
   /** @type {Array|null} */
   let memIndex = null;
   let flushTimer = null;
   let flushChain = Promise.resolve();
-
-  function hotPut(key, blob) {
-    if (!blob || !(blob.size > 0)) return;
-    if (memBlobs.has(key)) memBlobs.delete(key);
-    memBlobs.set(key, blob);
-    if (memBlobs.size > HOT_LIMIT) {
-      const oldest = memBlobs.keys().next().value;
-      if (oldest) memBlobs.delete(oldest);
-    }
-  }
 
   function maxBytes() {
     const mb = Math.max(50, Math.min(4000, +(pref('pageCacheMaxMB', '500') || 500)));
@@ -37,7 +23,9 @@ export function createPageCache({ kv, pref }) {
   async function readIndex() {
     try {
       const raw = await kv.get(INDEX);
-      return Array.isArray(raw) ? raw : [];
+      if (!Array.isArray(raw)) return [];
+      // Filtrar claves corruptas o undefined
+      return raw.filter((x) => x && x.key && !x.key.includes('undefined'));
     } catch {
       return [];
     }
@@ -50,6 +38,10 @@ export function createPageCache({ kv, pref }) {
   async function ensureIndex() {
     if (!memIndex) memIndex = await readIndex();
     return memIndex;
+  }
+
+  function invalidateMem() {
+    memIndex = null;
   }
 
   function scheduleFlush() {
@@ -74,26 +66,17 @@ export function createPageCache({ kv, pref }) {
   }
 
   function pageKey(chId, msgId, page) {
-    return ;
+    if (chId == null || msgId == null || page == null) return null;
+    return PREFIX + chId + ':' + msgId + ':' + page;
   }
 
   async function get(chId, msgId, page) {
-    if (chId == null || msgId == null || page < 0) return null;
+    if (chId == null || msgId == null || page == null || page < 0) return null;
     const key = pageKey(chId, msgId, page);
-    // 1. Caché caliente en memoria: respuesta inmediata
-    if (memBlobs.has(key)) {
-      const b = memBlobs.get(key);
-      if (b instanceof Blob && b.size > 0) {
-        hotPut(key, b);
-        touch(key).catch(() => {});
-        return b;
-      }
-    }
-    // 2. IndexedDB
+    if (!key || key.includes('undefined')) return null;
     try {
       const b = await kv.get(key);
       if (b instanceof Blob && b.size > 0) {
-        hotPut(key, b);
         touch(key).catch(() => {});
         return b;
       }
@@ -102,6 +85,7 @@ export function createPageCache({ kv, pref }) {
   }
 
   async function touch(key) {
+    if (!key) return;
     const idx = await ensureIndex();
     const i = idx.findIndex((x) => x.key === key);
     if (i < 0) return;
@@ -112,10 +96,10 @@ export function createPageCache({ kv, pref }) {
   }
 
   async function set(chId, msgId, page, blob) {
-    if (!blob || !blob.size || chId == null || msgId == null || page < 0) return;
+    if (!blob || !(blob.size > 0) || chId == null || msgId == null || page == null || page < 0) return;
     const key = pageKey(chId, msgId, page);
+    if (!key || key.includes('undefined')) return;
     const size = blob.size;
-    hotPut(key, blob);
     try {
       await kv.set(key, blob);
     } catch (e) {
@@ -130,7 +114,7 @@ export function createPageCache({ kv, pref }) {
     const filtered = idx.filter((x) => x.key !== key);
     filtered.push({ key, size, at: Date.now(), chId: String(chId), msgId: String(msgId), page });
     memIndex = filtered;
-    scheduleFlush(); // No bloquear con flushNow() síncrono en cada página
+    scheduleFlush();
 
     const limit = maxBytes();
     const total = filtered.reduce((s, x) => s + (x.size || 0), 0);
@@ -157,7 +141,6 @@ export function createPageCache({ kv, pref }) {
     while (total > limit && idx.length) {
       const row = idx.shift();
       total -= row.size || 0;
-      memBlobs.delete(row.key);
       try { await kv.del(row.key); } catch (_) {
         try { await kv.set(row.key, undefined); } catch (_) {}
       }
@@ -167,7 +150,6 @@ export function createPageCache({ kv, pref }) {
   }
 
   async function clearAll() {
-    memBlobs.clear();
     await flushNow();
     const idx = await ensureIndex();
     for (const row of idx) {
@@ -180,15 +162,12 @@ export function createPageCache({ kv, pref }) {
   /** Borra páginas cacheadas de un cómic concreto (p.ej. archivo resubido con otro tamaño). */
   async function clearComic(chId, msgId) {
     if (chId == null || msgId == null) return 0;
-    const cs = String(chId);
-    const ms = String(msgId);
-    for (const k of [...memBlobs.keys()]) {
-      if (k.startsWith()) memBlobs.delete(k);
-    }
     await flushNow();
     const idx = await ensureIndex();
     const keep = [];
     let n = 0;
+    const cs = String(chId);
+    const ms = String(msgId);
     for (const row of idx) {
       if (String(row.chId) === cs && String(row.msgId) === ms) {
         try { await kv.del(row.key); } catch (_) {}
