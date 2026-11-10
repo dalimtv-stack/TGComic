@@ -564,9 +564,9 @@ export function createSearchFilters(d) {
       if (typeof showChannelInfo === 'function') {
         opts.push(['Información', () => showChannelInfo(ch, sec ? { section: sec } : {})]);
       }
-      // No "Editar canal Telegram" sobre una Sección virtual (macro)
-      if (!sec && typeof showEditChannel === 'function') {
-        opts.push(['Editar', () => showEditChannel(ch, [], () => paintUI(entry, corpus))]);
+      // Sección virtual: misma edición de nombre/portada pasando { section: sec }
+      if (typeof showEditChannel === 'function') {
+        opts.push(['Editar', () => showEditChannel(ch, [], () => paintUI(entry, corpus), null, sec ? { section: sec } : {})]);
       }
       if (opts.length) sheet(channelName || sec || ch?.name || 'Canal', opts);
     };
