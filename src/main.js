@@ -1172,6 +1172,17 @@ function showViewerConfig() {
   }
   paintSpread();
 
+  section('Lectura');
+  toggleGroup(
+    [['0', 'Occidental (LTR)'], ['1', 'Manga (RTL)']],
+    () => (pref('rtl', '0') === '1' ? '1' : '0'),
+    (v) => setPref('rtl', v),
+  );
+  toggleGroup(
+    [['0', 'Sin recorte'], ['1', 'Recortar márgenes']],
+    () => (pref('autoCrop', '0') === '1' ? '1' : '0'),
+    (v) => setPref('autoCrop', v),
+  );
 
   // Subopciones Modo Viñeta: épocas + configuración avanzada
   // Perfiles por época. Activa: pref('panelEra'). Overrides: pref('panelEraProfile:<id>') JSON.
