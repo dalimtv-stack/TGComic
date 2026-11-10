@@ -650,7 +650,7 @@ async function comicNeighbors(ch, f) {
   try { files = (await kv.get('f:' + ch.id)) || []; } catch (_) {}
   if (!Array.isArray(files) || !files.length) return { prev: null, next: null };
 
-  // 2) Solo la serie del cómic (nunca todo el canal: evita saltar a otra serie)
+  // 2) Serie del cómic en el MISMO orden que la vista (nombre / fecha / manual)
   let list = [];
   try {
     const groups = groupSeries(files, ch.name, seriesOverrideFor(ch));
@@ -664,9 +664,25 @@ async function comicNeighbors(ch, f) {
       } catch (_) {}
     }
   } catch (_) {}
-  // Sin serie: un solo cómic (no usar todo el canal como lista de vecinos)
+  // 2b) Si hay __tgComicNav del canal (lista visible ordenada) y el cómic no estaba
+  //     en items (p.ej. desfase de ids), intentar ids[] del mismo canal.
   if (list.length < 2) {
-    const wrap1 = (ff) => (ff ? { f: ff, ch } : null);
+    try {
+      const nav = globalThis.__tgComicNav;
+      if (nav && Array.isArray(nav.ids) && nav.ids.length
+          && (!nav.chId || String(nav.chId) === String(ch.id))) {
+        const ids = nav.ids.map(String);
+        const filesMap = new Map();
+        for (const x of flattenVersions(files)) filesMap.set(String(x.id), x);
+        for (const x of (nav.files || [])) filesMap.set(String(x.id), x);
+        const ordered = ids.map((id) => filesMap.get(id)).filter(Boolean);
+        if (ordered.some((x) => String(x.id) === String(f.id)) && ordered.length >= 2) {
+          list = ordered;
+        }
+      }
+    } catch (_) {}
+  }
+  if (list.length < 2) {
     return { prev: null, next: null };
   }
   const i = list.findIndex((x) => String(x.id) === String(f.id));
