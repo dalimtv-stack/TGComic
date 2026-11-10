@@ -239,25 +239,49 @@ export function createReader(state, d) {
     }
     if (!_PageFlipPromise) {
       _PageFlipPromise = new Promise((resolve, reject) => {
-        const loadScript = (src, onFail) => {
+        const sources = [
+          '/vendor/page-flip.browser.js',
+          'https://cdn.jsdelivr.net/npm/page-flip@2.0.7/dist/js/page-flip.browser.js',
+          'https://unpkg.com/page-flip@2.0.7/dist/js/page-flip.browser.js',
+          'https://cdnjs.cloudflare.com/ajax/libs/page-flip/2.0.7/js/page-flip.browser.js',
+        ];
+        let idx = 0;
+        const tryNext = () => {
+          if (typeof window !== 'undefined' && window.St?.PageFlip) {
+            resolve(window.St.PageFlip);
+            return;
+          }
+          if (idx >= sources.length) {
+            reject(new Error('No se pudo cargar St.PageFlip desde /vendor ni CDNs de respaldo'));
+            return;
+          }
+          const src = sources[idx++];
           const s = document.createElement('script');
           s.src = src;
           s.async = true;
+          let done = false;
           s.onload = () => {
+            if (done) return;
+            done = true;
             if (window.St?.PageFlip) resolve(window.St.PageFlip);
-            else if (onFail) onFail();
-            else reject(new Error('St.PageFlip no está disponible tras cargar ' + src));
+            else tryNext();
           };
           s.onerror = () => {
-            if (onFail) onFail();
-            else reject(new Error('Error de red al cargar ' + src));
+            if (done) return;
+            done = true;
+            try { s.remove(); } catch (_) {}
+            tryNext();
           };
+          setTimeout(() => {
+            if (!done) {
+              done = true;
+              try { s.remove(); } catch (_) {}
+              tryNext();
+            }
+          }, 4000);
           document.head.appendChild(s);
         };
-        // Intentar primero el script local en public/vendor/ y luego CDN de respaldo
-        loadScript('/vendor/page-flip.browser.js', () => {
-          loadScript('https://cdn.jsdelivr.net/npm/page-flip@2.0.7/dist/js/page-flip.browser.js', null);
-        });
+        tryNext();
       }).catch((error) => { _PageFlipPromise = null; throw error; });
     }
     _PageFlipCtor = await _PageFlipPromise;
@@ -838,8 +862,7 @@ export function createReader(state, d) {
       back.onclick = () => history.back();
       const mb = modeBtn(() => {
         savePage(n);
-        unmount();
-        unmount = mount();
+        remount();
       });
       const gridBtn = el('button', 'btn grid-btn', '▦');
       gridBtn.setAttribute('aria-label', 'Mosaico de páginas');
@@ -1382,7 +1405,9 @@ export function createReader(state, d) {
         const bookEl = el('div', 'flip-book');
         flipHost.append(bookEl);
 
-        // Crear elementos DOM para cada página
+        // Crear elementos DOM para cada página guardando referencias directas al elemento <img>
+        // (PageFlip reorganiza el DOM en .stf__item, por lo que bookEl.children no sirve)
+        const flipPageImgs = [];
         for (let i = 0; i < pages.length; i++) {
           const isHard = (i === 0 || i === pages.length - 1);
           const pEl = el('div', 'flip-page' + (isHard ? ' --hard' : ''));
@@ -1391,13 +1416,15 @@ export function createReader(state, d) {
           const im = el('img', 'flip-page-img');
           im.draggable = false;
           im.alt = 'Página ' + (i + 1);
+          flipPageImgs[i] = im;
           const num = el('span', 'flip-page-num', String(i + 1));
           inner.append(im, num);
           pEl.append(inner);
           bookEl.append(pEl);
         }
 
-        // Importante: añadir flipHost Y barras de control superior e inferior a rd
+        // Montar barras de control con contador de páginas
+        botRight.append(cnt);
         rd.append(flipHost, top, bot);
 
         let pf = null;
@@ -1410,13 +1437,10 @@ export function createReader(state, d) {
           try {
             const u = await load(idx);
             if (!u) return;
-            const pEl = bookEl.children[idx];
-            if (pEl) {
-              const im = pEl.querySelector('img');
-              if (im) {
-                im.src = u;
-                try { applyImgCrop(im); } catch (_) {}
-              }
+            const im = flipPageImgs[idx];
+            if (im) {
+              im.src = u;
+              try { applyImgCrop(im); } catch (_) {}
             }
           } catch (_) {}
         };
@@ -1433,6 +1457,11 @@ export function createReader(state, d) {
           try {
             const PageFlip = await ensurePageFlip();
             if (!isMountingFlip) return;
+
+            // Precarga de la página actual y adyacentes para que no aparezca en negro al iniciar
+            await loadFlipPage(n);
+            if (n + 1 < pages.length) await loadFlipPage(n + 1);
+            if (n - 1 >= 0) await loadFlipPage(n - 1);
 
             const isLandscape = window.innerWidth >= 900 && window.innerWidth > window.innerHeight;
             const availW = Math.max(280, rd.clientWidth || window.innerWidth || 800);
@@ -1537,12 +1566,9 @@ export function createReader(state, d) {
 
             try { pokeUI(); armUiHide(); } catch (_) {}
           } catch (err) {
-            console.error('[flip mode failed, fallback page]', err);
+            console.error('[flip mode failed, fallback to page mode]', err);
             try { setPref('mode', 'page'); } catch (_) {}
-            try {
-              unmount();
-              unmount = mount();
-            } catch (_) {}
+            try { remount(); } catch (_) {}
           }
         })();
       } else if (panelMode) {
@@ -2041,11 +2067,10 @@ export function createReader(state, d) {
               const u = await load(right);
               if (mine !== token) return;
               const im = el('img'); im.draggable = false; im.src = u;
-              await im.decode().catch(() => {});
-              if (mine !== token) return;
               pageHost.replaceChildren(im);
               img = im;
               try { applyImgCrop(im); } catch (_) {}
+              im.decode().catch(() => {});
             }
             rd.scrollTo(0, 0);
             try {
@@ -2218,26 +2243,18 @@ export function createReader(state, d) {
         const pageStep = () => (isSpread() ? 2 : 1);
         // dir: -1 = lado izquierdo, +1 = lado derecho (visual).
         // En RTL (manga) se invierte el avance de lectura.
+        let lastEdgeTapT = 0;
         const edgeGo = (dir) => {
-          if (suppressClick) return;
-          armSuppressClick();
+          const now = Date.now();
+          if (now - lastEdgeTapT < 100) return;
+          lastEdgeTapT = now;
           clearZoom();
           const d = isRtl() ? -dir : dir;
           if (isSpread()) turn(d < 0 ? prevSpread(n) : nextSpread(n));
           else turn(d < 0 ? n - 1 : n + 1);
         };
-        eL.onclick = (ev) => { ev.stopPropagation(); edgeGo(-1); };
-        eR.onclick = (ev) => { ev.stopPropagation(); edgeGo(1); };
-        eL.addEventListener('touchend', (ev) => {
-          ev.preventDefault();
-          ev.stopPropagation();
-          edgeGo(-1);
-        }, { passive: false });
-        eR.addEventListener('touchend', (ev) => {
-          ev.preventDefault();
-          ev.stopPropagation();
-          edgeGo(1);
-        }, { passive: false });
+        eL.onclick = (ev) => { ev.stopPropagation(); ev.preventDefault(); edgeGo(-1); };
+        eR.onclick = (ev) => { ev.stopPropagation(); ev.preventDefault(); edgeGo(1); };
 
         let sx = null, sy = 0, moved = false;
         let pinch = null; // { d0, z0 }
@@ -3097,10 +3114,15 @@ export function createReader(state, d) {
         try { window.dispatchEvent(new CustomEvent('tgcomic:reader', { detail: { open: false } })); } catch (_) {}
       };
     };
-    let unmount = mount();
+    let unmount = null;
+    const remount = () => {
+      try { if (unmount) unmount(); } catch (_) {}
+      unmount = mount();
+    };
+    unmount = mount();
     return () => {
       closeNextCard();
-      try { unmount(); } catch (_) {}
+      try { unmount?.(); } catch (_) {}
       try { dropAll(); } catch (_) {}
       try { Promise.resolve(zr.close()).catch(() => {}); } catch (_) {}
     };
