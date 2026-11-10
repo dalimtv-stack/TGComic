@@ -2304,7 +2304,8 @@ export function createReader(state, d) {
         // Fuera de la barra inferior: centrado encima del botbar
         
         const CROP_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7,17V1H5V5H1V7H5V17A2,2 0 0,0 7,19H17V21H19V19H21V17H19V7H17M17,17H7V7H17V17Z"/></svg>';
-        const RTL_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 3H16C17.1 3 18 3.9 18 5V9H16V5H8V19H10V21H6V19H8V3M20 15L16 19V16H12V14H16V11L20 15Z"/></svg>';
+        // Líneas de lectura + flecha: apunta en el sentido activo (LTR o RTL).
+        const readingDirectionSvg = (rtl) => `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h16M4 8h16M4 12h10"/><path d="${rtl ? 'M20 19H4m5-4-5 4 5 4' : 'M4 19h16m-5-4 5 4-5 4'}"/></svg>`;
         const cropBtn = el('button', 'btn crop-fab');
         cropBtn.type = 'button';
         const paintCropBtn = () => {
@@ -2333,9 +2334,9 @@ export function createReader(state, d) {
         rtlBtn.type = 'button';
         const paintRtlBtn = () => {
           const on = isRtl();
-          rtlBtn.innerHTML = RTL_SVG;
+          rtlBtn.innerHTML = readingDirectionSvg(on);
           rtlBtn.classList.toggle('on', on);
-          rtlBtn.title = on ? 'Lectura manga (RTL): activada' : 'Lectura occidental (LTR)';
+          rtlBtn.title = on ? 'Lectura de derecha a izquierda (RTL). Cambiar a LTR' : 'Lectura de izquierda a derecha (LTR). Cambiar a RTL';
           rtlBtn.setAttribute('aria-label', rtlBtn.title);
           rtlBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
         };
