@@ -2002,24 +2002,22 @@ function cardNode(i) {
     return c;
   }
   const name = el('div', 'name');
-  // Series con ":": dos líneas fijas (antes/después de ":").
-  // No usar solo <br>+line-clamp: "Supergirl Vol.7:" se partía en "Supergirl" / "Vol.7:".
   const t = el('b', '');
   const rawLab = String(i.label || '').replace(/\n/g, ' ').replace(/\u200B/g, '').trim();
-  if (i.kind === 'series') {
-    const ci = rawLab.indexOf(':');
-    if (ci >= 0) {
-      const left = rawLab.slice(0, ci + 1).replace(/\s+$/, '');
-      const right = rawLab.slice(ci + 1).replace(/^\s+/, '');
-      if (right) {
-        t.classList.add('series-title-split');
-        c.classList.add('card-series-split');
-        const l1 = el('span', 'series-title-l1', left);
-        const l2 = el('span', 'series-title-l2', right);
-        t.append(l1, l2);
-      } else {
-        t.textContent = rawLab;
-      }
+
+  // Tratamiento inteligente para títulos con ":"
+  // Si cabe en 1 línea: sin salto. Si no: el bloque hasta ":" queda junto y el resto baja.
+  const ci = rawLab.indexOf(':');
+  if (ci >= 0) {
+    const left = rawLab.slice(0, ci + 1).trim();
+    const right = rawLab.slice(ci + 1).trim();
+    if (right) {
+      t.classList.add('title-wrap-colon');
+      c.classList.add('card-has-colon');
+      // NBSP tras el ":" mantiene compacto el bloque hasta los dos puntos
+      const l1 = el('span', 'title-colon-head', left + '\u00A0');
+      const l2 = el('span', 'title-colon-tail', right);
+      t.append(l1, l2);
     } else {
       t.textContent = rawLab;
     }
