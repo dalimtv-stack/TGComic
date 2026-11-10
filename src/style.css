@@ -1656,14 +1656,17 @@ html:has(.sf-root){
   accent-color: #2563eb;
 }
 
-/* ===== Recorte + RTL: a la derecha del grupo de calidad (no sobre .edge ni botbar) ===== */
+/* ===== Crop + RTL: espejo del botón IA (IA a la izquierda → crop a la derecha) =====
+   IA:  left: 50% - 24 - 8 - 40 - 4 - 40 - 20 - 40  (izq. del engranaje/play)
+   Crop: left: 50% + 24 + 8 + 40 + 4 + 40 + 4 + 40 + 20  (dcha. del grupo calidad)
+   RTL:  misma X, encima del crop
+*/
 #rd > .crop-fab,
 #rd > .rtl-fab,
 #rd .crop-fab,
 #rd .rtl-fab{
   position:fixed!important;
   z-index:15!important;
-  left:calc(50% + 24px + 8px + 132px)!important; /* tras ~3 botones calidad (40+4)*3 */
   right:auto!important;
   margin:0!important;
   transform:none!important;
@@ -1699,36 +1702,26 @@ html:has(.sf-root){
   background:var(--acc)!important;
   color:#111!important;
 }
-/* Misma fila que play/spread/calidad */
+
+/* Misma altura que IA / play / calidad */
 #rd > .crop-fab,
 #rd .crop-fab{
+  left:calc(50% + 24px + 8px + 40px + 4px + 40px + 4px + 40px + 20px)!important;
   bottom:calc(env(safe-area-inset-bottom, 0px) + 62px)!important;
   top:auto!important;
 }
-/* Encima del recorte */
+/* Encima del crop (mismo left) */
 #rd > .rtl-fab,
 #rd .rtl-fab{
-  bottom:calc(env(safe-area-inset-bottom, 0px) + 62px + 46px)!important;
+  left:calc(50% + 24px + 8px + 40px + 4px + 40px + 4px + 40px + 20px)!important;
+  bottom:calc(env(safe-area-inset-bottom, 0px) + 62px + 40px + 6px)!important;
   top:auto!important;
 }
+
 #rd.ui-off > .crop-fab,
 #rd.ui-off > .rtl-fab,
 #rd.ui-off .crop-fab,
 #rd.ui-off .rtl-fab{
   opacity:0!important;
   pointer-events:none!important;
-}
-@media (max-width: 420px){
-  /* En móvil estrecho: columna pegada al borde derecho, por encima de la botbar */
-  #rd > .crop-fab, #rd .crop-fab,
-  #rd > .rtl-fab, #rd .rtl-fab{
-    left:auto!important;
-    right:calc(8px + env(safe-area-inset-right, 0px))!important;
-  }
-  #rd > .crop-fab, #rd .crop-fab{
-    bottom:calc(env(safe-area-inset-bottom, 0px) + 70px)!important;
-  }
-  #rd > .rtl-fab, #rd .rtl-fab{
-    bottom:calc(env(safe-area-inset-bottom, 0px) + 70px + 46px)!important;
-  }
 }
