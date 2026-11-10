@@ -23,6 +23,7 @@ import {
   withSectionInCaption,
   withFileNameInCaption,
 } from './macro.js';
+import * as sync from './sync.js';
 
 /**
  * Vistas de navegación: home (editoriales), canales, series, archivos.
@@ -99,6 +100,21 @@ export function createViews(d) {
   }
 
 
+  
+  function setComicNavFromFiles(ch, files, source) {
+    try {
+      const list = (files || []).filter(Boolean);
+      globalThis.__tgComicNav = {
+        chId: String(ch?.id ?? ''),
+        ids: list.map((x) => String(x.id)),
+        files: list.slice(),
+        items: list.map((x) => ({ ch, f: x, chId: ch?.id, id: x?.id })),
+        filtered: false,
+        source: source || 'view',
+      };
+    } catch (_) {}
+  }
+
   function softBreakAfterColon(s) {
     // Legacy no-op: el salto real tras ":" se hace en cardNode con <br>
     return String(s || '');
@@ -172,7 +188,10 @@ export function createViews(d) {
   };
   const setSortPref = (scope, id, prefObj) => {
     try {
-      localStorage.setItem(sortKey(scope, id), JSON.stringify(prefObj));
+      const key = sortKey(scope, id);
+      localStorage.setItem(key, JSON.stringify(prefObj));
+      try { sync.touchKey(key); } catch (_) {}
+      try { sync.schedulePush(500); } catch (_) {}
     } catch (_) {}
   };
     const captionDateOf = (f) => {
@@ -187,26 +206,46 @@ export function createViews(d) {
         if (lm) raw = lm[1].trim();
       }
       if (!raw) return null;
-      // MM/AAAA o MM-AAAA
-      let m = raw.match(/^(\d{1,2})\s*[\/\-\.\s]\s*(\d{4})/);
-      if (m) return Number(m[2]) * 100 + Number(m[1]);
-      // AAAA-MM / AAAA/MM
-      m = raw.match(/^(\d{4})\s*[\/\-\.\s]\s*(\d{1,2})/);
-      if (m) return Number(m[1]) * 100 + Number(m[2]);
+      // Escala YYYYMMDD para ordenar bien con día.
+      // Formatos ES: dd/mm/aaaa | mm/aaaa | aaaa
+      // dd/mm/aaaa o dd-mm-aaaa
+      let m = raw.match(/^(\d{1,2})\s*[\/\-\.]\s*(\d{1,2})\s*[\/\-\.]\s*(\d{4})\b/);
+      if (m) {
+        const d = Number(m[1]), mo = Number(m[2]), y = Number(m[3]);
+        if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) return y * 10000 + mo * 100 + d;
+      }
+      // mm/aaaa o mm-aaaa (sin día)
+      m = raw.match(/^(\d{1,2})\s*[\/\-\.\s]\s*(\d{4})\b/);
+      if (m) {
+        const mo = Number(m[1]), y = Number(m[2]);
+        if (mo >= 1 && mo <= 12) return y * 10000 + mo * 100;
+      }
+      // aaaa-mm / aaaa/mm
+      m = raw.match(/^(\d{4})\s*[\/\-\.]\s*(\d{1,2})\b/);
+      if (m) {
+        const y = Number(m[1]), mo = Number(m[2]);
+        if (mo >= 1 && mo <= 12) return y * 10000 + mo * 100;
+      }
+      // aaaa-mm-dd (ISO)
+      m = raw.match(/^(\d{4})\s*[\/\-\.]\s*(\d{1,2})\s*[\/\-\.]\s*(\d{1,2})\b/);
+      if (m) {
+        const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+        if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) return y * 10000 + mo * 100 + d;
+      }
       // Solo año
       m = raw.match(/^(\d{4})\b/);
-      if (m) return Number(m[1]) * 100;
+      if (m) return Number(m[1]) * 10000;
       // "Month YYYY" inglés básico
       m = raw.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+(\d{4})/i);
       if (m) {
         const months = { jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12 };
         const mo = months[m[1].slice(0, 3).toLowerCase()] || 1;
-        return Number(m[2]) * 100 + mo;
+        return Number(m[2]) * 10000 + mo * 100;
       }
       const t = Date.parse(raw);
       if (Number.isFinite(t)) {
         const dt = new Date(t);
-        return dt.getFullYear() * 100 + (dt.getMonth() + 1);
+        return dt.getFullYear() * 10000 + (dt.getMonth() + 1) * 100 + dt.getDate();
       }
     } catch (_) {}
     return null;
@@ -1772,16 +1811,13 @@ const applySortList = (items, prefObj, getId, getLabel, getDate) => {
     const opts = [
       ['Información', () => {
         try {
-          const seriesFiles = ctx.seriesFiles;
-          if (Array.isArray(seriesFiles) && seriesFiles.length) {
-            globalThis.__tgComicNav = {
-              chId: String(ch.id),
-              ids: seriesFiles.map((x) => String(x.id)),
-              files: seriesFiles.slice(),
-              items: seriesFiles.map((x) => ({ ch, f: x, chId: ch.id, id: x.id })),
-              filtered: false,
-              source: 'series-info',
-            };
+          let list = ctx.seriesFiles;
+          if (Array.isArray(list) && list.length) {
+            // Respetar orden de la vista (nombre / fecha / manual)
+            if (seriesLabel && typeof globalThis.__tgSortSeriesFiles === 'function') {
+              try { list = globalThis.__tgSortSeriesFiles(ch, seriesLabel, list) || list; } catch (_) {}
+            }
+            setComicNavFromFiles(ch, list, 'series-info');
           }
         } catch (_) {}
         showComicInfo(ch, f, label);
@@ -1977,6 +2013,7 @@ function cardNode(i) {
       const right = rawLab.slice(ci + 1).replace(/^\s+/, '');
       if (right) {
         t.classList.add('series-title-split');
+        c.classList.add('card-series-split');
         const l1 = el('span', 'series-title-l1', left);
         const l2 = el('span', 'series-title-l2', right);
         t.append(l1, l2);
