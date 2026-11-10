@@ -43,7 +43,6 @@ export function tokenize(text) {
 }
 
 /** Devuelve [texto] si cabe en una línea, [a, b] equilibradas, o null si no hay corte válido. */
-/** Devuelve [texto] si cabe en una línea, [a, b] equilibradas, o null si no hay corte válido. */
 export function layout(tokens, avail, measure) {
   const full = tokens.join(' ');
   if (measure(full) <= avail * ONE_LINE_FIT) return [full];
