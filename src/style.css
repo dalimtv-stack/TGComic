@@ -1656,115 +1656,47 @@ html:has(.sf-root){
   accent-color: #2563eb;
 }
 
-/* ===== Distribución simétrica de controles del visor =====
-   IA · Información · Ajustes · Play | Simple/Doble | Alta · Media · Baja · Crop
-   RTL/LTR encima de Crop. Los huecos se conservan si no hay versiones.
-   Una sola geometría para escritorio y móvil; no depende del contenido. */
-#rd{
-  --rd-control-size:40px;
-  --rd-center-size:48px;
-  --rd-control-gap:4px;
-  --rd-center-gap:8px;
-  --rd-control-bottom:calc(env(safe-area-inset-bottom,0px) + 62px);
-  --rd-control-step:calc(var(--rd-control-size) + var(--rd-control-gap));
-  --rd-side-start:calc(var(--rd-center-size)/2 + var(--rd-center-gap));
-}
-#rd .spread-fab,
-#rd .play-fab,
-#rd .auto-cfg-fab,
-#rd .rd-info-btn,
-#rd .crop-fab,
-#rd .rtl-fab,
-#rd .q-group .q-btn{
-  width:var(--rd-control-size)!important;
-  height:var(--rd-control-size)!important;
-  min-width:var(--rd-control-size)!important;
-  min-height:var(--rd-control-size)!important;
-  max-width:var(--rd-control-size)!important;
-  max-height:var(--rd-control-size)!important;
-  padding:0!important;
-  box-sizing:border-box!important;
-}
-#rd .spread-fab,
-#rd .play-fab,
-#rd .auto-cfg-fab,
-#rd .rd-info-btn,
-#rd .crop-fab,
-#rd .rtl-fab,
-#rd .q-group,
-#rd .q-group .ai-btn{
-  position:fixed!important;
-  bottom:var(--rd-control-bottom)!important;
-  top:auto!important;
-  right:auto!important;
-  margin:0!important;
-  transform:none!important;
-  z-index:30!important;
-}
-#rd .spread-fab{
-  width:var(--rd-center-size)!important;
-  height:var(--rd-center-size)!important;
-  min-width:var(--rd-center-size)!important;
-  min-height:var(--rd-center-size)!important;
-  max-width:var(--rd-center-size)!important;
-  max-height:var(--rd-center-size)!important;
-  left:calc(50% - var(--rd-center-size)/2)!important;
-  bottom:calc(var(--rd-control-bottom) + (var(--rd-control-size) - var(--rd-center-size))/2)!important;
-}
-#rd .play-fab{
-  left:calc(50% - var(--rd-side-start) - var(--rd-control-size))!important;
-}
-#rd .auto-cfg-fab{
-  left:calc(50% - var(--rd-side-start) - var(--rd-control-size) - var(--rd-control-step))!important;
-}
-#rd .rd-info-btn{
-  left:calc(50% - var(--rd-side-start) - var(--rd-control-size) - 2*var(--rd-control-step))!important;
-}
-#rd .q-group .ai-btn{
-  left:calc(50% - var(--rd-side-start) - var(--rd-control-size) - 3*var(--rd-control-step))!important;
-}
+/* ===== Lado derecho: espejo de los controles izquierdos originales =====
+   No cambia IA, Información, Ajustes, Play ni Simple/Doble.
+   Alta ↔ Play; Media ↔ Ajustes; Baja ↔ Información; Crop ↔ IA. */
+#rd{--rd-fab-surface:oklch(0.232 0.009 280 / .9);--rd-fab-shadow:0 4px 18px oklch(0 0 0 / .533);}
 #rd .q-group{
-  left:calc(50% + var(--rd-side-start))!important;
-  gap:var(--rd-control-gap)!important;
+  left:calc(50% + 24px + 8px)!important;
+  gap:4px!important;
 }
-#rd .q-group .ai-btn .ai-ico{
-  width:34px;height:34px;margin:0;
+#rd .q-group .q-btn:not(.ai-btn) svg{
+  width:22px!important;height:22px!important;
 }
 #rd .crop-fab,
 #rd .rtl-fab{
-  left:calc(50% + var(--rd-side-start) + 3*var(--rd-control-step))!important;
-  border:0!important;
-  border-radius:12px!important;
-  background:var(--card)!important;
-  color:var(--fg)!important;
-  display:inline-flex!important;
-  align-items:center!important;
-  justify-content:center!important;
-  cursor:pointer;
+  position:fixed!important;
+  left:calc(50% + 24px + 8px + 3 * (40px + 4px))!important;
+  bottom:calc(env(safe-area-inset-bottom,0px) + 62px)!important;
+  right:auto!important;top:auto!important;margin:0!important;transform:none!important;
+  width:40px!important;height:40px!important;
+  min-width:40px!important;min-height:40px!important;
+  max-width:40px!important;max-height:40px!important;
+  padding:0!important;border:0!important;border-radius:12px!important;
+  background:var(--rd-fab-surface)!important;color:var(--fg)!important;
+  box-shadow:var(--rd-fab-shadow)!important;
+  -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+  display:inline-flex!important;align-items:center!important;justify-content:center!important;
+  z-index:30!important;cursor:pointer;
   transition:opacity .2s ease,background .15s ease!important;
 }
 #rd .rtl-fab{
-  bottom:calc(var(--rd-control-bottom) + var(--rd-control-size) + 6px)!important;
+  bottom:calc(env(safe-area-inset-bottom,0px) + 62px + 40px + 6px)!important;
 }
 #rd .crop-fab svg,
 #rd .rtl-fab svg{
-  display:block;pointer-events:none;width:20px;height:20px;
+  display:block!important;pointer-events:none!important;width:22px!important;height:22px!important;
 }
 #rd .crop-fab.on,
-#rd .rtl-fab.on{
-  background:var(--acc)!important;
-  color:var(--bg)!important;
-}
-/* Nueve posiciones: a partir de 440px caben los tamaños habituales. */
-@media(max-width:439px){
-  #rd{--rd-control-size:36px;--rd-center-size:44px;--rd-control-gap:2px;--rd-center-gap:4px;}
-}
-@media(max-width:374px){
-  #rd{--rd-control-size:30px;--rd-center-size:40px;--rd-control-gap:1px;--rd-center-gap:3px;}
-  #rd .q-group .ai-btn .ai-ico{width:28px;height:28px;}
+#rd .rtl-fab.on{background:var(--acc)!important;color:var(--bg)!important;}
+@media(max-width:430px){
+  #rd .q-group{left:calc(50% + 24px + 3px)!important;gap:2px!important;}
+  #rd .crop-fab,
+  #rd .rtl-fab{left:calc(50% + 24px + 3px + 3 * (40px + 2px))!important;}
 }
 #rd.ui-off .crop-fab,
-#rd.ui-off .rtl-fab{
-  opacity:0!important;
-  pointer-events:none!important;
-}
+#rd.ui-off .rtl-fab{opacity:0!important;pointer-events:none!important;}
