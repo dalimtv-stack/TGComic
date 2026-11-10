@@ -35,6 +35,101 @@ export function createReader(state, d) {
     low: 'M14.5,13.5H16.5V10.5H14.5M18,14C18,14.6 17.6,15 17,15H16.25V16.5H14.75V15H14C13.4,15 13,14.6 13,14V10C13,9.4 13.4,9 14,9H17C17.6,9 18,9.4 18,10M19,4H5A2,2 0 0,0 3,6V18A2,2 0 0,0 5,20H19A2,2 0 0,0 21,18V6A2,2 0 0,0 19,4M11,13.5V15H6V9H7.5V13.5H11Z',
   };
 
+
+  /** Lectura manga: derecha→izquierda (pref rtl). */
+  const isRtl = () => pref('rtl', '0') === '1';
+  /** Recorte de márgenes en blanco/negro (pref autoCrop). */
+  const isAutoCrop = () => pref('autoCrop', '0') === '1';
+
+  /**
+   * Detecta márgenes vacíos (blanco/negro) de una imagen.
+   * Devuelve fracciones { t, r, b, l } ∈ [0,1) o null.
+   */
+  function detectContentInsets(img) {
+    try {
+      const nw = img.naturalWidth || 0, nh = img.naturalHeight || 0;
+      if (nw < 8 || nh < 8) return null;
+      const maxW = 280;
+      const scale = Math.min(1, maxW / nw);
+      const w = Math.max(8, Math.round(nw * scale));
+      const h = Math.max(8, Math.round(nh * scale));
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return null;
+      ctx.drawImage(img, 0, 0, w, h);
+      const { data } = ctx.getImageData(0, 0, w, h);
+      const empty = (x, y) => {
+        const i = (y * w + x) * 4;
+        const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
+        if (a < 12) return true;
+        const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+        if (mx < 22) return true;      // casi negro
+        if (mn > 238) return true;     // casi blanco
+        return false;
+      };
+      const rowEmpty = (y) => {
+        for (let x = 0; x < w; x++) if (!empty(x, y)) return false;
+        return true;
+      };
+      const colEmpty = (x) => {
+        for (let y = 0; y < h; y++) if (!empty(x, y)) return false;
+        return true;
+      };
+      let top = 0, bot = h - 1, left = 0, right = w - 1;
+      while (top < h && rowEmpty(top)) top++;
+      while (bot > top && rowEmpty(bot)) bot--;
+      while (left < w && colEmpty(left)) left++;
+      while (right > left && colEmpty(right)) right--;
+      const t = top / h, btm = (h - 1 - bot) / h, l = left / w, r = (w - 1 - right) / w;
+      // Si casi no hay margen, no aplicar
+      if (t + btm + l + r < 0.015) return null;
+      // No recortar más del 40% por lado (evitar falsos positivos en páginas oscuras)
+      const clamp = (v) => Math.min(0.4, Math.max(0, v));
+      return { t: clamp(t), r: clamp(r), b: clamp(btm), l: clamp(l) };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function clearImgCrop(im) {
+    if (!im) return;
+    try {
+      im.style.removeProperty('object-view-box');
+      im.style.removeProperty('clip-path');
+      im.classList.remove('auto-cropped');
+    } catch (_) {}
+  }
+
+  function applyImgCrop(im) {
+    if (!im) return;
+    clearImgCrop(im);
+    if (!isAutoCrop()) return;
+    const run = () => {
+      const box = detectContentInsets(im);
+      if (!box) return;
+      const { t, r, b, l } = box;
+      const inset = `${(t * 100).toFixed(2)}% ${(r * 100).toFixed(2)}% ${(b * 100).toFixed(2)}% ${(l * 100).toFixed(2)}%`;
+      try {
+        if (typeof CSS !== 'undefined' && CSS.supports && CSS.supports('object-view-box', 'inset(0%)')) {
+          im.style.objectViewBox = `inset(${inset})`;
+        } else {
+          im.style.clipPath = `inset(${inset})`;
+        }
+        im.classList.add('auto-cropped');
+      } catch (_) {}
+    };
+    if (im.complete && im.naturalWidth) run();
+    else im.addEventListener('load', run, { once: true });
+  }
+
+  function applyCropToHost(host) {
+    try {
+      host?.querySelectorAll?.('img')?.forEach((im) => applyImgCrop(im));
+    } catch (_) {}
+  }
+
+
   // Android: CSS + Fullscreen API (única forma de ocultar barra de sistema y del navegador).
   // El aviso del navegador al entrar es inevitable en Chrome Android; sin API las barras no se ocultan.
   const isAndroid = /Android/i.test(navigator.userAgent || '');
@@ -2079,9 +2174,25 @@ export function createReader(state, d) {
         observers._resize = onResizePanel;
 
         document.onkeydown = (ev) => {
-          if (ev.key === 'ArrowRight' || ev.key === ' ') { ev.preventDefault(); nextPanel(); }
-          else if (ev.key === 'ArrowLeft') { ev.preventDefault(); prevPanel(); }
-          else if (ev.key === 'Escape') { fullView = true; applyFocus(); }
+          if (ev.target?.closest?.('input, textarea, [contenteditable]')) return;
+          const k = ev.key;
+          if (k === 'ArrowRight' || k === 'PageDown' || (k === ' ' && !ev.shiftKey)) {
+            ev.preventDefault(); if (isRtl()) prevPanel(); else nextPanel();
+          } else if (k === 'ArrowLeft' || k === 'PageUp' || (k === ' ' && ev.shiftKey)) {
+            ev.preventDefault(); if (isRtl()) nextPanel(); else prevPanel();
+          } else if (k === 'Home') {
+            ev.preventDefault(); try { goToPage?.(0); } catch (_) {}
+          } else if (k === 'End') {
+            ev.preventDefault(); try { goToPage?.(pages.length - 1); } catch (_) {}
+          } else if (k === 'Escape') {
+            fullView = true; applyFocus();
+          } else if (k === 'f' || k === 'F') {
+            ev.preventDefault();
+            try {
+              if (!document.fullscreenElement) rd.requestFullscreen?.();
+              else document.exitFullscreen?.();
+            } catch (_) {}
+          }
         };
 
         loadPage(n);
@@ -2152,7 +2263,47 @@ export function createReader(state, d) {
           turn(n);
         };
         // Fuera de la barra inferior: centrado encima del botbar
-        rd.append(spreadBtn);
+        
+        const CROP_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7,17V1H5V5H1V7H5V17A2,2 0 0,0 7,19H17V21H19V19H21V17H19V7H17M17,17H7V7H17V17Z"/></svg>';
+        const RTL_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10,10V15H12V4H14V15H16V10H18V15A2,2 0 0,1 16,17H14V20H12V17H10A2,2 0 0,1 8,15V10H10M8,4H10V8H8V4M4,8V10H6V8H4M18,4H20V8H18V4Z"/></svg>';
+        const cropBtn = el('button', 'btn crop-fab');
+        cropBtn.type = 'button';
+        const paintCropBtn = () => {
+          const on = isAutoCrop();
+          cropBtn.innerHTML = CROP_SVG;
+          cropBtn.classList.toggle('on', on);
+          cropBtn.title = on ? 'Recorte de márgenes: activado' : 'Recortar márgenes blancos/negros';
+          cropBtn.setAttribute('aria-label', cropBtn.title);
+          cropBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        };
+        cropBtn.onclick = (ev) => {
+          try { ev.stopPropagation(); } catch (_) {}
+          setPref('autoCrop', isAutoCrop() ? '0' : '1');
+          paintCropBtn();
+          try { applyCropToHost(pageHost); } catch (_) {}
+          try { pokeUI(); } catch (_) {}
+        };
+        paintCropBtn();
+        const rtlBtn = el('button', 'btn rtl-fab');
+        rtlBtn.type = 'button';
+        const paintRtlBtn = () => {
+          const on = isRtl();
+          rtlBtn.innerHTML = RTL_SVG;
+          rtlBtn.classList.toggle('on', on);
+          rtlBtn.title = on ? 'Lectura manga (RTL): activada' : 'Lectura occidental (LTR)';
+          rtlBtn.setAttribute('aria-label', rtlBtn.title);
+          rtlBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        };
+        rtlBtn.onclick = (ev) => {
+          try { ev.stopPropagation(); } catch (_) {}
+          setPref('rtl', isRtl() ? '0' : '1');
+          paintRtlBtn();
+          try { turn(n); } catch (_) {}
+          try { pokeUI(); } catch (_) {}
+        };
+        paintRtlBtn();
+        rd.append(spreadBtn, cropBtn, rtlBtn);
+
         botRight.append(fit, cnt);
         img.draggable = false;
         const eL = el('div', 'edge l'), eR = el('div', 'edge r');
@@ -2215,8 +2366,11 @@ export function createReader(state, d) {
               const imR = el('img'); imR.draggable = false; imR.className = 'spread-r'; imR.src = pair[1];
               await Promise.all([imL.decode().catch(() => {}), imR.decode().catch(() => {})]);
               if (mine !== token) return;
-              pageHost.replaceChildren(imL, imR);
+              // RTL manga: página de lectura a la derecha (impar visual)
+              if (isRtl()) pageHost.replaceChildren(imR, imL);
+              else pageHost.replaceChildren(imL, imR);
               img = imR;
+              try { applyImgCrop(imL); applyImgCrop(imR); } catch (_) {}
             } else {
               const u = await load(right);
               if (mine !== token) return;
@@ -2225,6 +2379,7 @@ export function createReader(state, d) {
               if (mine !== token) return;
               pageHost.replaceChildren(im);
               img = im;
+              try { applyImgCrop(im); } catch (_) {}
             }
             rd.scrollTo(0, 0);
             try {
@@ -2262,8 +2417,8 @@ export function createReader(state, d) {
         // en pantalla completa el drag horizontal cambia de página.
         bindMousePageDrag(
           () => (pref('fit', 'screen') === 'width' ? 'y' : 'x'),
-          () => turn(isSpread() ? prevSpread(n) : n - 1),
-          () => turn(isSpread() ? nextSpread(n) : n + 1),
+          () => { const d = isRtl() ? 1 : -1; if (isSpread()) turn(d < 0 ? prevSpread(n) : nextSpread(n)); else turn(d < 0 ? n - 1 : n + 1); },
+          () => { const d = isRtl() ? -1 : 1; if (isSpread()) turn(d < 0 ? prevSpread(n) : nextSpread(n)); else turn(d < 0 ? n - 1 : n + 1); },
           true,
           { scroller: () => pageHost }
         );
@@ -2395,28 +2550,27 @@ export function createReader(state, d) {
 
         // Laterales: una sola acción (evitar doble turn por touch + click)
         const pageStep = () => (isSpread() ? 2 : 1);
+        // dir: -1 = lado izquierdo, +1 = lado derecho (visual).
+        // En RTL (manga) se invierte el avance de lectura.
         const edgeGo = (dir) => {
           if (suppressClick) return;
           armSuppressClick();
           clearZoom();
-          if (isSpread()) turn(dir < 0 ? prevSpread(n) : nextSpread(n));
-          else turn(dir < 0 ? n - 1 : n + 1);
+          const d = isRtl() ? -dir : dir;
+          if (isSpread()) turn(d < 0 ? prevSpread(n) : nextSpread(n));
+          else turn(d < 0 ? n - 1 : n + 1);
         };
         eL.onclick = (ev) => { ev.stopPropagation(); edgeGo(-1); };
         eR.onclick = (ev) => { ev.stopPropagation(); edgeGo(1); };
         eL.addEventListener('touchend', (ev) => {
           ev.preventDefault();
           ev.stopPropagation();
-          armSuppressClick();
-          clearZoom();
-          if (isSpread()) turn(prevSpread(n)); else turn(n - 1);
+          edgeGo(-1);
         }, { passive: false });
         eR.addEventListener('touchend', (ev) => {
           ev.preventDefault();
           ev.stopPropagation();
-          armSuppressClick();
-          clearZoom();
-          if (isSpread()) turn(nextSpread(n)); else turn(n + 1);
+          edgeGo(1);
         }, { passive: false });
 
         let sx = null, sy = 0, moved = false;
@@ -2523,7 +2677,44 @@ export function createReader(state, d) {
           }
         }, { passive: true });
 
-        document.onkeydown = (e) => { if (e.key === 'ArrowRight') turn(isSpread() ? nextSpread(n) : n + 1); if (e.key === 'ArrowLeft') turn(isSpread() ? prevSpread(n) : n - 1); };
+        document.onkeydown = (e) => {
+          if (e.target?.closest?.('input, textarea, [contenteditable]')) return;
+          const k = e.key;
+          const goNext = () => {
+            if (isRtl()) turn(isSpread() ? prevSpread(n) : n - 1);
+            else turn(isSpread() ? nextSpread(n) : n + 1);
+          };
+          const goPrev = () => {
+            if (isRtl()) turn(isSpread() ? nextSpread(n) : n + 1);
+            else turn(isSpread() ? prevSpread(n) : n - 1);
+          };
+          if (k === 'ArrowRight' || k === 'PageDown' || (k === ' ' && !e.shiftKey)) {
+            e.preventDefault(); goNext();
+          } else if (k === 'ArrowLeft' || k === 'PageUp' || (k === ' ' && e.shiftKey)) {
+            e.preventDefault(); goPrev();
+          } else if (k === 'Home') {
+            e.preventDefault(); turn(0);
+          } else if (k === 'End') {
+            e.preventDefault(); turn(isSpread() ? toSpreadRight(pages.length - 1) : pages.length - 1);
+          } else if (k === 'f' || k === 'F') {
+            e.preventDefault();
+            try {
+              if (!document.fullscreenElement) rd.requestFullscreen?.();
+              else document.exitFullscreen?.();
+            } catch (_) {}
+          } else if (k === 'm' || k === 'M') {
+            e.preventDefault();
+            try { showMosaic?.(e); } catch (_) {}
+          } else if (k === 'c' || k === 'C') {
+            e.preventDefault();
+            setPref('autoCrop', isAutoCrop() ? '0' : '1');
+            try { applyCropToHost(pageHost); paintCropBtn?.(); } catch (_) {}
+          } else if (k === 'r' || k === 'R') {
+            e.preventDefault();
+            setPref('rtl', isRtl() ? '0' : '1');
+            try { turn(n); paintRtlBtn?.(); } catch (_) {}
+          }
+        };
         // Página + Ancho: rueda hace scroll en la hoja (.page-host); solo al llegar al borde cambia de página.
         // Página + Pantalla: sin cambios (siempre cabe → rueda cambia página).
         const onWheel = (e) => {
