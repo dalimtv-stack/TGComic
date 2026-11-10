@@ -49,7 +49,7 @@ export function createReader(state, d) {
     try {
       const nw = img.naturalWidth || 0, nh = img.naturalHeight || 0;
       if (nw < 8 || nh < 8) return null;
-      const maxW = 280;
+      const maxW = 320;
       const scale = Math.min(1, maxW / nw);
       const w = Math.max(8, Math.round(nw * scale));
       const h = Math.max(8, Math.round(nh * scale));
@@ -59,34 +59,36 @@ export function createReader(state, d) {
       if (!ctx) return null;
       ctx.drawImage(img, 0, 0, w, h);
       const { data } = ctx.getImageData(0, 0, w, h);
-      const empty = (x, y) => {
+      const emptyPx = (x, y) => {
         const i = (y * w + x) * 4;
         const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
         if (a < 12) return true;
         const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
-        if (mx < 22) return true;      // casi negro
-        if (mn > 238) return true;     // casi blanco
+        if (mx < 28) return true;   // casi negro (margen)
+        if (mn > 230) return true;  // casi blanco (margen)
         return false;
       };
+      // Tolerancia: ≥97% de la fila/columna vacía (ruido de escaneo)
+      const EMPTY_RATIO = 0.97;
       const rowEmpty = (y) => {
-        for (let x = 0; x < w; x++) if (!empty(x, y)) return false;
-        return true;
+        let n = 0;
+        for (let x = 0; x < w; x++) if (emptyPx(x, y)) n++;
+        return n / w >= EMPTY_RATIO;
       };
       const colEmpty = (x) => {
-        for (let y = 0; y < h; y++) if (!empty(x, y)) return false;
-        return true;
+        let n = 0;
+        for (let y = 0; y < h; y++) if (emptyPx(x, y)) n++;
+        return n / h >= EMPTY_RATIO;
       };
       let top = 0, bot = h - 1, left = 0, right = w - 1;
       while (top < h && rowEmpty(top)) top++;
       while (bot > top && rowEmpty(bot)) bot--;
       while (left < w && colEmpty(left)) left++;
       while (right > left && colEmpty(right)) right--;
-      const t = top / h, btm = (h - 1 - bot) / h, l = left / w, r = (w - 1 - right) / w;
-      // Si casi no hay margen, no aplicar
-      if (t + btm + l + r < 0.015) return null;
-      // No recortar más del 40% por lado (evitar falsos positivos en páginas oscuras)
-      const clamp = (v) => Math.min(0.4, Math.max(0, v));
-      return { t: clamp(t), r: clamp(r), b: clamp(btm), l: clamp(l) };
+      const t = top / h, btm = (h - 1 - bot) / h, l = left / w, rgt = (w - 1 - right) / w;
+      if (t + btm + l + rgt < 0.012) return null;
+      const clamp = (v) => Math.min(0.42, Math.max(0, v));
+      return { t: clamp(t), r: clamp(rgt), b: clamp(btm), l: clamp(l) };
     } catch (_) {
       return null;
     }
@@ -97,7 +99,16 @@ export function createReader(state, d) {
     try {
       im.style.removeProperty('object-view-box');
       im.style.removeProperty('clip-path');
+      im.style.removeProperty('transform');
+      im.style.removeProperty('transform-origin');
       im.classList.remove('auto-cropped');
+      // Restaurar src original si el recorte generó un blob
+      if (im.dataset.cropSrc) {
+        const cur = im.src;
+        im.src = im.dataset.cropSrc;
+        delete im.dataset.cropSrc;
+        try { if (cur && cur.startsWith('blob:')) URL.revokeObjectURL(cur); } catch (_) {}
+      }
     } catch (_) {}
   }
 
@@ -106,17 +117,41 @@ export function createReader(state, d) {
     clearImgCrop(im);
     if (!isAutoCrop()) return;
     const run = () => {
-      const box = detectContentInsets(im);
-      if (!box) return;
-      const { t, r, b, l } = box;
-      const inset = `${(t * 100).toFixed(2)}% ${(r * 100).toFixed(2)}% ${(b * 100).toFixed(2)}% ${(l * 100).toFixed(2)}%`;
       try {
-        if (typeof CSS !== 'undefined' && CSS.supports && CSS.supports('object-view-box', 'inset(0%)')) {
-          im.style.objectViewBox = `inset(${inset})`;
+        const box = detectContentInsets(im);
+        if (!box) return;
+        const { t, r, b, l } = box;
+        const nw = im.naturalWidth || 0, nh = im.naturalHeight || 0;
+        if (nw < 8 || nh < 8) return;
+        const sx = Math.floor(l * nw);
+        const sy = Math.floor(t * nh);
+        const sw = Math.max(1, Math.floor(nw * (1 - l - r)));
+        const sh = Math.max(1, Math.floor(nh * (1 - t - b)));
+        if (sw >= nw * 0.98 && sh >= nh * 0.98) return;
+        // Canvas: funciona en Safari/iOS (object-view-box no; clip-path no amplía)
+        const c = document.createElement('canvas');
+        c.width = sw;
+        c.height = sh;
+        const ctx = c.getContext('2d');
+        if (!ctx) return;
+        ctx.drawImage(im, sx, sy, sw, sh, 0, 0, sw, sh);
+        const finish = (url) => {
+          if (!url) return;
+          if (!im.dataset.cropSrc) im.dataset.cropSrc = im.currentSrc || im.src;
+          im.src = url;
+          im.classList.add('auto-cropped');
+        };
+        if (c.toBlob) {
+          c.toBlob((blob) => {
+            if (!blob) {
+              try { finish(c.toDataURL('image/jpeg', 0.92)); } catch (_) {}
+              return;
+            }
+            finish(URL.createObjectURL(blob));
+          }, 'image/jpeg', 0.92);
         } else {
-          im.style.clipPath = `inset(${inset})`;
+          try { finish(c.toDataURL('image/jpeg', 0.92)); } catch (_) {}
         }
-        im.classList.add('auto-cropped');
       } catch (_) {}
     };
     if (im.complete && im.naturalWidth) run();
@@ -2176,9 +2211,13 @@ export function createReader(state, d) {
         document.onkeydown = (ev) => {
           if (ev.target?.closest?.('input, textarea, [contenteditable]')) return;
           const k = ev.key;
-          if (k === 'ArrowRight' || k === 'PageDown' || (k === ' ' && !ev.shiftKey)) {
+          if (k === 'PageDown' || (k === ' ' && !ev.shiftKey)) {
+            ev.preventDefault(); nextPanel();
+          } else if (k === 'PageUp' || (k === ' ' && ev.shiftKey)) {
+            ev.preventDefault(); prevPanel();
+          } else if (k === 'ArrowRight') {
             ev.preventDefault(); if (isRtl()) prevPanel(); else nextPanel();
-          } else if (k === 'ArrowLeft' || k === 'PageUp' || (k === ' ' && ev.shiftKey)) {
+          } else if (k === 'ArrowLeft') {
             ev.preventDefault(); if (isRtl()) nextPanel(); else prevPanel();
           } else if (k === 'Home') {
             ev.preventDefault(); try { goToPage?.(0); } catch (_) {}
@@ -2265,7 +2304,7 @@ export function createReader(state, d) {
         // Fuera de la barra inferior: centrado encima del botbar
         
         const CROP_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7,17V1H5V5H1V7H5V17A2,2 0 0,0 7,19H17V21H19V19H21V17H19V7H17M17,17H7V7H17V17Z"/></svg>';
-        const RTL_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10,10V15H12V4H14V15H16V10H18V15A2,2 0 0,1 16,17H14V20H12V17H10A2,2 0 0,1 8,15V10H10M8,4H10V8H8V4M4,8V10H6V8H4M18,4H20V8H18V4Z"/></svg>';
+        const RTL_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 3H16C17.1 3 18 3.9 18 5V9H16V5H8V19H10V21H6V19H8V3M20 15L16 19V16H12V14H16V11L20 15Z"/></svg>';
         const cropBtn = el('button', 'btn crop-fab');
         cropBtn.type = 'button';
         const paintCropBtn = () => {
@@ -2676,7 +2715,13 @@ export function createReader(state, d) {
               return;
             }
             if (Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy)) {
-              turn(dx < 0 ? (isSpread() ? nextSpread(n) : n + 1) : (isSpread() ? prevSpread(n) : n - 1));
+              {
+                const next = isSpread() ? nextSpread(n) : n + 1;
+                const prev = isSpread() ? prevSpread(n) : n - 1;
+                // LTR: deslizar a la izquierda avanza; RTL: deslizar a la derecha avanza
+                if (isRtl()) turn(dx > 0 ? next : prev);
+                else turn(dx < 0 ? next : prev);
+              }
             }
             return;
           }
@@ -2689,18 +2734,17 @@ export function createReader(state, d) {
         document.onkeydown = (e) => {
           if (e.target?.closest?.('input, textarea, [contenteditable]')) return;
           const k = e.key;
-          const goNext = () => {
-            if (isRtl()) turn(isSpread() ? prevSpread(n) : n - 1);
-            else turn(isSpread() ? nextSpread(n) : n + 1);
-          };
-          const goPrev = () => {
-            if (isRtl()) turn(isSpread() ? nextSpread(n) : n + 1);
-            else turn(isSpread() ? prevSpread(n) : n - 1);
-          };
-          if (k === 'ArrowRight' || k === 'PageDown' || (k === ' ' && !e.shiftKey)) {
-            e.preventDefault(); goNext();
-          } else if (k === 'ArrowLeft' || k === 'PageUp' || (k === ' ' && e.shiftKey)) {
-            e.preventDefault(); goPrev();
+          // Avance de lectura = siempre +página. RTL solo invierte laterales/flechas físicas.
+          const storyNext = () => turn(isSpread() ? nextSpread(n) : n + 1);
+          const storyPrev = () => turn(isSpread() ? prevSpread(n) : n - 1);
+          if (k === 'PageDown' || (k === ' ' && !e.shiftKey)) {
+            e.preventDefault(); storyNext();
+          } else if (k === 'PageUp' || (k === ' ' && e.shiftKey)) {
+            e.preventDefault(); storyPrev();
+          } else if (k === 'ArrowRight') {
+            e.preventDefault(); if (isRtl()) storyPrev(); else storyNext();
+          } else if (k === 'ArrowLeft') {
+            e.preventDefault(); if (isRtl()) storyNext(); else storyPrev();
           } else if (k === 'Home') {
             e.preventDefault(); turn(0);
           } else if (k === 'End') {
