@@ -287,13 +287,9 @@ export function createUploadTool(d) {
       .trim();
 
     const chName = String(channelName || '').trim();
-    if (chName) {
-      const low = base.toLowerCase();
-      const chLow = chName.toLowerCase();
-      if (low.startsWith(chLow)) {
-        base = base.slice(chName.length).replace(/^\s*-\s*/, '').trim();
-      }
-    }
+    // NO quitar el canal aquí si es prefijo de la serie (ej. canal "Supergirl" + serie "Supergirl Vol.4").
+    // Si se corta antes, queda "Vol.4 #31 - …" y el hint de serie ya no coincide → número vacío.
+    // El strip de canal se hace más abajo solo cuando no hay seriesHint o tras resolver la serie.
 
     const ISSUE_WORD = '(?:Special|Especial|Extras|Extra|Anual|Annual|[OÓoó]mnibus|Integral|One[\\s-]?Shot|OneShot)';
     // Número, etiqueta sola, o etiqueta + número (Integral 1, Especial 2, Anual 1…)
@@ -307,26 +303,79 @@ export function createUploadTool(d) {
     const joinInfo = (a, b) => [cleanInfoPart(a), cleanInfoPart(b)].filter(Boolean).join(' ').trim();
     const hint = String(seriesHint || '').trim();
 
+    // Quitar el prefijo más largo entre serie y canal (la serie suele incluir el canal: "Supergirl Vol.4")
+    const stripPrefix = (s, prefix) => {
+      const p = String(prefix || '').trim();
+      if (!p) return String(s || '').trim();
+      const low = String(s || '').toLowerCase();
+      const pl = p.toLowerCase();
+      if (!low.startsWith(pl)) return String(s || '').trim();
+      return String(s || '').slice(p.length).replace(/^\s*-\s*/, '').trim();
+    };
+
     // Contexto de serie: el resto del nombre es #n / info
     if (hint) {
-      let rest = base;
-      if (rest.toLowerCase().startsWith(hint.toLowerCase())) {
-        rest = rest.slice(hint.length).replace(/^\s*-\s*/, '').trim();
+      // 1) Quitar serie completa del nombre (prioridad sobre el canal)
+      let rest = stripPrefix(base, hint);
+      // 2) Si no se pudo (nombre sin el texto de la serie), probar canal y luego serie
+      if (rest === base && chName) {
+        rest = stripPrefix(base, chName);
+        rest = stripPrefix(rest, hint);
+        // Si el canal era prefijo de la serie, stripPrefix(base, chName) deja "Vol.4 #31…"
+        // y stripPrefix(rest, hint) no hace nada → intentar quitar "Vol.N" residual no.
+        // Mejor: si base empieza por canal y hint empieza por canal, quitar solo hint del original.
+        if (hint.toLowerCase().startsWith(chName.toLowerCase()) && base.toLowerCase().startsWith(hint.toLowerCase())) {
+          rest = stripPrefix(base, hint);
+        } else if (rest.toLowerCase().startsWith('vol.') || /^\d/.test(rest) === false && /#/.test(rest)) {
+          // rest tipo "Vol.4 #31 - …" → localizar #n
+          const hashM = rest.match(new RegExp(`^(.*?)\\s*#\\s*(${ISSUE_TAG})(?:\\s*[-–—:]?\\s+(.*)|\\s*[-–—:]\\s*(.*))?$`, 'i'));
+          if (hashM) {
+            return {
+              series: hint,
+              number: String(hashM[2] || '').trim(),
+              info: joinInfo(String(hashM[3] || hashM[4] || '').trim(), tags),
+            };
+          }
+        }
       }
       let m = rest.match(new RegExp(`^#\\s*(${ISSUE_TAG})(?:\\s*[-–—:]?\\s+(.*)|\\s*[-–—:]\\s*(.*))?$`, 'i'));
       if (!m) m = rest.match(new RegExp(`^(${ISSUE_TAG})(?:\\s*[-–—:]?\\s+(.*)|\\s*[-–—:]\\s*(.*))?$`, 'i'));
-      if (m) {
+      // "Vol.4 #31 - info" tras un strip parcial de canal
+      if (!m) {
+        m = rest.match(new RegExp(`^(?:.*?\\s+)?#\\s*(${ISSUE_TAG})(?:\\s*[-–—:]?\\s+(.*)|\\s*[-–—:]\\s*(.*))?$`, 'i'));
+        if (m) m = [m[0], m[1], m[2] || m[3] || ''];
+      }
+      if (m && m.length >= 2) {
+        const num = String(m[1] || '').trim();
+        const info = joinInfo(String((m[2] != null ? m[2] : '') || (m[3] != null ? m[3] : '') || '').trim(), tags);
+        if (num) {
+          return { series: hint, number: num, info };
+        }
+      }
+      // Último recurso: buscar #n en cualquier parte del resto
+      const anyHash = rest.match(new RegExp(`#\\s*(${ISSUE_TAG})(?:\\s*[-–—:]?\\s*(.*))?$`, 'i'));
+      if (anyHash) {
         return {
           series: hint,
-          number: String(m[1] || '').trim(),
-          info: joinInfo(String(m[2] || m[3] || '').trim(), tags),
+          number: String(anyHash[1] || '').trim(),
+          info: joinInfo(String(anyHash[2] || '').trim(), tags),
         };
       }
       if (!rest || rest.toLowerCase() === hint.toLowerCase()) {
         return { series: hint, number: '', info: tags };
       }
-      // Sin número/especial detectado: el resto va a info adicional (no al número)
       return { series: hint, number: '', info: joinInfo(rest, tags) };
+    }
+
+    // Sin seriesHint: quitar canal solo si no deja un "Vol." huérfano antes de #
+    if (chName) {
+      const low = base.toLowerCase();
+      const chLow = chName.toLowerCase();
+      if (low.startsWith(chLow)) {
+        const after = base.slice(chName.length).replace(/^\s*-\s*/, '').trim();
+        // Evitar dejar "Vol.4 #31" sin el nombre de serie en el cuerpo de serie vacío
+        base = after;
+      }
     }
 
     // Del nombre de archivo: Serie #n - info
@@ -338,7 +387,6 @@ export function createUploadTool(d) {
     if (!m) m = base.match(/^(.*?)\s+(\d{1,4}[a-z]?)\s*[-–—]\s+(.*)$/i);
     if (!m) m = base.match(/^(.*?)\s+(\d{1,4}[a-z]?)$/i);
     if (m) {
-      // Tras quitar el canal del nombre queda "#01" → series vacía: usar nombre del canal
       let series = String(m[1] || '').trim();
       if (!series && chName) series = chName;
       return {
@@ -347,7 +395,6 @@ export function createUploadTool(d) {
         info: joinInfo(String(m[3] || '').trim(), tags),
       };
     }
-    // Solo "#01" o "01" tras quitar canal
     const onlyNum = base.match(new RegExp(`^#?\\s*(${ISSUE_TAG})$`, 'i'));
     if (onlyNum) {
       return {
@@ -356,7 +403,6 @@ export function createUploadTool(d) {
         info: tags,
       };
     }
-    // Sin numeración: no inventar serie desde todo el nombre; texto → info adicional
     return {
       series: hint || '',
       number: '',
@@ -1879,29 +1925,69 @@ async function postErrorPlaceholder(ch, fileName, errMsg) {
           editorialInp.value = ctxEditorial;
         }
       }
-      rebuildChannels();
-      if (ctxChannel) {
-        const id = ctxChannel.id != null ? String(ctxChannel.id) : '';
-        const byId = id && [...channelSel.options].find((o) => o.value === id);
-        if (byId) {
-          channelSel.value = id;
-          channelInp.hidden = true;
-        } else if (ctxChannel.name) {
-          const byName = [...channelSel.options].find(
-            (o) => (o._ch?.name || o.textContent || '').toLowerCase() === String(ctxChannel.name).toLowerCase()
-          );
-          if (byName) {
-            channelSel.value = byName.value;
+      const applyCtxSection = () => {
+        try {
+          const sec = String(ctx?.seccion || '').trim();
+          if (!sec) return false;
+          const opts = [...channelSel.options];
+          const hit = opts.find((o) => o._dest?.kind === 'section'
+            && String(o._dest.section || '').toLowerCase() === sec.toLowerCase());
+          if (hit) {
+            channelSel.value = hit.value;
             channelInp.hidden = true;
-          } else {
-            channelSel.value = '__new__';
-            channelInp.hidden = false;
-            channelInp.value = ctxChannel.name;
+            realChRow.hidden = true;
+            return true;
           }
+          // Sección conocida en contexto pero aún no en el listado: + Nuevo, no canal real
+          channelSel.value = '__new__';
+          channelInp.hidden = false;
+          realChRow.hidden = false;
+          channelInp.value = sec;
+          try { realChChk.checked = false; } catch (_) {}
+          return true;
+        } catch (_) { return false; }
+      };
+
+      Promise.resolve(rebuildChannels()).then(() => {
+        try {
+          // Preferir sección del contexto (serie dentro de sección / vista sección)
+          const usedSec = applyCtxSection();
+          if (!usedSec && ctxChannel) {
+            const id = ctxChannel.id != null ? String(ctxChannel.id) : '';
+            const byId = id && [...channelSel.options].find((o) => o.value === id);
+            if (byId) {
+              channelSel.value = id;
+              channelInp.hidden = true;
+              realChRow.hidden = true;
+            } else if (ctxChannel.name) {
+              const byName = [...channelSel.options].find(
+                (o) => (o._ch?.name || o.textContent || '').toLowerCase() === String(ctxChannel.name).toLowerCase()
+              );
+              if (byName) {
+                channelSel.value = byName.value;
+                channelInp.hidden = true;
+                realChRow.hidden = true;
+              } else {
+                channelSel.value = '__new__';
+                channelInp.hidden = false;
+                realChRow.hidden = false;
+                channelInp.value = ctxChannel.name;
+              }
+            }
+          }
+          // Macro del contexto sin sección en select: intentar por macroChannel
+          if (!usedSec && ctx?.macroChannel && !ctxChannel) {
+            const sec = String(ctx?.seccion || '').trim();
+            if (sec) applyCtxSection();
+          }
+          if (ctxSeries) seriesInp.value = ctxSeries;
+          updateAllPreviews();
+        } catch (e) {
+          console.warn('[upload] prefijar contexto', e);
+          try { if (ctxSeries) seriesInp.value = ctxSeries; updateAllPreviews(); } catch (_) {}
         }
-      }
+      });
       if (ctxSeries) seriesInp.value = ctxSeries;
-      updateAllPreviews();
       document.body.append(frame);
     } catch (e) {
       console.error('[upload] showUploadFrame', e);
