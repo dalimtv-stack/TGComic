@@ -227,7 +227,11 @@ export function createCovers(state, d) {
 
   /** Genera la portada personalizada leyendo la página elegida del cómic (no se guarda la imagen de origen). */
   async function makeCustomCover(ch, f, key, cfg) {
-    const msg = await getMsg(ch, f, { force: true });
+    // Caché de mensajes salvo que no haya document (mismo criterio que makeCover)
+    let msg = await getMsg(ch, f, {});
+    if (!msg?.document) {
+      try { msg = await getMsg(ch, f, { force: true }); } catch (_) {}
+    }
     let size = Number(f?.size) || 0;
     try {
       if (msg?.document?.size != null) size = Number(msg.document.size.toString()) || size;
