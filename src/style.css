@@ -1941,3 +1941,11 @@ html:has(.sf-root){
 #rd.flip-mode .flip-page-inner {
   background: transparent !important;
 }
+
+#rd.flip-mode .flip-host {
+  transition: opacity 0.15s ease;
+}
+#rd.flip-mode .flip-book {
+  max-width: 100%;
+  max-height: 100%;
+}
