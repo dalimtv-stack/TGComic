@@ -1768,10 +1768,11 @@ html:has(.sf-root){
   display: block;
 }
 .flip-page {
-  background-color: #121316;
+  /* Color papel: sin bandas negras/grises a los lados del arte */
+  background-color: #f2efe8;
   overflow: hidden;
   position: relative;
-  box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.4);
+  box-shadow: inset 0 0 12px rgba(0, 0, 0, 0.12);
 }
 .flip-page-inner {
   width: 100%;
@@ -1780,14 +1781,25 @@ html:has(.sf-root){
   display: flex;
   align-items: center;
   justify-content: center;
+  background: #f2efe8;
 }
 .flip-page-img {
   width: 100%;
   height: 100%;
   object-fit: contain;
+  object-position: center center;
   display: block;
   user-select: none;
   -webkit-user-drag: none;
+  background: #f2efe8;
+}
+/* Reverso de hoja al pasar: simula impreso a una cara (papel, no otra página “fantasma”) */
+.flip-book .stf__item .stf__block {
+  background: #f2efe8 !important;
+}
+.flip-book .stf__outerShadow,
+.flip-book .stf__innerShadow {
+  background: transparent;
 }
 .flip-page-num {
   position: absolute;
