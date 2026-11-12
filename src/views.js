@@ -2659,10 +2659,23 @@ function groupsView() {
               onDone: () => render(),
             });
             const prefObj = getSortPref('authorSeries', baseId);
-            const sorted = prefObj.mode === 'name'
-              ? gi.slice().sort((a, b) => a._ch.localeCompare(b._ch, undefined, NAT)
-                || a._series.localeCompare(b._series, undefined, NAT))
-              : applySortList(gi, prefObj, (it) => it._sortId, (it) => it._sortLabel || '', (it) => it._sortDate ?? null);
+            let sorted;
+            if (prefObj.mode === 'name') {
+              sorted = gi.slice().sort((a, b) => a._ch.localeCompare(b._ch, undefined, NAT)
+                || a._series.localeCompare(b._series, undefined, NAT));
+            } else if (prefObj.mode === 'date' || !prefObj.mode) {
+              // Cronológico: serie más antigua primero (fecha del primer cómic)
+              sorted = gi.slice().sort((a, b) => {
+                const da = a._sortDate, db = b._sortDate;
+                if (da == null && db == null) return a._sortLabel.localeCompare(b._sortLabel, undefined, NAT);
+                if (da == null) return 1;
+                if (db == null) return -1;
+                if (da !== db) return da < db ? -1 : 1;
+                return a._sortLabel.localeCompare(b._sortLabel, undefined, NAT);
+              });
+            } else {
+              sorted = applySortList(gi, prefObj, (it) => it._sortId, (it) => it._sortLabel || '', (it) => it._sortDate ?? null);
+            }
             grid(sorted, false, '', 'series');
           };
 
