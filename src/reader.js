@@ -660,12 +660,16 @@ export function createReader(state, d) {
           return openPages(m0, size, status, ac);
         };
 
-        /** Si TODAS las páginas están en pageCache, no descargar de Telegram.
-         *  Progreso se guarda con f.id; blobs con src.id (versión). Probamos ambos. */
+                /** Apertura con pageCache:
+         *  - 100% en caché → visor al instante + verificación en segundo plano
+         *  - Página actual en caché → visor al instante; el resto se pide al archivo en background
+         *  - Sin caché útil → descarga normal
+         */
         const tryOpenFromPageCache = async () => {
           if (!pageCache) return null;
           const msgIds = [...new Set([String(src?.id || ''), String(f?.id || '')].filter((x) => x && x !== 'undefined'))];
           if (!msgIds.length) return null;
+
           let tot = 0;
           for (const mid of msgIds) {
             try {
@@ -674,41 +678,133 @@ export function createReader(state, d) {
             } catch (_) {}
           }
           if (tot < 1) return null;
+
+          let curIdx = 0;
+          try { curIdx = Math.max(0, Math.min(tot - 1, getPageIndex(ch.id, f.id) || 0)); } catch (_) { curIdx = 0; }
+
+          const getCached = async (i) => {
+            for (const mid of msgIds) {
+              try {
+                const b = await pageCache.get(ch.id, mid, i);
+                if (b && b.size > 64) return b;
+              } catch (_) {}
+            }
+            return null;
+          };
+
+          // ¿Página actual en caché?
+          const curBlob = await getCached(curIdx);
+          if (!curBlob && curIdx > 0) {
+            // probar página 0
+            const b0 = await getCached(0);
+            if (!b0) return null;
+          } else if (!curBlob) {
+            return null;
+          }
+
           status('Caché de páginas…');
-          for (const mid of msgIds) {
-            const blobs = new Array(tot);
-            let ok = true;
-            const BATCH = 24;
-            for (let off = 0; off < tot && ok; off += BATCH) {
+
+          // Contar cuántas hay (muestreo: no cargar todas a RAM de golpe)
+          let hits = 0;
+          const known = new Map();
+          known.set(curIdx, curBlob);
+          if (curBlob) hits = 1;
+          // Comprobar vecinas y extremos en paralelo
+          const probe = [...new Set([0, 1, curIdx - 1, curIdx, curIdx + 1, tot - 1].filter((i) => i >= 0 && i < tot))];
+          await Promise.all(probe.map(async (i) => {
+            if (known.has(i)) return;
+            const b = await getCached(i);
+            if (b) { known.set(i, b); hits++; }
+          }));
+
+          // Si parece completo: verificar todas las claves (solo existencia, por lotes)
+          let full = false;
+          if (hits >= Math.min(tot, probe.length) && tot <= 400) {
+            full = true;
+            const BATCH = 32;
+            for (let off = 0; off < tot && full; off += BATCH) {
               if (cancelled(ac)) return null;
               const end = Math.min(tot, off + BATCH);
               await Promise.all(Array.from({ length: end - off }, async (_, k) => {
                 const i = off + k;
-                try {
-                  const b = await pageCache.get(ch.id, mid, i);
-                  if (b && b.size > 64) blobs[i] = b;
-                } catch (_) {}
+                if (known.has(i)) return;
+                const b = await getCached(i);
+                if (b) known.set(i, b);
+                else full = false;
               }));
             }
-            for (let i = 0; i < tot; i++) {
-              if (!blobs[i]) { ok = false; break; }
-            }
-            if (!ok) continue;
-            const pages = blobs.map((b, i) => ({
-              filename: 'cache-' + i + '.jpg',
-              blob: b,
-              getBlob: async () => b,
-            }));
-            return { pages, close: () => {}, fromPageCache: true, cacheMsgId: mid };
           }
-          return null;
+
+          let realArcPromise = null;
+          const ensureReal = () => {
+            if (!realArcPromise) {
+              realArcPromise = openArc(false).catch((e) => {
+                realArcPromise = Promise.reject(e);
+                throw e;
+              });
+            }
+            return realArcPromise;
+          };
+
+          // Verificación / relleno en segundo plano siempre
+          const bgFill = () => {
+            ensureReal().then(async (arcReal) => {
+              if (!arcReal?.pages?.length) return;
+              // Si el número de páginas cambió mucho, el archivo se sustituyó
+              if (Math.abs(arcReal.pages.length - tot) > 0) {
+                try { setPagesTotal(ch.id, f.id, arcReal.pages.length); } catch (_) {}
+              }
+              // Precargar huecos hacia el pageCache sin bloquear UI
+              for (let i = 0; i < arcReal.pages.length; i++) {
+                if (cancelled(ac)) break;
+                try {
+                  const hit = await getCached(i);
+                  if (hit) continue;
+                  const b = await pageBlob(arcReal.pages[i]);
+                  if (b && b.size > 0) pageCache.set(ch.id, src.id, i, b).catch(() => {});
+                } catch (_) {}
+              }
+            }).catch(() => {});
+          };
+
+          const pages = [];
+          for (let i = 0; i < tot; i++) {
+            const cached = known.get(i) || null;
+            pages.push({
+              filename: 'cache-' + i + '.jpg',
+              blob: cached || undefined,
+              getBlob: async () => {
+                if (cached) return cached;
+                const hit = await getCached(i);
+                if (hit) return hit;
+                const arcReal = await ensureReal();
+                const b = await pageBlob(arcReal.pages[i]);
+                if (b && b.size > 0) {
+                  try { pageCache.set(ch.id, src.id, i, b).catch(() => {}); } catch (_) {}
+                }
+                return b;
+              },
+            });
+          }
+
+          // Disparar background (full: solo verificar; partial: descargar faltantes)
+          bgFill();
+
+          return {
+            pages,
+            close: () => {
+              try { realArcPromise?.then((a) => a?.close?.()); } catch (_) {}
+            },
+            fromPageCache: true,
+            cacheFull: full,
+          };
         };
 
         let arc;
         try {
           arc = await tryOpenFromPageCache();
           if (arc) {
-            status('Desde caché (' + arc.pages.length + ' pág.)…');
+            status(arc.cacheFull ? ('Desde caché (' + arc.pages.length + ' pág.)…') : ('Caché parcial…'));
           } else {
             status('Descargando…');
             arc = await openArc(false);
@@ -1569,8 +1665,7 @@ export function createReader(state, d) {
       let goToPage = (i) => {}; // se asigna en cada modo
 
       if (flipMode) {
-        // --- Modo Page-Flip 3D (StPageFlip) ---
-        // Una/dos páginas: preferencia del usuario (spread), NO la orientación del dispositivo.
+        // --- Modo Page-Flip 3D ---
         setRdClass('page flip-mode fit-screen');
         const flipHost = el('div', 'flip-host');
         const bookEl = el('div', 'flip-book');
@@ -1578,22 +1673,20 @@ export function createReader(state, d) {
 
         const flipPageImgs = [];
         for (let i = 0; i < pages.length; i++) {
-          const isHard = (i === 0);
-          const pEl = el('div', 'flip-page' + (isHard ? ' --hard' : ''));
-          pEl.dataset.density = isHard ? 'hard' : 'soft';
+          const pEl = el('div', 'flip-page');
+          pEl.dataset.density = 'soft';
           const inner = el('div', 'flip-page-inner');
           const im = el('img', 'flip-page-img');
           im.draggable = false;
           im.alt = 'Página ' + (i + 1);
           flipPageImgs[i] = im;
-          inner.append(im, el('span', 'flip-page-num', String(i + 1)));
+          inner.append(im);
           pEl.append(inner);
           bookEl.append(pEl);
         }
 
         botRight.append(cnt);
 
-        // Crop en modo libro
         const CROP_SVG_FLIP = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M7,17V1H5V5H1V7H5V17A2,2 0 0,0 7,19H17V21H19V19H21V17H19V7H17M17,17H7V7H17V17Z"/></svg>';
         const cropBtnFlip = el('button', 'btn crop-fab');
         cropBtnFlip.type = 'button';
@@ -1616,11 +1709,9 @@ export function createReader(state, d) {
               if (isAutoCrop()) applyImgCrop(im);
             });
           } catch (_) {}
-          try { pokeUI(); } catch (_) {}
         };
         paintCropFlip();
 
-        // Doble página: el usuario elige, independiente de vertical/apaisado
         const isFlipSpread = () => pref('spread', '0') === '1';
         const spreadBtnFlip = el('button', 'btn spread-fab');
         spreadBtnFlip.type = 'button';
@@ -1632,7 +1723,6 @@ export function createReader(state, d) {
           spreadBtnFlip.classList.toggle('on', on);
           spreadBtnFlip.title = on ? 'Cambiar a una página' : 'Cambiar a doble página';
           spreadBtnFlip.setAttribute('aria-label', spreadBtnFlip.title);
-          spreadBtnFlip.setAttribute('aria-pressed', on ? 'true' : 'false');
         };
         spreadBtnFlip.onclick = (ev) => {
           try { ev.stopPropagation(); ev.preventDefault(); } catch (_) {}
@@ -1651,8 +1741,6 @@ export function createReader(state, d) {
           rtlBtnFlip.innerHTML = readingDirectionSvgFlip(on);
           rtlBtnFlip.classList.toggle('on', on);
           rtlBtnFlip.title = on ? 'Lectura RTL. Cambiar a LTR' : 'Lectura LTR. Cambiar a RTL';
-          rtlBtnFlip.setAttribute('aria-label', rtlBtnFlip.title);
-          rtlBtnFlip.setAttribute('aria-pressed', on ? 'true' : 'false');
         };
         rtlBtnFlip.onclick = (ev) => {
           try { ev.stopPropagation(); ev.preventDefault(); } catch (_) {}
@@ -1679,15 +1767,37 @@ export function createReader(state, d) {
               im.src = u;
               try { applyImgCrop(im); } catch (_) {}
             }
-          } catch (_) {}
+          } catch (_) {
+            loadedPageImages.delete(idx);
+          }
         };
 
         const preloadAroundFlip = async (center) => {
-          const rad = Math.min(5, Math.max(2, networkPreloadRadius() + 1));
+          const rad = Math.min(4, Math.max(2, networkPreloadRadius() + 1));
           for (let d = 0; d <= rad; d++) {
             if (center - d >= 0) loadFlipPage(center - d);
             if (center + d < pages.length) loadFlipPage(center + d);
           }
+        };
+
+        const doFlip = (dir) => {
+          if (!pf) return;
+          try {
+            if (dir > 0) {
+              if (isRtl()) pf.flipPrev();
+              else pf.flipNext();
+            } else {
+              if (isRtl()) pf.flipNext();
+              else pf.flipPrev();
+            }
+          } catch (_) {
+            try {
+              const cur = pf.getCurrentPageIndex?.() ?? n;
+              const next = Math.max(0, Math.min(pages.length - 1, cur + (isRtl() ? -dir : dir)));
+              pf.turnToPage(next);
+            } catch (_) {}
+          }
+          try { rd.classList.add('ui-off'); } catch (_) {}
         };
 
         (async () => {
@@ -1699,65 +1809,49 @@ export function createReader(state, d) {
             if (n + 1 < pages.length) await loadFlipPage(n + 1);
             if (n - 1 >= 0) await loadFlipPage(n - 1);
 
+            // Esperar imagen visible (evita lienzo negro)
+            try {
+              const im0 = flipPageImgs[n];
+              if (im0?.src) {
+                if (im0.decode) await im0.decode().catch(() => {});
+                else if (!im0.complete) {
+                  await new Promise((res) => {
+                    im0.onload = () => res();
+                    im0.onerror = () => res();
+                    setTimeout(res, 600);
+                  });
+                }
+              }
+            } catch (_) {}
+
             const vv = window.visualViewport;
             const availW = Math.max(280, Math.floor((vv && vv.width) || rd.clientWidth || window.innerWidth || 800));
             const availH = Math.max(320, Math.floor((vv && vv.height) || rd.clientHeight || window.innerHeight || 1000));
-            const touchLike = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
             const onePage = !isFlipSpread();
-            const chromeH = 64;
-            const safeW = Math.max(200, availW - 12);
-            const safeH = Math.max(260, availH - chromeH);
-            const COMIC_RATIO = 0.68;
-            let pageW, pageH;
-            if (onePage) {
-              pageH = safeH;
-              pageW = Math.min(safeW, Math.max(180, Math.round(pageH * COMIC_RATIO)));
-              if (pageW >= safeW) {
-                pageW = safeW;
-                pageH = Math.min(safeH, Math.round(pageW / COMIC_RATIO));
-              }
-            } else {
-              pageH = safeH;
-              pageW = Math.max(160, Math.round(pageH * COMIC_RATIO));
-              const maxEach = Math.floor((safeW - 8) / 2);
-              if (pageW > maxEach) {
-                pageW = maxEach;
-                pageH = Math.min(safeH, Math.round(pageW / COMIC_RATIO));
-              }
-            }
+            // 100% del área útil (como modo Página)
+            const pageW = onePage ? availW : Math.max(120, Math.floor(availW / 2));
+            const pageH = availH;
 
             pf = new PageFlip(bookEl, {
-              width: Math.max(160, pageW),
-              height: Math.max(240, pageH),
-              size: 'fixed',
-              minWidth: 140,
-              maxWidth: 2400,
-              minHeight: 220,
-              maxHeight: 2400,
+              width: Math.max(120, pageW),
+              height: Math.max(200, pageH),
+              size: 'stretch',
+              minWidth: 100,
+              maxWidth: 3000,
+              minHeight: 180,
+              maxHeight: 3000,
               drawShadow: true,
-              maxShadowOpacity: 0.45,
-              showCover: true,
-              mobileScrollSupport: true,
-              swipeDistance: touchLike ? 8 : 12,
+              maxShadowOpacity: 0.4,
+              showCover: false,
+              mobileScrollSupport: false,
+              swipeDistance: 30,
               usePortrait: onePage,
               startPage: Math.max(0, Math.min(pages.length - 1, n)),
               clickEventForward: true,
               useMouseEvents: true,
-              disableFlipByClick: true,
+              disableFlipByClick: false,
+              flippingTime: 600,
             });
-
-            try {
-              const im0 = flipPageImgs[n];
-              if (im0 && !im0.src) await loadFlipPage(n);
-              if (im0?.decode) await im0.decode().catch(() => {});
-              else if (im0 && !im0.complete) {
-                await new Promise((res) => {
-                  im0.onload = () => res();
-                  im0.onerror = () => res();
-                  setTimeout(res, 800);
-                });
-              }
-            } catch (_) {}
 
             pf.loadFromHTML(bookEl.querySelectorAll('.flip-page'));
 
@@ -1776,8 +1870,6 @@ export function createReader(state, d) {
               preloadAroundFlip(e.data ?? (pf?.getCurrentPageIndex?.() ?? n));
             });
 
-            pf.on('changeState', () => { /* no menú al arrastrar */ });
-
             await preloadAroundFlip(n);
             updateCount();
 
@@ -1792,7 +1884,7 @@ export function createReader(state, d) {
               try {
                 const cur = pf?.getCurrentPageIndex?.() ?? n;
                 if (cur >= pages.length - 1) return false;
-                pf?.flipNext?.();
+                doFlip(1);
                 return true;
               } catch (_) { return false; }
             };
@@ -1802,10 +1894,10 @@ export function createReader(state, d) {
               const k = e.key;
               if (k === 'ArrowRight' || k === 'PageDown' || (k === ' ' && !e.shiftKey)) {
                 e.preventDefault();
-                try { if (isRtl()) pf.flipPrev(); else pf.flipNext(); } catch (_) {}
+                doFlip(1);
               } else if (k === 'ArrowLeft' || k === 'PageUp' || (k === ' ' && e.shiftKey)) {
                 e.preventDefault();
-                try { if (isRtl()) pf.flipNext(); else pf.flipPrev(); } catch (_) {}
+                doFlip(-1);
               } else if (k === 'Home') {
                 e.preventDefault();
                 try { pf.turnToPage(0); } catch (_) {}
@@ -1815,45 +1907,33 @@ export function createReader(state, d) {
               }
             };
 
+            // Zonas laterales: encima del libro pero DEBAJO de las barras (top/bot)
             const eL = el('div', 'edge l'), eR = el('div', 'edge r');
             for (const ed of [eL, eR]) {
-              ed.style.pointerEvents = 'auto';
-              ed.style.zIndex = '25';
-              ed.style.width = '22%';
+              ed.style.cssText = 'pointer-events:auto;z-index:12;width:28%;top:48px;bottom:64px;';
             }
-            const flipEdge = (dir) => {
-              try {
-                if (dir < 0) { if (isRtl()) pf.flipNext(); else pf.flipPrev(); }
-                else { if (isRtl()) pf.flipPrev(); else pf.flipNext(); }
-              } catch (_) {}
-              try { rd.classList.add('ui-off'); } catch (_) {}
-            };
-            const onEdge = (dir) => (ev) => {
-              try { ev.preventDefault(); ev.stopPropagation(); } catch (_) {}
-              flipEdge(dir);
-            };
-            eL.addEventListener('click', onEdge(-1));
-            eR.addEventListener('click', onEdge(1));
-            eL.addEventListener('pointerup', (ev) => {
-              if (ev.button != null && ev.button !== 0) return;
-              onEdge(-1)(ev);
-            });
-            eR.addEventListener('pointerup', (ev) => {
-              if (ev.button != null && ev.button !== 0) return;
-              onEdge(1)(ev);
-            });
-            const onCenterTap = (ev) => {
-              if (ev.target.closest?.('.edge, .bar, .btn, .spread-fab, .crop-fab, .rtl-fab, .q-group')) return;
-              const x = (ev.clientX != null) ? ev.clientX : (ev.changedTouches?.[0]?.clientX);
-              if (x == null) return;
-              const rect = rd.getBoundingClientRect();
-              const rel = (x - rect.left) / (rect.width || 1);
-              if (rel < 0.22) { flipEdge(-1); return; }
-              if (rel > 0.78) { flipEdge(1); return; }
-              try { toggleUI(); } catch (_) {}
-            };
-            bookEl.addEventListener('click', onCenterTap);
+            eL.addEventListener('click', (ev) => { try { ev.stopPropagation(); } catch (_) {} doFlip(-1); });
+            eR.addEventListener('click', (ev) => { try { ev.stopPropagation(); } catch (_) {} doFlip(1); });
             rd.append(eL, eR);
+
+            // Toque corto en el centro: menú (sin bloquear el arrastre de StPageFlip)
+            let tapX0 = 0, tapY0 = 0, tapT0 = 0;
+            flipHost.addEventListener('pointerdown', (ev) => {
+              if (ev.target.closest?.('.edge, .bar, .btn')) return;
+              tapX0 = ev.clientX; tapY0 = ev.clientY; tapT0 = Date.now();
+            }, { passive: true });
+            flipHost.addEventListener('pointerup', (ev) => {
+              if (ev.target.closest?.('.edge, .bar, .btn')) return;
+              const dt = Date.now() - tapT0;
+              const dx = Math.abs(ev.clientX - tapX0);
+              const dy = Math.abs(ev.clientY - tapY0);
+              if (dt > 280 || dx > 12 || dy > 12) return; // fue arrastre
+              const rect = rd.getBoundingClientRect();
+              const rel = (ev.clientX - rect.left) / (rect.width || 1);
+              if (rel < 0.28) { doFlip(-1); return; }
+              if (rel > 0.72) { doFlip(1); return; }
+              try { toggleUI(); } catch (_) {}
+            }, { passive: true });
 
             observers._flipDestroy = () => {
               isMountingFlip = false;
