@@ -1486,15 +1486,19 @@ export function createReader(state, d) {
         const bookEl = el('div', 'flip-book');
         flipHost.append(bookEl);
 
-        // Crear elementos DOM para cada página guardando referencias directas al elemento <img>
-        // (PageFlip reorganiza el DOM en .stf__item, por lo que bookEl.children no sirve)
-        const flipPageImgs = [];
+        // Páginas de contenido + verso (blanco / reverso borroso) para simular impreso a 1 cara.
+        // Índice físico: 0=C0, 1=V0, 2=C1, 3=V1… Al caer en verso se salta al contenido siguiente/anterior.
+        const flipPageImgs = []; // contentIndex -> <img>
+        const flipVersoImgs = []; // contentIndex -> <img> del reverso (opcional)
+        const physIsVerso = [];
+        const physToContent = [];
+        const contentToPhys = [];
+        let physCount = 0;
         for (let i = 0; i < pages.length; i++) {
-          // Portada (primera) hard; resto soft. Impreso a una cara: el dorso en el flip
-          // lo pinta StPageFlip; fondo papel evita bandas grises y el “mismo dibujo” en ambas caras.
           const isHard = (i === 0);
           const pEl = el('div', 'flip-page' + (isHard ? ' --hard' : ''));
           pEl.dataset.density = isHard ? 'hard' : 'soft';
+          pEl.dataset.contentIdx = String(i);
           const inner = el('div', 'flip-page-inner');
           const im = el('img', 'flip-page-img');
           im.draggable = false;
@@ -1504,11 +1508,77 @@ export function createReader(state, d) {
           inner.append(im, num);
           pEl.append(inner);
           bookEl.append(pEl);
+          contentToPhys[i] = physCount;
+          physIsVerso[physCount] = false;
+          physToContent[physCount] = i;
+          physCount++;
+
+          // Verso tras cada página (excepto la última): papel blanco + eco borroso de la anverso
+          if (i < pages.length - 1) {
+            const vEl = el('div', 'flip-page flip-verso');
+            vEl.dataset.density = 'soft';
+            vEl.dataset.versoFor = String(i);
+            const vInner = el('div', 'flip-page-inner flip-verso-inner');
+            const vIm = el('img', 'flip-page-img flip-verso-img');
+            vIm.draggable = false;
+            vIm.alt = '';
+            flipVersoImgs[i] = vIm;
+            vInner.append(vIm);
+            vEl.append(vInner);
+            bookEl.append(vEl);
+            physIsVerso[physCount] = true;
+            physToContent[physCount] = i;
+            physCount++;
+          }
         }
 
-        // Montar barras de control con contador de páginas
+        // Montar barras + crop/rtl (también en modo libro)
         botRight.append(cnt);
-        rd.append(flipHost, top, bot);
+        const CROP_SVG_FLIP = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M17,17H15V15H17M13,17H11V15H13M9,17H7V15H9M17,13H15V11H17M13,13H11V11H13M9,13H7V11H9M17,9H15V7H17M13,9H11V7H13M9,9H7V7H9M5,5H19A2,2 0 0,1 21,7V17A2,2 0 0,1 19,19H5A2,2 0 0,1 3,17V7A2,2 0 0,1 5,5M7,7V17H17V7H7Z"/></svg>';
+        const cropBtnFlip = el('button', 'btn crop-fab');
+        cropBtnFlip.type = 'button';
+        const paintCropFlip = () => {
+          const on = isAutoCrop();
+          cropBtnFlip.innerHTML = CROP_SVG_FLIP;
+          cropBtnFlip.classList.toggle('on', on);
+          cropBtnFlip.title = on ? 'Recorte de márgenes: activado' : 'Recortar márgenes blancos/negros';
+          cropBtnFlip.setAttribute('aria-label', cropBtnFlip.title);
+          cropBtnFlip.setAttribute('aria-pressed', on ? 'true' : 'false');
+        };
+        cropBtnFlip.onclick = (ev) => {
+          try { ev.stopPropagation(); ev.preventDefault(); } catch (_) {}
+          setPref('autoCrop', isAutoCrop() ? '0' : '1');
+          paintCropFlip();
+          try {
+            flipPageImgs.forEach((im) => {
+              if (!im) return;
+              clearImgCrop(im);
+              if (isAutoCrop()) applyImgCrop(im);
+            });
+          } catch (_) {}
+          try { pokeUI(); } catch (_) {}
+        };
+        paintCropFlip();
+        const readingDirectionSvgFlip = (rtl) =>
+          `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h16M4 8h16M4 12h10"/><path d="${rtl ? 'M20 19H4m5-4-5 4 5 4' : 'M4 19h16m-5-4 5 4-5 4'}"/></svg>`;
+        const rtlBtnFlip = el('button', 'btn rtl-fab');
+        rtlBtnFlip.type = 'button';
+        const paintRtlFlip = () => {
+          const on = isRtl();
+          rtlBtnFlip.innerHTML = readingDirectionSvgFlip(on);
+          rtlBtnFlip.classList.toggle('on', on);
+          rtlBtnFlip.title = on ? 'Lectura RTL. Cambiar a LTR' : 'Lectura LTR. Cambiar a RTL';
+          rtlBtnFlip.setAttribute('aria-label', rtlBtnFlip.title);
+          rtlBtnFlip.setAttribute('aria-pressed', on ? 'true' : 'false');
+        };
+        rtlBtnFlip.onclick = (ev) => {
+          try { ev.stopPropagation(); ev.preventDefault(); } catch (_) {}
+          setPref('rtl', isRtl() ? '0' : '1');
+          paintRtlFlip();
+          try { remount(); } catch (_) {}
+        };
+        paintRtlFlip();
+        rd.append(flipHost, top, bot, cropBtnFlip, rtlBtnFlip);
 
         let pf = null;
         let isMountingFlip = true;
@@ -1524,6 +1594,11 @@ export function createReader(state, d) {
             if (im) {
               im.src = u;
               try { applyImgCrop(im); } catch (_) {}
+            }
+            // Reverso: misma imagen (eco borroso vía CSS), o se deja en blanco si aún no hay src
+            const vIm = flipVersoImgs[idx];
+            if (vIm) {
+              vIm.src = u;
             }
           } catch (_) {}
         };
@@ -1546,51 +1621,54 @@ export function createReader(state, d) {
             if (n + 1 < pages.length) await loadFlipPage(n + 1);
             if (n - 1 >= 0) await loadFlipPage(n - 1);
 
-            // Pantalla útil más alta que ancha → una página (móvil vertical, etc.)
-            const availW = Math.max(280, rd.clientWidth || window.innerWidth || 800);
-            const availH = Math.max(360, rd.clientHeight || window.innerHeight || 1000);
+            // Altura/ancho útiles (visualViewport en móvil evita recorte inferior por barras)
+            const vv = window.visualViewport;
+            const availW = Math.max(280, Math.floor((vv && vv.width) || rd.clientWidth || window.innerWidth || 800));
+            const availH = Math.max(320, Math.floor((vv && vv.height) || rd.clientHeight || window.innerHeight || 1000));
             const portraitUseful = availH > availW;
             const touchLike = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+            // Reservar espacio real para top/bot del visor
+            const chromeH = 64;
+            const safeW = Math.max(200, availW - 12);
+            const safeH = Math.max(260, availH - chromeH);
 
-            // Proporción cómic (~2:3). size:fixed evita estirar el libro y bandas laterales grises.
-            const COMIC_RATIO = 0.68; // ancho/alto de una hoja
+            // Proporción cómic; priorizar que la hoja QUEPA ENTERA en alto (sin cortar abajo)
+            const COMIC_RATIO = 0.68;
             let pageW, pageH;
             if (portraitUseful) {
-              // Una página: llenar alto útil; el ancho sale de la proporción (sin forzar ancho de pantalla)
-              pageH = Math.min(availH - 72, 1400);
-              pageW = Math.min(availW - 16, Math.max(200, Math.round(pageH * COMIC_RATIO)));
-              // Si el ancho disponible es el límite, reajustar alto para no dejar bandas dentro de la hoja
-              if (pageW >= availW - 16) {
-                pageW = availW - 16;
-                pageH = Math.min(availH - 72, Math.round(pageW / COMIC_RATIO));
+              pageH = safeH;
+              pageW = Math.min(safeW, Math.max(180, Math.round(pageH * COMIC_RATIO)));
+              if (pageW >= safeW) {
+                pageW = safeW;
+                pageH = Math.min(safeH, Math.round(pageW / COMIC_RATIO));
               }
             } else {
-              // Dos páginas: cada hoja mantiene proporción cómic
-              pageH = Math.min(availH - 72, 1400);
-              pageW = Math.min(Math.floor((availW - 40) / 2), Math.max(200, Math.round(pageH * COMIC_RATIO)));
-              if (pageW * 2 + 40 > availW) {
-                pageW = Math.floor((availW - 40) / 2);
-                pageH = Math.min(availH - 72, Math.round(pageW / COMIC_RATIO));
+              // Dos páginas apaisado: alto = safeH; si no caben a lo ancho, reducir ambas
+              pageH = safeH;
+              pageW = Math.max(160, Math.round(pageH * COMIC_RATIO));
+              const maxEach = Math.floor((safeW - 8) / 2);
+              if (pageW > maxEach) {
+                pageW = maxEach;
+                pageH = Math.min(safeH, Math.round(pageW / COMIC_RATIO));
               }
             }
 
+            const startPhys = contentToPhys[Math.max(0, Math.min(pages.length - 1, n))] ?? 0;
             pf = new PageFlip(bookEl, {
-              width: Math.max(200, pageW),
-              height: Math.max(300, pageH),
+              width: Math.max(160, pageW),
+              height: Math.max(240, pageH),
               size: 'fixed',
-              minWidth: 160,
+              minWidth: 140,
               maxWidth: 2400,
-              minHeight: 240,
+              minHeight: 220,
               maxHeight: 2400,
               drawShadow: true,
               maxShadowOpacity: 0.45,
-              // Todos los cómics tienen portada (modo 1 o 2 páginas)
               showCover: true,
               mobileScrollSupport: true,
               swipeDistance: touchLike ? 15 : 25,
-              // Una página si el área útil es más alta que ancha
               usePortrait: portraitUseful,
-              startPage: Math.max(0, Math.min(pages.length - 1, n)),
+              startPage: Math.max(0, Math.min(physCount - 1, startPhys)),
               clickEventForward: false,
               useMouseEvents: true,
               disableFlipByClick: false,
@@ -1598,18 +1676,40 @@ export function createReader(state, d) {
 
             pf.loadFromHTML(bookEl.querySelectorAll('.flip-page'));
 
+            let lastPhysIdx = startPhys;
+            let skippingVerso = false;
+            const contentFromPhys = (phys) => {
+              const c = physToContent[phys];
+              return (c == null || c < 0) ? 0 : c;
+            };
             const updateCount = () => {
               try {
-                const cur = pf?.getCurrentPageIndex?.() ?? n;
-                n = cur;
-                cnt.textContent = (cur + 1) + ' / ' + pages.length;
-                savePage(cur);
-              } catch (_) {}
+                let curPhys = pf?.getCurrentPageIndex?.() ?? lastPhysIdx;
+                // Si caemos en verso, saltar al anverso siguiente/anterior sin dejar la hoja en blanco
+                if (physIsVerso[curPhys] && !skippingVerso) {
+                  skippingVerso = true;
+                  const dir = curPhys >= lastPhysIdx ? 1 : -1;
+                  let target = curPhys + dir;
+                  while (target >= 0 && target < physCount && physIsVerso[target]) target += dir;
+                  if (target < 0) target = 0;
+                  if (target >= physCount) target = physCount - 1;
+                  lastPhysIdx = curPhys;
+                  try { pf.turnToPage(target); } catch (_) {}
+                  skippingVerso = false;
+                  curPhys = pf?.getCurrentPageIndex?.() ?? target;
+                }
+                lastPhysIdx = curPhys;
+                const contentIdx = contentFromPhys(curPhys);
+                n = contentIdx;
+                cnt.textContent = (contentIdx + 1) + ' / ' + pages.length;
+                savePage(contentIdx);
+              } catch (_) { skippingVerso = false; }
             };
 
             pf.on('flip', (e) => {
               updateCount();
-              preloadAroundFlip(e.data ?? (pf?.getCurrentPageIndex?.() ?? n));
+              const phys = e.data ?? (pf?.getCurrentPageIndex?.() ?? lastPhysIdx);
+              preloadAroundFlip(contentFromPhys(phys));
             });
 
             pf.on('changeState', () => {
@@ -1621,15 +1721,15 @@ export function createReader(state, d) {
 
             goToPage = (i) => {
               try {
-                const target = Math.max(0, Math.min(pages.length - 1, i));
+                const contentIdx = Math.max(0, Math.min(pages.length - 1, i));
+                const target = contentToPhys[contentIdx] ?? contentIdx;
                 pf?.turnToPage?.(target);
               } catch (_) {}
             };
 
             autoStep = async () => {
               try {
-                const cur = pf?.getCurrentPageIndex?.() ?? n;
-                if (cur >= pages.length - 1) return false;
+                if (n >= pages.length - 1) return false;
                 pf?.flipNext?.();
                 return true;
               } catch (_) { return false; }
@@ -1649,7 +1749,7 @@ export function createReader(state, d) {
                 try { pf.turnToPage(0); } catch (_) {}
               } else if (k === 'End') {
                 e.preventDefault();
-                try { pf.turnToPage(pages.length - 1); } catch (_) {}
+                try { pf.turnToPage(Math.max(0, physCount - 1)); } catch (_) {}
               }
             };
 
