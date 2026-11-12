@@ -1813,8 +1813,10 @@ html:has(.sf-root){
 
 /* Flip: el gesto de arrastre no debe quedar bloqueado por .edge */
 #rd.flip-mode .edge {
-  pointer-events: none !important;
-  width: 10% !important;
+  pointer-events: auto !important;
+  width: 22% !important;
+  z-index: 20 !important;
+  background: transparent !important;
 }
 #rd.flip-mode .flip-host,
 #rd.flip-mode .flip-book,
@@ -1897,4 +1899,18 @@ html:has(.sf-root){
   margin-top: 10px;
   font-size: 13px;
   opacity: 0.85;
+}
+
+/* Libro: maximizar página al área útil */
+#rd.flip-mode .flip-host { z-index: 1; }
+#rd.flip-mode .flip-page-img {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
+  object-position: center center !important;
+  background: transparent !important;
+}
+#rd.flip-mode .stf__block,
+#rd.flip-mode .stf__item {
+  background: transparent !important;
 }
