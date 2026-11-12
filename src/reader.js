@@ -1665,26 +1665,24 @@ export function createReader(state, d) {
       let goToPage = (i) => {}; // se asigna en cada modo
 
       if (flipMode) {
-        // --- Modo Page-Flip 3D (StPageFlip) ---
+        // --- Modo Page-Flip 3D ---
+        // Una/doble página SOLO según pref('spread'), NUNCA según orientación del dispositivo.
         setRdClass('page flip-mode fit-screen');
         const flipHost = el('div', 'flip-host');
-        flipHost.style.opacity = '0'; // no mostrar rejilla vacía hasta tener imagen
+        flipHost.style.opacity = '0';
         const bookEl = el('div', 'flip-book');
         flipHost.append(bookEl);
 
         const flipPageImgs = [];
-        const flipPageEls = [];
         for (let i = 0; i < pages.length; i++) {
           const isCover = (i === 0);
           const pEl = el('div', 'flip-page' + (isCover ? ' --hard' : ''));
-          // Portada hard + showCover; resto soft
           pEl.dataset.density = isCover ? 'hard' : 'soft';
           const inner = el('div', 'flip-page-inner');
           const im = el('img', 'flip-page-img');
           im.draggable = false;
           im.alt = isCover ? 'Portada' : ('Página ' + (i + 1));
           flipPageImgs[i] = im;
-          flipPageEls[i] = pEl;
           inner.append(im);
           pEl.append(inner);
           bookEl.append(pEl);
@@ -1709,11 +1707,8 @@ export function createReader(state, d) {
             try {
               clearImgCrop(im);
               if (isAutoCrop()) {
-                // esperar natural size
                 if (im.complete && im.naturalWidth > 0) applyImgCrop(im);
-                else {
-                  im.decode?.().then(() => applyImgCrop(im)).catch(() => {});
-                }
+                else im.decode?.().then(() => applyImgCrop(im)).catch(() => {});
               }
             } catch (_) {}
           });
@@ -1741,10 +1736,8 @@ export function createReader(state, d) {
         };
         spreadBtnFlip.onclick = (ev) => {
           try { ev.stopPropagation(); ev.preventDefault(); } catch (_) {}
-          const next = isFlipSpread() ? '0' : '1';
-          setPref('spread', next);
+          setPref('spread', isFlipSpread() ? '0' : '1');
           paintSpreadFlip();
-          // Remount completo para reconfigurar usePortrait / tamaño
           try { remount(); } catch (_) {}
         };
         paintSpreadFlip();
@@ -1794,9 +1787,7 @@ export function createReader(state, d) {
                 });
               }
             } catch (_) {}
-            try {
-              if (isAutoCrop()) applyImgCrop(im);
-            } catch (_) {}
+            try { if (isAutoCrop()) applyImgCrop(im); } catch (_) {}
             return !!(im.naturalWidth > 0 || im.complete);
           } catch (_) {
             loadedPageImages.delete(idx);
@@ -1810,6 +1801,63 @@ export function createReader(state, d) {
             if (center - d >= 0) loadFlipPage(center - d);
             if (center + d < pages.length) loadFlipPage(center + d);
           }
+        };
+
+        const viewportSize = () => {
+          const vv = window.visualViewport;
+          const availW = Math.max(280, Math.floor((vv && vv.width) || rd.clientWidth || window.innerWidth || 800));
+          const availH = Math.max(320, Math.floor((vv && vv.height) || rd.clientHeight || window.innerHeight || 1000));
+          return { availW, availH };
+        };
+
+        // Geometría del libro: SOLO depende de pref spread, no de portrait/landscape del dispositivo.
+        // StPageFlip pone 1 página si usePortrait && bounds.width < bounds.height;
+        // por eso controlamos el tamaño de flipHost (el padre que mide la librería).
+        const layoutFlipHost = () => {
+          const { availW, availH } = viewportSize();
+          const wantSpread = isFlipSpread();
+          const COMIC_RATIO = 0.68;
+          let pageW, pageH, usePortrait, hostW, hostH;
+
+          if (wantSpread) {
+            usePortrait = false;
+            pageH = availH;
+            pageW = Math.max(120, Math.round(pageH * COMIC_RATIO));
+            if (pageW * 2 > availW - 8) {
+              pageW = Math.max(120, Math.floor((availW - 8) / 2));
+              pageH = Math.min(availH, Math.round(pageW / COMIC_RATIO));
+            }
+            hostW = Math.min(availW, pageW * 2);
+            hostH = pageH;
+          } else {
+            usePortrait = true;
+            pageH = availH;
+            pageW = Math.min(availW, Math.max(120, Math.round(pageH * COMIC_RATIO)));
+            if (pageW >= pageH) {
+              // Forzar width < height para que StPageFlip NO pase a modo landscape (doble página)
+              pageW = Math.max(120, pageH - 2);
+            }
+            if (pageW > availW) {
+              pageW = availW;
+              pageH = Math.min(availH, Math.round(pageW / COMIC_RATIO));
+              if (pageW >= pageH) pageW = Math.max(120, pageH - 2);
+            }
+            hostW = pageW;
+            hostH = pageH;
+          }
+
+          flipHost.style.position = 'absolute';
+          flipHost.style.left = '50%';
+          flipHost.style.top = '50%';
+          flipHost.style.right = 'auto';
+          flipHost.style.bottom = 'auto';
+          flipHost.style.width = hostW + 'px';
+          flipHost.style.height = hostH + 'px';
+          flipHost.style.transform = 'translate(-50%, -50%)';
+          flipHost.style.maxWidth = '100%';
+          flipHost.style.maxHeight = '100%';
+
+          return { pageW, pageH, usePortrait, hostW, hostH, wantSpread };
         };
 
         const doFlip = (dir) => {
@@ -1837,54 +1885,34 @@ export function createReader(state, d) {
             const PageFlip = await ensurePageFlip();
             if (!isMountingFlip) return;
 
-            // Cargar la página actual ANTES de montar StPageFlip (no rejilla vacía)
             let ok = await loadFlipPage(n);
             if (!ok) {
-              // reintento una vez
               loadedPageImages.delete(n);
               ok = await loadFlipPage(n);
             }
             if (!ok || !flipPageImgs[n]?.src) {
               throw new Error('No se pudo cargar la imagen de la página');
             }
-            // Vecinas en paralelo, sin bloquear el montaje más de lo necesario
             if (n + 1 < pages.length) loadFlipPage(n + 1);
             if (n - 1 >= 0) loadFlipPage(n - 1);
 
-            const vv = window.visualViewport;
-            const availW = Math.max(280, Math.floor((vv && vv.width) || rd.clientWidth || window.innerWidth || 800));
-            const availH = Math.max(320, Math.floor((vv && vv.height) || rd.clientHeight || window.innerHeight || 1000));
-            const wantSpread = isFlipSpread();
-
-            // StPageFlip: usePortrait solo activa 1 página si width < height del contenedor.
-            // Forzar geometría según preferencia del usuario (botón doble página).
-            let pageW, pageH, usePortrait;
-            if (wantSpread) {
-              // Doble página siempre
-              usePortrait = false;
-              pageH = availH;
-              pageW = Math.max(140, Math.floor(availW / 2));
-            } else {
-              // Una página siempre: bounds con width < height
-              usePortrait = true;
-              pageH = availH;
-              pageW = Math.min(availW, Math.max(120, pageH - 1));
-            }
+            const geo = layoutFlipHost();
 
             pf = new PageFlip(bookEl, {
-              width: Math.max(120, pageW),
-              height: Math.max(200, pageH),
+              width: Math.max(120, geo.pageW),
+              height: Math.max(200, geo.pageH),
               size: 'fixed',
               minWidth: 100,
               maxWidth: 3000,
               minHeight: 180,
               maxHeight: 3000,
               drawShadow: true,
-              maxShadowOpacity: 0.45,
+              maxShadowOpacity: 0.35,
               showCover: true,
-              mobileScrollSupport: true,
-              swipeDistance: 25,
-              usePortrait,
+              // false: no interferir con el gesto de arrastre de la librería
+              mobileScrollSupport: false,
+              swipeDistance: 20,
+              usePortrait: geo.usePortrait,
               startPage: Math.max(0, Math.min(pages.length - 1, n)),
               clickEventForward: true,
               useMouseEvents: true,
@@ -1912,16 +1940,12 @@ export function createReader(state, d) {
               preloadAroundFlip(cur);
             });
 
-            // No pokeUI en changeState (evita menú al arrastrar)
-            pf.on('changeState', () => {});
-
             updateCount();
             preloadAroundFlip(n);
 
             goToPage = (i) => {
               try {
-                const target = Math.max(0, Math.min(pages.length - 1, i));
-                pf?.turnToPage?.(target);
+                pf?.turnToPage?.(Math.max(0, Math.min(pages.length - 1, i)));
               } catch (_) {}
             };
 
@@ -1948,10 +1972,11 @@ export function createReader(state, d) {
               }
             };
 
-            // Laterales: solo clic (no capturan el arrastre del centro)
+            // Clic en laterales del viewport (no del libro) sin cubrir el libro para no bloquear el arrastre
             const eL = el('div', 'edge l'), eR = el('div', 'edge r');
             for (const ed of [eL, eR]) {
-              ed.style.cssText = 'pointer-events:auto;z-index:12;width:18%;top:56px;bottom:72px;';
+              // Solo franjas fuera del libro si el libro no ocupa todo el ancho
+              ed.style.cssText = 'pointer-events:auto;z-index:5;width:12%;top:48px;bottom:64px;';
             }
             eL.addEventListener('click', (ev) => {
               try { ev.preventDefault(); ev.stopPropagation(); } catch (_) {}
@@ -1963,7 +1988,7 @@ export function createReader(state, d) {
             });
             rd.append(eL, eR);
 
-            // Toque corto en el centro: solo menú (no pasar página; eso lo hace StPageFlip o laterales)
+            // Toque corto en el centro del libro: menú (sin preventDefault → el arrastre sigue en StPageFlip)
             let tapX0 = 0, tapY0 = 0, tapT0 = 0;
             flipHost.addEventListener('pointerdown', (ev) => {
               if (ev.target.closest?.('.edge, .bar, .btn')) return;
@@ -1974,17 +1999,44 @@ export function createReader(state, d) {
               const dt = Date.now() - tapT0;
               const dx = Math.abs(ev.clientX - tapX0);
               const dy = Math.abs(ev.clientY - tapY0);
-              if (dt > 320 || dx > 14 || dy > 14) return; // arrastre → lo gestiona StPageFlip
-              const rect = rd.getBoundingClientRect();
+              if (dt > 320 || dx > 14 || dy > 14) return;
+              const rect = flipHost.getBoundingClientRect();
               const rel = (ev.clientX - rect.left) / (rect.width || 1);
-              // Centro amplio: menú. Laterales: no duplicar (ya hay .edge)
-              if (rel > 0.22 && rel < 0.78) {
+              if (rel > 0.25 && rel < 0.75) {
                 try { toggleUI(); } catch (_) {}
               }
             }, { passive: true });
 
+            // Al girar el dispositivo: SOLO redimensionar. No cambiar spread ni modo.
+            let relayoutT = 0;
+            const onFlipResize = () => {
+              clearTimeout(relayoutT);
+              relayoutT = setTimeout(() => {
+                if (!pf || !isMountingFlip) return;
+                try {
+                  const cur = pf.getCurrentPageIndex?.() ?? n;
+                  const geo2 = layoutFlipHost();
+                  // update() recalcula orientación a partir del tamaño de flipHost
+                  // (que ya forzamos width<height si una página).
+                  pf.update();
+                  try { pf.turnToPage(cur); } catch (_) {}
+                } catch (_) {}
+              }, 120);
+            };
+            addEventListener('resize', onFlipResize);
+            addEventListener('orientationchange', onFlipResize);
+            if (window.visualViewport) {
+              visualViewport.addEventListener('resize', onFlipResize);
+            }
+
             observers._flipDestroy = () => {
               isMountingFlip = false;
+              try { clearTimeout(relayoutT); } catch (_) {}
+              try { removeEventListener('resize', onFlipResize); } catch (_) {}
+              try { removeEventListener('orientationchange', onFlipResize); } catch (_) {}
+              try {
+                if (window.visualViewport) visualViewport.removeEventListener('resize', onFlipResize);
+              } catch (_) {}
               try { pf?.destroy?.(); } catch (_) {}
               pf = null;
             };
