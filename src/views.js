@@ -286,11 +286,21 @@ export function createViews(d) {
 
   /** Años del primer y del último cómic de una serie (por número). */
   const seriesYearSpan = (files, ch) => {
+    // captionDateOf usa escala YYYYMMDD (o YYYYMM00). Extraer SOLO el año.
+    const yearOf = (d) => {
+      const n = Number(d);
+      if (!Number.isFinite(n) || n < 1000) return null;
+      if (n >= 10000000) return Math.floor(n / 10000); // YYYYMMDD
+      if (n >= 100000) return Math.floor(n / 100);     // YYYYMM
+      if (n >= 1000 && n <= 3000) return Math.floor(n); // YYYY
+      return null;
+    };
     let first = null, last = null;
     for (const f of orderByComicNumber(files, ch)) {
       const d = captionDateOf(f);
       if (d == null) continue;
-      const y = Math.floor(d / 100);
+      const y = yearOf(d);
+      if (y == null) continue;
       if (first == null) first = y;
       last = y;
     }
