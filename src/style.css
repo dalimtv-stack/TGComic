@@ -1824,8 +1824,9 @@ html:has(.sf-root){
 #rd.flip-mode .flip-book,
 #rd.flip-mode .stf__parent,
 #rd.flip-mode .stf__wrapper {
-  touch-action: none;
-  pointer-events: auto;
+  /* NO forzar 100%: StPageFlip mide el padre; width>height = doble página automática */
+  max-width: 100%;
+  max-height: 100%;
 }
 /* Página recortada por canvas: comportarse como imagen normal */
 #rd img.auto-cropped {
@@ -1948,4 +1949,29 @@ html:has(.sf-root){
 #rd.flip-mode .flip-book {
   max-width: 100%;
   max-height: 100%;
+}
+
+/* Arrastre Page-Flip: no dejar que #rd.page (touch-action:manipulation) robe el gesto */
+#rd.flip-mode {
+  touch-action: none !important;
+}
+#rd.flip-mode .flip-host,
+#rd.flip-mode .flip-book,
+#rd.flip-mode .stf__parent,
+#rd.flip-mode .stf__wrapper,
+#rd.flip-mode .stf__block,
+#rd.flip-mode .stf__item {
+  touch-action: none !important;
+}
+#rd.flip-mode .flip-page-img {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
+  object-position: center center !important;
+  pointer-events: none;
+}
+#rd.flip-mode .edge {
+  /* franjas finas; el libro queda libre para arrastrar */
+  z-index: 5 !important;
+  width: 12% !important;
 }
