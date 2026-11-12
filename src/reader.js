@@ -659,9 +659,60 @@ export function createReader(state, d) {
           } catch (_) {}
           return openPages(m0, size, status, ac);
         };
+
+        /** Si TODAS las páginas están en pageCache, no descargar de Telegram.
+         *  Progreso se guarda con f.id; blobs con src.id (versión). Probamos ambos. */
+        const tryOpenFromPageCache = async () => {
+          if (!pageCache) return null;
+          const msgIds = [...new Set([String(src?.id || ''), String(f?.id || '')].filter((x) => x && x !== 'undefined'))];
+          if (!msgIds.length) return null;
+          let tot = 0;
+          for (const mid of msgIds) {
+            try {
+              const t0 = Math.max(0, +(localStorage.getItem('pages:' + ch.id + ':' + mid) || 0) || 0);
+              if (t0 > tot) tot = t0;
+            } catch (_) {}
+          }
+          if (tot < 1) return null;
+          status('Caché de páginas…');
+          for (const mid of msgIds) {
+            const blobs = new Array(tot);
+            let ok = true;
+            const BATCH = 24;
+            for (let off = 0; off < tot && ok; off += BATCH) {
+              if (cancelled(ac)) return null;
+              const end = Math.min(tot, off + BATCH);
+              await Promise.all(Array.from({ length: end - off }, async (_, k) => {
+                const i = off + k;
+                try {
+                  const b = await pageCache.get(ch.id, mid, i);
+                  if (b && b.size > 64) blobs[i] = b;
+                } catch (_) {}
+              }));
+            }
+            for (let i = 0; i < tot; i++) {
+              if (!blobs[i]) { ok = false; break; }
+            }
+            if (!ok) continue;
+            const pages = blobs.map((b, i) => ({
+              filename: 'cache-' + i + '.jpg',
+              blob: b,
+              getBlob: async () => b,
+            }));
+            return { pages, close: () => {}, fromPageCache: true, cacheMsgId: mid };
+          }
+          return null;
+        };
+
         let arc;
         try {
-          arc = await openArc(false);
+          arc = await tryOpenFromPageCache();
+          if (arc) {
+            status('Desde caché (' + arc.pages.length + ' pág.)…');
+          } else {
+            status('Descargando…');
+            arc = await openArc(false);
+          }
         } catch (errOpen) {
           const em = String(errOpen?.message || errOpen || '');
           if (!/central directory|end of central|invalid zip|corrupt|bad zip/i.test(em)) throw errOpen;
@@ -723,6 +774,9 @@ export function createReader(state, d) {
     const qVariants = f.variants && Object.keys(f.variants).length > 1 ? f.variants : null;
     if (chId != null) {
       setPagesTotal(chId, f.id, pages.length);
+      try {
+        if (srcId != null && String(srcId) !== String(f.id)) setPagesTotal(chId, srcId, pages.length);
+      } catch (_) {}
       const fmt = detectPageFormats(pages);
       if (fmt) setPageFormat(chId, f.id, fmt);
     }
@@ -1684,14 +1738,26 @@ export function createReader(state, d) {
               maxShadowOpacity: 0.45,
               showCover: true,
               mobileScrollSupport: true,
-              swipeDistance: touchLike ? 15 : 25,
-              // Una página si el usuario no activó doble página (spread)
+              swipeDistance: touchLike ? 8 : 12,
               usePortrait: onePage,
               startPage: Math.max(0, Math.min(pages.length - 1, n)),
-              clickEventForward: false,
+              clickEventForward: true,
               useMouseEvents: true,
               disableFlipByClick: true,
             });
+
+            try {
+              const im0 = flipPageImgs[n];
+              if (im0 && !im0.src) await loadFlipPage(n);
+              if (im0?.decode) await im0.decode().catch(() => {});
+              else if (im0 && !im0.complete) {
+                await new Promise((res) => {
+                  im0.onload = () => res();
+                  im0.onerror = () => res();
+                  setTimeout(res, 800);
+                });
+              }
+            } catch (_) {}
 
             pf.loadFromHTML(bookEl.querySelectorAll('.flip-page'));
 
@@ -1705,13 +1771,12 @@ export function createReader(state, d) {
             };
 
             pf.on('flip', (e) => {
+              try { rd.classList.add('ui-off'); } catch (_) {}
               updateCount();
               preloadAroundFlip(e.data ?? (pf?.getCurrentPageIndex?.() ?? n));
             });
 
-            pf.on('changeState', () => {
-              try { pokeUI(); } catch (_) {}
-            });
+            pf.on('changeState', () => { /* no menú al arrastrar */ });
 
             await preloadAroundFlip(n);
             updateCount();
@@ -1751,25 +1816,43 @@ export function createReader(state, d) {
             };
 
             const eL = el('div', 'edge l'), eR = el('div', 'edge r');
+            for (const ed of [eL, eR]) {
+              ed.style.pointerEvents = 'auto';
+              ed.style.zIndex = '25';
+              ed.style.width = '22%';
+            }
             const flipEdge = (dir) => {
               try {
                 if (dir < 0) { if (isRtl()) pf.flipNext(); else pf.flipPrev(); }
                 else { if (isRtl()) pf.flipPrev(); else pf.flipNext(); }
               } catch (_) {}
-              try { if (!rd.classList.contains('ui-off')) armUiHide(); } catch (_) {}
+              try { rd.classList.add('ui-off'); } catch (_) {}
             };
-            eL.onclick = (ev) => { try { ev.stopPropagation(); } catch (_) {} flipEdge(-1); };
-            eR.onclick = (ev) => { try { ev.stopPropagation(); } catch (_) {} flipEdge(1); };
+            const onEdge = (dir) => (ev) => {
+              try { ev.preventDefault(); ev.stopPropagation(); } catch (_) {}
+              flipEdge(dir);
+            };
+            eL.addEventListener('click', onEdge(-1));
+            eR.addEventListener('click', onEdge(1));
+            eL.addEventListener('pointerup', (ev) => {
+              if (ev.button != null && ev.button !== 0) return;
+              onEdge(-1)(ev);
+            });
+            eR.addEventListener('pointerup', (ev) => {
+              if (ev.button != null && ev.button !== 0) return;
+              onEdge(1)(ev);
+            });
             const onCenterTap = (ev) => {
               if (ev.target.closest?.('.edge, .bar, .btn, .spread-fab, .crop-fab, .rtl-fab, .q-group')) return;
               const x = (ev.clientX != null) ? ev.clientX : (ev.changedTouches?.[0]?.clientX);
               if (x == null) return;
-              const w = rd.clientWidth || window.innerWidth;
-              if (x < w * 0.22) { flipEdge(-1); return; }
-              if (x > w * 0.78) { flipEdge(1); return; }
+              const rect = rd.getBoundingClientRect();
+              const rel = (x - rect.left) / (rect.width || 1);
+              if (rel < 0.22) { flipEdge(-1); return; }
+              if (rel > 0.78) { flipEdge(1); return; }
               try { toggleUI(); } catch (_) {}
             };
-            flipHost.addEventListener('click', onCenterTap);
+            bookEl.addEventListener('click', onCenterTap);
             rd.append(eL, eR);
 
             observers._flipDestroy = () => {
