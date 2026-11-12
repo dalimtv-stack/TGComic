@@ -1813,9 +1813,10 @@ html:has(.sf-root){
 
 /* Flip: el gesto de arrastre no debe quedar bloqueado por .edge */
 #rd.flip-mode .edge {
-  pointer-events: auto !important;
-  width: 28% !important;
-  z-index: 12 !important;
+  /* pointer-events none: el arrastre/curl lo hace la librería en las esquinas */
+  pointer-events: none !important;
+  width: 8% !important;
+  z-index: 5 !important;
   top: 48px !important;
   bottom: 64px !important;
   background: transparent !important;
@@ -1972,7 +1973,8 @@ html:has(.sf-root){
   pointer-events: none;
 }
 #rd.flip-mode .edge {
-  /* franjas finas; el libro queda libre para arrastrar */
+  /* No interceptar el curl de StPageFlip en las esquinas del libro */
+  pointer-events: none !important;
   z-index: 5 !important;
-  width: 12% !important;
+  width: 8% !important;
 }

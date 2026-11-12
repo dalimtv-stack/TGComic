@@ -1814,42 +1814,47 @@ export function createReader(state, d) {
         // StPageFlip pone 1 página si usePortrait && bounds.width < bounds.height;
         // por eso controlamos el tamaño de flipHost (el padre que mide la librería).
         const layoutFlipHost = () => {
+          // Área útil = viewport completo (sin márgenes laterales forzados)
           const { availW, availH } = viewportSize();
-          // Margen para no pegar a los bordes / barras del visor
-          const padX = 8;
-          const padY = 8;
-          const maxW = Math.max(200, availW - padX * 2);
-          const maxH = Math.max(240, availH - padY * 2);
+          const maxW = Math.max(160, availW);
+          const maxH = Math.max(200, availH);
           const wantSpread = isFlipSpread();
-          const COMIC_RATIO = 0.68;
+          const COMIC_RATIO = 0.68; // ancho/alto de una página
           let pageW, pageH, usePortrait, hostW, hostH;
 
           if (wantSpread) {
             usePortrait = false;
-            pageH = maxH;
-            pageW = Math.max(100, Math.round(pageH * COMIC_RATIO));
-            if (pageW * 2 > maxW) {
-              pageW = Math.max(100, Math.floor(maxW / 2));
-              pageH = Math.min(maxH, Math.round(pageW / COMIC_RATIO));
+            // Libro = 2 páginas: ratio total = 2 * COMIC_RATIO
+            const bookRatio = 2 * COMIC_RATIO;
+            if (maxW / maxH > bookRatio) {
+              // limita la altura → ocupa todo el alto
+              pageH = maxH;
+              pageW = Math.max(80, Math.round(pageH * COMIC_RATIO));
+            } else {
+              // limita el ancho → ocupa todo el ancho
+              pageW = Math.max(80, Math.floor(maxW / 2));
+              pageH = Math.max(120, Math.round(pageW / COMIC_RATIO));
             }
             hostW = Math.min(maxW, pageW * 2);
             hostH = Math.min(maxH, pageH);
           } else {
             usePortrait = true;
-            // Una página: host más alto que ancho (StPageFlip: usePortrait && w < h)
-            pageH = maxH;
-            pageW = Math.min(maxW, Math.max(100, Math.round(pageH * COMIC_RATIO)));
-            if (pageW >= pageH) pageW = Math.max(100, pageH - 2);
-            if (pageW > maxW) {
+            // Una página: object-fit contain en el viewport
+            if (maxW / maxH > COMIC_RATIO) {
+              pageH = maxH;
+              pageW = Math.max(80, Math.round(pageH * COMIC_RATIO));
+            } else {
               pageW = maxW;
-              pageH = Math.min(maxH, Math.round(pageW / COMIC_RATIO));
-              if (pageW >= pageH) pageW = Math.max(100, Math.min(maxW, pageH - 2));
+              pageH = Math.max(120, Math.round(pageW / COMIC_RATIO));
+            }
+            // StPageFlip: usePortrait && width < height
+            if (pageW >= pageH) {
+              pageW = Math.max(80, pageH - 2);
             }
             hostW = pageW;
             hostH = pageH;
           }
 
-          // Centrado; anular inset:0 del CSS que sacaba el libro de pantalla
           flipHost.style.setProperty('position', 'absolute', 'important');
           flipHost.style.setProperty('inset', 'auto', 'important');
           flipHost.style.setProperty('left', '50%', 'important');
@@ -1905,25 +1910,28 @@ export function createReader(state, d) {
             const geo = layoutFlipHost();
 
             pf = new PageFlip(bookEl, {
-              width: Math.max(120, geo.pageW),
-              height: Math.max(200, geo.pageH),
+              width: Math.max(100, geo.pageW),
+              height: Math.max(140, geo.pageH),
               size: 'fixed',
-              minWidth: 100,
-              maxWidth: 3000,
-              minHeight: 180,
-              maxHeight: 3000,
+              minWidth: 80,
+              maxWidth: 4000,
+              minHeight: 120,
+              maxHeight: 4000,
               drawShadow: true,
-              maxShadowOpacity: 0.35,
+              maxShadowOpacity: 0.4,
               showCover: true,
-              // false: no interferir con el gesto de arrastre de la librería
+              // false: no interferir con el gesto de arrastre / curl
               mobileScrollSupport: false,
-              swipeDistance: 20,
+              // Menor umbral → el curl por esquina arranca antes
+              swipeDistance: 12,
               usePortrait: geo.usePortrait,
               startPage: Math.max(0, Math.min(pages.length - 1, n)),
               clickEventForward: true,
               useMouseEvents: true,
+              // false = clic en página también pasa hoja; esquinas siguen activas para curl
               disableFlipByClick: false,
-              flippingTime: 900,
+              // Más lento (ms) para ver bien el efecto curl
+              flippingTime: 1500,
             });
 
             pf.loadFromHTML(bookEl.querySelectorAll('.flip-page'));
@@ -1981,8 +1989,9 @@ export function createReader(state, d) {
             // Clic en laterales del viewport (no del libro) sin cubrir el libro para no bloquear el arrastre
             const eL = el('div', 'edge l'), eR = el('div', 'edge r');
             for (const ed of [eL, eR]) {
-              // Solo franjas fuera del libro si el libro no ocupa todo el ancho
-              ed.style.cssText = 'pointer-events:auto;z-index:5;width:12%;top:48px;bottom:64px;';
+              // No capturar el gesto: las esquinas del libro las maneja StPageFlip (curl)
+              // Clic en zona vacía del viewport sigue pasando página vía handler
+              ed.style.cssText = 'pointer-events:none;z-index:5;width:8%;top:48px;bottom:64px;';
             }
             eL.addEventListener('click', (ev) => {
               try { ev.preventDefault(); ev.stopPropagation(); } catch (_) {}
