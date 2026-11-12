@@ -164,6 +164,24 @@ export function createReader(state, d) {
   function clearImgCrop(im) {
     if (!im) return;
     try {
+      // Restaurar fuente original si el crop generó un blob
+      if (im.dataset.cropOrigSrc) {
+        const keep = im.dataset.cropOrigSrc;
+        delete im.dataset.cropApplied;
+        delete im.dataset.cropOrigSrc;
+        if (im.dataset.cropBlobUrl) {
+          try { URL.revokeObjectURL(im.dataset.cropBlobUrl); } catch (_) {}
+          delete im.dataset.cropBlobUrl;
+        }
+        if (im.src !== keep) im.src = keep;
+      } else {
+        delete im.dataset.cropApplied;
+        if (im.dataset.cropBlobUrl) {
+          try { URL.revokeObjectURL(im.dataset.cropBlobUrl); } catch (_) {}
+          delete im.dataset.cropBlobUrl;
+        }
+      }
+      // Limpiar restos del enfoque CSS antiguo (object-view-box / clip-path)
       im.style.removeProperty('object-view-box');
       im.style.removeProperty('clip-path');
       im.style.removeProperty('transform');
@@ -172,32 +190,77 @@ export function createReader(state, d) {
     } catch (_) {}
   }
 
+  /**
+   * Recorte real a canvas (mismo resultado en móvil y PC).
+   * No usa object-view-box ni clip-path+scale: la imagen resultante
+   * se comporta como cualquier página (object-fit / pan / zoom).
+   */
   function applyImgCrop(im) {
     if (!im) return;
     clearImgCrop(im);
     if (!isAutoCrop()) return;
     const run = () => {
       try {
+        if (im.dataset.cropApplied === '1') return;
         const box = detectContentInsets(im);
         if (!box) return;
+        const nw = im.naturalWidth || 0, nh = im.naturalHeight || 0;
+        if (nw < 16 || nh < 16) return;
         const { t, r, b, l } = box;
-        const inset = `${(t * 100).toFixed(2)}% ${(r * 100).toFixed(2)}% ${(b * 100).toFixed(2)}% ${(l * 100).toFixed(2)}%`;
-        if (typeof CSS !== 'undefined' && CSS.supports && CSS.supports('object-view-box', 'inset(0%)')) {
-          im.style.objectViewBox = `inset(${inset})`;
+        // Márgenes insignificantes
+        if (t + b + l + r < 0.02) return;
+        const sx = Math.max(0, Math.floor(l * nw));
+        const sy = Math.max(0, Math.floor(t * nh));
+        const sw = Math.max(1, Math.min(nw - sx, Math.floor(nw * (1 - l - r))));
+        const sh = Math.max(1, Math.min(nh - sy, Math.floor(nh * (1 - t - b))));
+        if (sw >= nw * 0.985 && sh >= nh * 0.985) return;
+        const c = document.createElement('canvas');
+        c.width = sw;
+        c.height = sh;
+        const ctx = c.getContext('2d');
+        if (!ctx) return;
+        ctx.drawImage(im, sx, sy, sw, sh, 0, 0, sw, sh);
+        const orig = im.currentSrc || im.src;
+        if (!orig || orig.startsWith('data:image/svg')) return;
+        im.dataset.cropOrigSrc = orig;
+        im.dataset.cropApplied = '1';
+        const finish = (blob) => {
+          if (!blob || !im.isConnected) return;
+          if (im.dataset.cropBlobUrl) {
+            try { URL.revokeObjectURL(im.dataset.cropBlobUrl); } catch (_) {}
+          }
+          const u = URL.createObjectURL(blob);
+          im.dataset.cropBlobUrl = u;
+          // Evitar reentrada del handler load
+          im.dataset.cropApplied = '1';
+          im.src = u;
+          im.classList.add('auto-cropped');
+        };
+        if (c.toBlob) {
+          c.toBlob((blob) => {
+            if (blob) finish(blob);
+            else {
+              try { finish(dataURLtoBlob(c.toDataURL('image/jpeg', 0.92))); } catch (_) {}
+            }
+          }, 'image/jpeg', 0.92);
         } else {
-          // Safari / Firefox / iOS: clip-path recorta los márgenes y transform escala para ajustar
-          im.style.clipPath = `inset(${inset})`;
-          const scaleX = 1 / Math.max(0.3, 1 - l - r);
-          const scaleY = 1 / Math.max(0.3, 1 - t - b);
-          const scale = Math.min(scaleX, scaleY);
-          im.style.transformOrigin = 'center center';
-          im.style.transform = `scale(${scale.toFixed(3)})`;
+          try { finish(dataURLtoBlob(c.toDataURL('image/jpeg', 0.92))); } catch (_) {}
         }
-        im.classList.add('auto-cropped');
       } catch (_) {}
     };
+    const dataURLtoBlob = (dataUrl) => {
+      const m = String(dataUrl).match(/^data:([^;]+);base64,(.+)$/);
+      if (!m) return null;
+      const bin = atob(m[2]);
+      const arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      return new Blob([arr], { type: m[1] || 'image/jpeg' });
+    };
     if (im.complete && im.naturalWidth) run();
-    else im.addEventListener('load', run, { once: true });
+    else im.addEventListener('load', () => {
+      if (im.dataset.cropApplied === '1') return;
+      run();
+    }, { once: true });
   }
 
   function applyCropToHost(host) {
@@ -1427,7 +1490,8 @@ export function createReader(state, d) {
         // (PageFlip reorganiza el DOM en .stf__item, por lo que bookEl.children no sirve)
         const flipPageImgs = [];
         for (let i = 0; i < pages.length; i++) {
-          const isHard = (i === 0 || i === pages.length - 1);
+          // Solo la primera hoja "hard"; la última soft evita el efecto de la misma imagen en el reverso
+          const isHard = (i === 0 && pages.length > 1);
           const pEl = el('div', 'flip-page' + (isHard ? ' --hard' : ''));
           pEl.dataset.density = isHard ? 'hard' : 'soft';
           const inner = el('div', 'flip-page-inner');
@@ -1495,22 +1559,28 @@ export function createReader(state, d) {
               pageW = Math.min(availW - 24, Math.floor(pageH * 0.72));
             }
 
+            // showCover:false evita la hoja "fantasma" con la misma imagen al pasar página.
+            // mobileScrollSupport:true permite el gesto de arrastre en iOS/Android.
+            // usePortrait: una sola página en móvil/estrecho; doble solo en pantallas anchas.
+            const touchLike = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
             pf = new PageFlip(bookEl, {
               width: Math.max(260, pageW),
               height: Math.max(380, pageH),
-              size: 'fixed',
-              minWidth: 200,
-              maxWidth: 2000,
-              minHeight: 280,
-              maxHeight: 2000,
+              size: 'stretch',
+              minWidth: 180,
+              maxWidth: 2400,
+              minHeight: 240,
+              maxHeight: 2400,
               drawShadow: true,
-              maxShadowOpacity: 0.5,
-              showCover: true,
-              mobileScrollSupport: false,
-              swipeDistance: 25,
-              usePortrait: !isLandscape,
+              maxShadowOpacity: 0.45,
+              showCover: false,
+              mobileScrollSupport: true,
+              swipeDistance: touchLike ? 15 : 25,
+              usePortrait: !isLandscape || pages.length < 2,
               startPage: Math.max(0, Math.min(pages.length - 1, n)),
-              clickEventForward: true,
+              clickEventForward: false,
+              useMouseEvents: true,
+              disableFlipByClick: false,
             });
 
             pf.loadFromHTML(bookEl.querySelectorAll('.flip-page'));
@@ -1570,11 +1640,18 @@ export function createReader(state, d) {
               }
             };
 
-            // Laterales de clic
+            // Laterales: en flip el arrastre debe llegar a StPageFlip (no bloquear touch).
+            // En móvil pointer-events:none; en PC clic sigue cambiando de página.
             const eL = el('div', 'edge l'), eR = el('div', 'edge r');
+            const touchLikeEdges = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+            if (touchLikeEdges) {
+              eL.style.pointerEvents = 'none';
+              eR.style.pointerEvents = 'none';
+            } else {
+              eL.onclick = () => { try { if (isRtl()) pf.flipNext(); else pf.flipPrev(); } catch (_) {} };
+              eR.onclick = () => { try { if (isRtl()) pf.flipPrev(); else pf.flipNext(); } catch (_) {} };
+            }
             rd.append(eL, eR);
-            eL.onclick = () => { try { if (isRtl()) pf.flipNext(); else pf.flipPrev(); } catch (_) {} };
-            eR.onclick = () => { try { if (isRtl()) pf.flipPrev(); else pf.flipNext(); } catch (_) {} };
 
             observers._flipDestroy = () => {
               isMountingFlip = false;
