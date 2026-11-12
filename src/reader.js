@@ -1490,8 +1490,9 @@ export function createReader(state, d) {
         // (PageFlip reorganiza el DOM en .stf__item, por lo que bookEl.children no sirve)
         const flipPageImgs = [];
         for (let i = 0; i < pages.length; i++) {
-          // Solo la primera hoja "hard"; la última soft evita el efecto de la misma imagen en el reverso
-          const isHard = (i === 0 && pages.length > 1);
+          // Portada (primera) hard; resto soft. Impreso a una cara: el dorso en el flip
+          // lo pinta StPageFlip; fondo papel evita bandas grises y el “mismo dibujo” en ambas caras.
+          const isHard = (i === 0);
           const pEl = el('div', 'flip-page' + (isHard ? ' --hard' : ''));
           pEl.dataset.density = isHard ? 'hard' : 'soft';
           const inner = el('div', 'flip-page-inner');
@@ -1545,38 +1546,50 @@ export function createReader(state, d) {
             if (n + 1 < pages.length) await loadFlipPage(n + 1);
             if (n - 1 >= 0) await loadFlipPage(n - 1);
 
-            const isLandscape = window.innerWidth >= 900 && window.innerWidth > window.innerHeight;
+            // Pantalla útil más alta que ancha → una página (móvil vertical, etc.)
             const availW = Math.max(280, rd.clientWidth || window.innerWidth || 800);
             const availH = Math.max(360, rd.clientHeight || window.innerHeight || 1000);
+            const portraitUseful = availH > availW;
+            const touchLike = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
 
-            // Relación de aspecto estándar de cómic (~0.68)
+            // Proporción cómic (~2:3). size:fixed evita estirar el libro y bandas laterales grises.
+            const COMIC_RATIO = 0.68; // ancho/alto de una hoja
             let pageW, pageH;
-            if (isLandscape) {
-              pageH = Math.min(availH - 96, 1300);
-              pageW = Math.min(Math.floor((availW - 50) / 2), Math.floor(pageH * 0.72));
+            if (portraitUseful) {
+              // Una página: llenar alto útil; el ancho sale de la proporción (sin forzar ancho de pantalla)
+              pageH = Math.min(availH - 72, 1400);
+              pageW = Math.min(availW - 16, Math.max(200, Math.round(pageH * COMIC_RATIO)));
+              // Si el ancho disponible es el límite, reajustar alto para no dejar bandas dentro de la hoja
+              if (pageW >= availW - 16) {
+                pageW = availW - 16;
+                pageH = Math.min(availH - 72, Math.round(pageW / COMIC_RATIO));
+              }
             } else {
-              pageH = Math.min(availH - 96, 1300);
-              pageW = Math.min(availW - 24, Math.floor(pageH * 0.72));
+              // Dos páginas: cada hoja mantiene proporción cómic
+              pageH = Math.min(availH - 72, 1400);
+              pageW = Math.min(Math.floor((availW - 40) / 2), Math.max(200, Math.round(pageH * COMIC_RATIO)));
+              if (pageW * 2 + 40 > availW) {
+                pageW = Math.floor((availW - 40) / 2);
+                pageH = Math.min(availH - 72, Math.round(pageW / COMIC_RATIO));
+              }
             }
 
-            // showCover:false evita la hoja "fantasma" con la misma imagen al pasar página.
-            // mobileScrollSupport:true permite el gesto de arrastre en iOS/Android.
-            // usePortrait: una sola página en móvil/estrecho; doble solo en pantallas anchas.
-            const touchLike = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
             pf = new PageFlip(bookEl, {
-              width: Math.max(260, pageW),
-              height: Math.max(380, pageH),
-              size: 'stretch',
-              minWidth: 180,
+              width: Math.max(200, pageW),
+              height: Math.max(300, pageH),
+              size: 'fixed',
+              minWidth: 160,
               maxWidth: 2400,
               minHeight: 240,
               maxHeight: 2400,
               drawShadow: true,
               maxShadowOpacity: 0.45,
-              showCover: false,
+              // Todos los cómics tienen portada (modo 1 o 2 páginas)
+              showCover: true,
               mobileScrollSupport: true,
               swipeDistance: touchLike ? 15 : 25,
-              usePortrait: !isLandscape || pages.length < 2,
+              // Una página si el área útil es más alta que ancha
+              usePortrait: portraitUseful,
               startPage: Math.max(0, Math.min(pages.length - 1, n)),
               clickEventForward: false,
               useMouseEvents: true,
