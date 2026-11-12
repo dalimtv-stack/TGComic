@@ -1744,11 +1744,11 @@ html:has(.sf-root){
 }
 .flip-host {
   position: absolute;
-  inset: 0;
+  /* tamaño y posición los pone layoutFlipHost (JS); no usar inset:0 aquí */
   display: flex;
   align-items: center;
   justify-content: center;
-  overflow: hidden;
+  overflow: visible;
   pointer-events: auto;
   user-select: none;
   -webkit-user-select: none;
@@ -1918,17 +1918,18 @@ html:has(.sf-root){
   background: transparent !important;
 }
 
-/* Libro 3D: página maximizada al viewport */
+/* Libro 3D: el tamaño lo calcula layoutFlipHost (JS). No forzar 100%/inset. */
 #rd.flip-mode .flip-host {
   position: absolute !important;
-  inset: 0 !important;
   z-index: 1;
+  /* inset/left/top/width/height: inline desde JS */
 }
 #rd.flip-mode .flip-book,
 #rd.flip-mode .stf__parent,
 #rd.flip-mode .stf__wrapper {
-  width: 100% !important;
-  height: 100% !important;
+  /* StPageFlip fija su tamaño; no estirar al 100% del viewport */
+  max-width: 100%;
+  max-height: 100%;
 }
 #rd.flip-mode .flip-page-img {
   width: 100% !important;

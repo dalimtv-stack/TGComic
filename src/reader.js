@@ -1815,47 +1815,53 @@ export function createReader(state, d) {
         // por eso controlamos el tamaño de flipHost (el padre que mide la librería).
         const layoutFlipHost = () => {
           const { availW, availH } = viewportSize();
+          // Margen para no pegar a los bordes / barras del visor
+          const padX = 8;
+          const padY = 8;
+          const maxW = Math.max(200, availW - padX * 2);
+          const maxH = Math.max(240, availH - padY * 2);
           const wantSpread = isFlipSpread();
           const COMIC_RATIO = 0.68;
           let pageW, pageH, usePortrait, hostW, hostH;
 
           if (wantSpread) {
             usePortrait = false;
-            pageH = availH;
-            pageW = Math.max(120, Math.round(pageH * COMIC_RATIO));
-            if (pageW * 2 > availW - 8) {
-              pageW = Math.max(120, Math.floor((availW - 8) / 2));
-              pageH = Math.min(availH, Math.round(pageW / COMIC_RATIO));
+            pageH = maxH;
+            pageW = Math.max(100, Math.round(pageH * COMIC_RATIO));
+            if (pageW * 2 > maxW) {
+              pageW = Math.max(100, Math.floor(maxW / 2));
+              pageH = Math.min(maxH, Math.round(pageW / COMIC_RATIO));
             }
-            hostW = Math.min(availW, pageW * 2);
-            hostH = pageH;
+            hostW = Math.min(maxW, pageW * 2);
+            hostH = Math.min(maxH, pageH);
           } else {
             usePortrait = true;
-            pageH = availH;
-            pageW = Math.min(availW, Math.max(120, Math.round(pageH * COMIC_RATIO)));
-            if (pageW >= pageH) {
-              // Forzar width < height para que StPageFlip NO pase a modo landscape (doble página)
-              pageW = Math.max(120, pageH - 2);
-            }
-            if (pageW > availW) {
-              pageW = availW;
-              pageH = Math.min(availH, Math.round(pageW / COMIC_RATIO));
-              if (pageW >= pageH) pageW = Math.max(120, pageH - 2);
+            // Una página: host más alto que ancho (StPageFlip: usePortrait && w < h)
+            pageH = maxH;
+            pageW = Math.min(maxW, Math.max(100, Math.round(pageH * COMIC_RATIO)));
+            if (pageW >= pageH) pageW = Math.max(100, pageH - 2);
+            if (pageW > maxW) {
+              pageW = maxW;
+              pageH = Math.min(maxH, Math.round(pageW / COMIC_RATIO));
+              if (pageW >= pageH) pageW = Math.max(100, Math.min(maxW, pageH - 2));
             }
             hostW = pageW;
             hostH = pageH;
           }
 
-          flipHost.style.position = 'absolute';
-          flipHost.style.left = '50%';
-          flipHost.style.top = '50%';
-          flipHost.style.right = 'auto';
-          flipHost.style.bottom = 'auto';
-          flipHost.style.width = hostW + 'px';
-          flipHost.style.height = hostH + 'px';
-          flipHost.style.transform = 'translate(-50%, -50%)';
-          flipHost.style.maxWidth = '100%';
-          flipHost.style.maxHeight = '100%';
+          // Centrado; anular inset:0 del CSS que sacaba el libro de pantalla
+          flipHost.style.setProperty('position', 'absolute', 'important');
+          flipHost.style.setProperty('inset', 'auto', 'important');
+          flipHost.style.setProperty('left', '50%', 'important');
+          flipHost.style.setProperty('top', '50%', 'important');
+          flipHost.style.setProperty('right', 'auto', 'important');
+          flipHost.style.setProperty('bottom', 'auto', 'important');
+          flipHost.style.setProperty('width', hostW + 'px', 'important');
+          flipHost.style.setProperty('height', hostH + 'px', 'important');
+          flipHost.style.setProperty('transform', 'translate(-50%, -50%)', 'important');
+          flipHost.style.setProperty('max-width', maxW + 'px', 'important');
+          flipHost.style.setProperty('max-height', maxH + 'px', 'important');
+          flipHost.style.setProperty('overflow', 'visible', 'important');
 
           return { pageW, pageH, usePortrait, hostW, hostH, wantSpread };
         };
@@ -2016,9 +2022,8 @@ export function createReader(state, d) {
                 try {
                   const cur = pf.getCurrentPageIndex?.() ?? n;
                   const geo2 = layoutFlipHost();
-                  // update() recalcula orientación a partir del tamaño de flipHost
-                  // (que ya forzamos width<height si una página).
-                  pf.update();
+                  // Recalcular tras redimensionar el host (CSS ya no fuerza inset:0)
+                  try { pf.update(); } catch (_) {}
                   try { pf.turnToPage(cur); } catch (_) {}
                 } catch (_) {}
               }, 120);
