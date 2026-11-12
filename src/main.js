@@ -5,6 +5,14 @@ import bigInt from 'big-integer';
 import * as zip from '@zip.js/zip.js';
 import { createExtractorFromData } from 'node-unrar-js';
 import rarWasm from 'node-unrar-js/esm/js/unrar.wasm?url';
+/** ArrayBuffer del WASM unrar: se reutiliza entre CBR (no re-fetch). */
+let rarWasmBinaryCache = null;
+async function getRarWasmBinary() {
+  if (rarWasmBinaryCache) return rarWasmBinaryCache;
+  rarWasmBinaryCache = await (await fetch(rarWasm)).arrayBuffer();
+  return rarWasmBinaryCache;
+}
+
 import * as sync from './sync.js';
 import { buildSearchIndex, filterSearchIndex } from './search.js';
 import {
@@ -366,7 +374,7 @@ async function mapLimit(items, n, fn) {
 
 // ---------- Telegram (convención tgstorage) ----------
 let client, ready;
-const partSize = (size) => (size <= 100 * MB ? 128 : size <= 750 * MB ? 256 : 512) * 1024;
+const partSize = (size) => (size <= 100 * MB ? 256 : size <= 750 * MB ? 512 : 512) * 1024;
 const peerOf = (ch) => new Api.InputPeerChannel({ channelId: bigInt(ch.id), accessHash: bigInt(ch.hash) });
 
 async function connect() {
@@ -700,7 +708,7 @@ async function openPages(m, size, status, ac) {
     ? data.buffer
     : data.slice().buffer;
   const ex = await createExtractorFromData({
-    wasmBinary: await (await fetch(rarWasm)).arrayBuffer(),
+    wasmBinary: await getRarWasmBinary(),
     data: ab,
   });
   const mimeOf = (name) => {
