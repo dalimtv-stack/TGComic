@@ -356,37 +356,52 @@ function grid(items, withSearch, searchPlaceholder, gridKind) {
         };
       }
     } catch (_) {}
-    g.replaceChildren(...list.map((i) => {
-    const c = el('div', 'card'), hit = el('button', 'hit'), name = el('div', 'name'), t = el('b', '', i.label);
-    const cv = i.cover();
-    // La portada lleva SIEMPRE la clase de su tipo (comic/series/channel): ancho y texto salen de sus propios ajustes
-    if (i.kind && cv && cv.classList) {
-      cv.classList.remove('cover-comic', 'cover-series', 'cover-channel');
-      cv.classList.add('cover-' + i.kind);
-    }
-    hit.append(cv);
-    hit.onclick = i.go;
-    if (i.longPress) bindLongPress(hit, i.longPress);
-    if (i.menu) {
-      t.classList.add('has-menu');
-      t.onclick = (ev) => { ev.stopPropagation(); i.menu(); };
-      t.title = 'Opciones';
-      t.setAttribute('role', 'button');
-      t.setAttribute('aria-label', 'Opciones de ' + i.label);
-    } else {
-      t.onclick = i.go;
-    }
-    if (i.longPress) bindLongPress(t, i.longPress);
-    name.append(t);
-    const metaBox = el('div', 'meta');
-    // Línea superior opcional (p. ej. el canal sobre el título de la serie)
-    if (i.top) metaBox.append(el('div', 'card-top', i.top));
-    metaBox.append(name);
-
-    if (i.sub) metaBox.append(el('small', '', i.sub));
-    c.append(hit, metaBox);
-    return c;
-  }));
+    const cardOf = (i) => {
+      const c = el('div', 'card'), hit = el('button', 'hit'), name = el('div', 'name'), tb = el('b', '', i.label);
+      const cv = i.cover();
+      if (i.kind && cv && cv.classList) {
+        cv.classList.remove('cover-comic', 'cover-series', 'cover-channel');
+        cv.classList.add('cover-' + i.kind);
+      }
+      hit.append(cv);
+      hit.onclick = i.go;
+      if (i.longPress) bindLongPress(hit, i.longPress);
+      if (i.menu) {
+        tb.classList.add('has-menu');
+        tb.onclick = (ev) => { ev.stopPropagation(); i.menu(); };
+        tb.title = 'Opciones';
+        tb.setAttribute('role', 'button');
+        tb.setAttribute('aria-label', 'Opciones de ' + i.label);
+      } else {
+        tb.onclick = i.go;
+      }
+      if (i.longPress) bindLongPress(tb, i.longPress);
+      name.append(tb);
+      const metaBox = el('div', 'meta');
+      if (i.top) metaBox.append(el('div', 'card-top', i.top));
+      metaBox.append(name);
+      if (i.sub) metaBox.append(el('small', '', i.sub));
+      c.append(hit, metaBox);
+      return c;
+    };
+    // Primer lote al instante; resto por frames (canales grandes sin congelar)
+    const BATCH = 36;
+    g.replaceChildren();
+    let at = 0;
+    const paintMore = () => {
+      const frag = document.createDocumentFragment();
+      const end = Math.min(at + BATCH, list.length);
+      for (; at < end; at++) frag.appendChild(cardOf(list[at]));
+      g.append(frag);
+      if (at < list.length) {
+        if (typeof requestIdleCallback === 'function') {
+          requestIdleCallback(paintMore, { timeout: 80 });
+        } else {
+          requestAnimationFrame(paintMore);
+        }
+      }
+    };
+    paintMore();
   };
   if (withSearch) {
     // Mismo layout que canales (editorial): home-search-wrap, sin #search con márgenes extra
