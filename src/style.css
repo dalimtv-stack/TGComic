@@ -1833,3 +1833,15 @@ html:has(.sf-root){
 /* Reverso de hoja (impreso a una cara): blanco + eco borroso de la anverso */
 /* flip-verso removed */
 /* flip-verso-img removed */
+
+
+/* Fuera de viewport: no layout/paint hasta acercarse (scroll 60fps en grids grandes) */
+.card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 280px;
+}
+#rd.vertical .slot,
+#rd.horizontal .slot {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 80vh;
+}
