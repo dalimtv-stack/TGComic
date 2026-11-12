@@ -1572,9 +1572,11 @@ export function createReader(state, d) {
         spreadBtnFlip.type = 'button';
         const paintSpreadFlip = () => {
           const on = isFlipSpread();
-          spreadBtnFlip.textContent = on ? '📑' : '📄';
+          spreadBtnFlip.innerHTML = on
+            ? `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25"/></svg>`
+            : `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2z"/></svg>`;
           spreadBtnFlip.classList.toggle('on', on);
-          spreadBtnFlip.title = on ? 'Doble página (activar una página)' : 'Una página (activar doble página)';
+          spreadBtnFlip.title = on ? 'Cambiar a una página' : 'Cambiar a doble página';
           spreadBtnFlip.setAttribute('aria-label', spreadBtnFlip.title);
           spreadBtnFlip.setAttribute('aria-pressed', on ? 'true' : 'false');
         };
@@ -1688,7 +1690,7 @@ export function createReader(state, d) {
               startPage: Math.max(0, Math.min(pages.length - 1, n)),
               clickEventForward: false,
               useMouseEvents: true,
-              disableFlipByClick: false,
+              disableFlipByClick: true,
             });
 
             pf.loadFromHTML(bookEl.querySelectorAll('.flip-page'));
@@ -1749,14 +1751,25 @@ export function createReader(state, d) {
             };
 
             const eL = el('div', 'edge l'), eR = el('div', 'edge r');
-            const touchLikeEdges = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
-            if (touchLikeEdges) {
-              eL.style.pointerEvents = 'none';
-              eR.style.pointerEvents = 'none';
-            } else {
-              eL.onclick = () => { try { if (isRtl()) pf.flipNext(); else pf.flipPrev(); } catch (_) {} };
-              eR.onclick = () => { try { if (isRtl()) pf.flipPrev(); else pf.flipNext(); } catch (_) {} };
-            }
+            const flipEdge = (dir) => {
+              try {
+                if (dir < 0) { if (isRtl()) pf.flipNext(); else pf.flipPrev(); }
+                else { if (isRtl()) pf.flipPrev(); else pf.flipNext(); }
+              } catch (_) {}
+              try { if (!rd.classList.contains('ui-off')) armUiHide(); } catch (_) {}
+            };
+            eL.onclick = (ev) => { try { ev.stopPropagation(); } catch (_) {} flipEdge(-1); };
+            eR.onclick = (ev) => { try { ev.stopPropagation(); } catch (_) {} flipEdge(1); };
+            const onCenterTap = (ev) => {
+              if (ev.target.closest?.('.edge, .bar, .btn, .spread-fab, .crop-fab, .rtl-fab, .q-group')) return;
+              const x = (ev.clientX != null) ? ev.clientX : (ev.changedTouches?.[0]?.clientX);
+              if (x == null) return;
+              const w = rd.clientWidth || window.innerWidth;
+              if (x < w * 0.22) { flipEdge(-1); return; }
+              if (x > w * 0.78) { flipEdge(1); return; }
+              try { toggleUI(); } catch (_) {}
+            };
+            flipHost.addEventListener('click', onCenterTap);
             rd.append(eL, eR);
 
             observers._flipDestroy = () => {
@@ -2713,24 +2726,61 @@ export function createReader(state, d) {
           return d;
         });
         // Sin padding inicial (causaba doble hueco)
+        // Fin del scroll: tarjeta del siguiente cómic (portada + título + cuenta atrás) embebida
         const foot = el('div', 'next-comic');
         if (hasNext) {
-          const nb = el('button', 'btn next-btn', 'Siguiente número →');
-          nb.onclick = (ev) => { ev.stopPropagation(); showNextCard(); };
-          foot.append(nb);
+          const nf = ctx.list[ctx.idx + 1];
+          const nTitle = comicDisplayName(ctx.ch, nf, comicDisplay(nf.name, ctx.ch.name) || stripExt(nf.name));
+          const card = el('div', 'next-comic-card');
+          const cov = el('div', 'next-card-cover');
+          try {
+            const coverNode = (typeof getCover === 'function') ? getCover(ctx.ch, nf) : null;
+            if (coverNode) cov.append(coverNode);
+          } catch (_) {}
+          card.append(el('div', 'next-card-lbl', 'Siguiente'), cov, el('div', 'next-card-title', nTitle));
+          const goBtn = el('button', 'btn next-btn', 'Leer ahora');
+          const stayBtn = el('button', 'btn next-card-stay', 'Quedarme aquí');
+          const cntEl = el('div', 'next-card-count', '');
+          card.append(goBtn, stayBtn, cntEl);
+          foot.append(card);
+          let footTimer = null;
+          let footLeft = 0;
+          let footArmed = false;
+          const stopFootTimer = () => {
+            if (footTimer) { clearInterval(footTimer); footTimer = null; }
+            footArmed = false;
+            try { cntEl.textContent = ''; } catch (_) {}
+          };
+          const startFootTimer = () => {
+            if (footArmed || footTimer) return;
+            footArmed = true;
+            footLeft = NEXT_SECS;
+            cntEl.textContent = 'Empieza en ' + footLeft + ' s…';
+            footTimer = setInterval(() => {
+              footLeft -= 1;
+              if (footLeft <= 0) {
+                stopFootTimer();
+                try { openNext(); } catch (_) {}
+                return;
+              }
+              cntEl.textContent = 'Empieza en ' + footLeft + ' s…';
+            }, 1000);
+          };
+          goBtn.onclick = (ev) => { ev.stopPropagation(); stopFootTimer(); openNext(); };
+          stayBtn.onclick = (ev) => { ev.stopPropagation(); stopFootTimer(); cntEl.textContent = 'Listo. Desplázate cuando quieras.'; };
           {
-            // Vertical y Horizontal: al llegar al final, mostrar la pantalla del siguiente (igual que en Página)
             let wasIn = false;
             const footIO = new IntersectionObserver((es) => {
               es.forEach((x) => {
-                const inView = x.isIntersecting && x.intersectionRatio >= 0.6;
-                if (inView && !wasIn) showNextCard();
-                if (!x.isIntersecting && wasIn) closeNextCard();
+                const inView = x.isIntersecting && x.intersectionRatio >= 0.45;
+                if (inView && !wasIn) startFootTimer();
+                if (!x.isIntersecting && wasIn) stopFootTimer();
                 wasIn = inView || (wasIn && x.isIntersecting);
               });
-            }, { root: rd, threshold: [0, 0.6] });
-            setTimeout(() => { try { footIO.observe(foot); } catch (_) {} }, 600);
+            }, { root: rd, threshold: [0, 0.45, 0.6] });
+            setTimeout(() => { try { footIO.observe(foot); } catch (_) {} }, 400);
             footObs = footIO;
+            observers._footTimer = stopFootTimer;
           }
         } else {
           foot.append(el('div', 'next-end', 'Fin'));
