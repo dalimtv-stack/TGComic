@@ -11,6 +11,7 @@ const SCHEMA = 1;
 const LS_USER = 'sync:username';
 const LS_PASS = 'sync:password';
 const LS_META = 'sync:meta';
+const LS_HASH = 'sync:lastPayloadHash';
 
 const SYNC_PREFIXES = [
   'coverblob:',
@@ -390,9 +391,7 @@ export async function login(username, password) {
   setMeta(row.updated_at, snapshotByteSize());
   // Tras login, subir estado fusionado (local + remoto) con verificador correcto
   try {
-    const verifier = await passwordVerifier(u, password);
-    const payload = await encryptPayload(u, password, collectSnapshot());
-    await upsertRemote(id, payload, verifier);
+    await push({ mergeRemote: false });
     setMeta(undefined, snapshotByteSize());
   } catch (e) {
     console.warn('[sync] post-login push', e);
@@ -405,21 +404,38 @@ export async function login(username, password) {
  * 1) Si hay datos remotos, deben descifrarse con esta contraseña.
  * 2) El servidor exige el mismo verificador que al crear la cuenta.
  */
-export async function push() {
+/**
+ * Sube el snapshot local.
+ * @param {{ mergeRemote?: boolean }} [opts]
+ * - mergeRemote true: descarga antes y fusiona (más egress; usar en login / sync manual).
+ * - por defecto false: solo sube (el pull al abrir la app ya fusionó).
+ * Si el payload no cambió desde la última subida, no llama a la red.
+ */
+export async function push(opts = {}) {
   const u = localStorage.getItem(LS_USER);
   const p = localStorage.getItem(LS_PASS);
   if (!u || !p) return false;
   const id = await userRowId(u);
-  const row = await getRemote(id);
-  if (row?.payload) {
-    // Prueba de contraseña en cliente antes de tocar el servidor, y fusión con lo que
-    // otros dispositivos hayan subido mientras tanto (antes se sobrescribía su progreso).
-    const remoteSnap = await decryptPayload(u, p, row.payload);
-    const remoteKeys = remoteSnap?.keys && typeof remoteSnap.keys === 'object' ? remoteSnap.keys : {};
-    writeKeyMap(mergeKeyMaps(collectSnapshot().keys, remoteKeys, true));
+  const mergeRemote = !!opts.mergeRemote;
+
+  if (mergeRemote) {
+    const row = await getRemote(id);
+    if (row?.payload) {
+      const remoteSnap = await decryptPayload(u, p, row.payload);
+      const remoteKeys = remoteSnap?.keys && typeof remoteSnap.keys === 'object' ? remoteSnap.keys : {};
+      writeKeyMap(mergeKeyMaps(collectSnapshot().keys, remoteKeys, true));
+    }
   }
+
   const verifier = await passwordVerifier(u, p);
   const payload = await encryptPayload(u, p, collectSnapshot());
+  // Evitar upsert idéntico (p. ej. flush al cambiar de app sin cambios reales)
+  try {
+    const h = await sha256Hex(String(payload || ''));
+    if (h && h === localStorage.getItem(LS_HASH)) return false;
+    localStorage.setItem(LS_HASH, h);
+  } catch (_) {}
+
   await upsertRemote(id, payload, verifier);
   setMeta(undefined, snapshotByteSize());
   return true;
@@ -452,22 +468,23 @@ export async function pull() {
 let pushTimer = null;
 let flushBound = false;
 
-/** Debounce: sube tras cada cambio local (progreso, títulos, prefs…). */
-export function schedulePush(ms = 800) {
+/** Debounce: sube tras cambios locales. Por defecto 12 s (antes 0,8 s). */
+export function schedulePush(ms = 12000) {
   if (!isLoggedIn()) return;
   clearTimeout(pushTimer);
   pushTimer = setTimeout(() => {
-    push().catch((e) => console.warn('[sync] push', e));
+    // Sin mergeRemote: no descargar el snapshot en cada push (ahorra ~50% egress)
+    push({ mergeRemote: false }).catch((e) => console.warn('[sync] push', e));
   }, ms);
   ensureFlushHooks();
 }
 
-/** Empuja al instante (cerrar pestaña / cambiar app). */
+/** Empuja al instante (cerrar pestaña / cambiar app). Sin re-descarga si no hay cambios. */
 export function flushPush() {
   if (!isLoggedIn()) return;
   clearTimeout(pushTimer);
   pushTimer = null;
-  push().catch((e) => console.warn('[sync] flush', e));
+  push({ mergeRemote: false }).catch((e) => console.warn('[sync] flush', e));
 }
 
 function ensureFlushHooks() {
