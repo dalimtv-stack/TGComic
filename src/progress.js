@@ -31,7 +31,7 @@ export function setPageIndex(chId, msgId, n) {
     // Limpiar legado suelto para no recontaminar otros canales
     try { localStorage.removeItem(legacyPageKey(msgId)); } catch (_) {}
   } catch (_) {}
-  try { sync.schedulePush(400); } catch (_) {}
+  try { sync.schedulePush(30000); } catch (_) {}
 }
 
 export function getPagesTotal(chId, msgId) {
@@ -67,7 +67,7 @@ export function clearAllReadingData() {
       else localStorage.removeItem(k);
     } catch (_) {}
   }
-  try { sync.schedulePush(400); } catch (_) {}
+  try { sync.schedulePush(2000); } catch (_) {}
   return keys.length;
 }
 
